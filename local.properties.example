@@ -1,2 +1,6 @@
 # Copy to local.properties and set your Android SDK path (do not commit local.properties).
 sdk.dir=/path/to/Android/Sdk
+
+# Or run (needs access to dl.google.com):
+#   chmod +x scripts/install-android-sdk.sh
+#   ./scripts/install-android-sdk.sh "$(pwd)"
