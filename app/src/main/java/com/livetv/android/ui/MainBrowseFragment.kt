@@ -1,5 +1,6 @@
 package com.livetv.android.ui
 
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -49,22 +50,34 @@ class MainBrowseFragment : BrowseSupportFragment() {
     }
 
     private fun setupEventListeners() {
-        onItemViewClickedListener = OnItemViewClickedListener { _: Presenter.ViewHolder?, item: Any?, _: RowPresenter.ViewHolder?, _: Row? ->
-            if (item is Channel) {
-                Toast.makeText(requireContext(), getString(R.string.channel_selected, item.name), Toast.LENGTH_SHORT).show()
+        onItemViewClickedListener =
+            OnItemViewClickedListener { _: Presenter.ViewHolder?, item: Any?, _: RowPresenter.ViewHolder?, _: Row? ->
+                if (item is Channel) {
+                    if (item.streamUrl.isNotEmpty()) {
+                        startActivity(Intent(requireContext(), PlayerActivity::class.java).apply {
+                            putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, item.name)
+                            putExtra(PlayerActivity.EXTRA_STREAM_URL, item.streamUrl)
+                        })
+                    } else {
+                        Toast.makeText(
+                            requireContext(),
+                            getString(R.string.channel_selected, item.name),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
             }
-        }
     }
 
     private fun sampleNewsChannels(): List<Channel> = listOf(
-        Channel("n1", "综合新闻", "24 小时滚动"),
-        Channel("n2", "财经频道", "市场与政策"),
-        Channel("n3", "国际资讯", "全球热点"),
+        Channel("n1", "综合新闻", "24 小时滚动", "https://cctvihrd.cctv.com/live/huaweiiptv/1/1/index.m3u8"),
+        Channel("n2", "财经频道", "市场与政策", "https://cctvihrd.cctv.com/live/huaweiiptv/2/1/index.m3u8"),
+        Channel("n3", "国际资讯", "全球热点", "https://cctvihrd.cctv.com/live/huaweiiptv/3/1/index.m3u8"),
     )
 
     private fun sampleSportsChannels(): List<Channel> = listOf(
-        Channel("s1", "体育赛事", "直播与集锦"),
-        Channel("s2", "足球世界", "联赛专题"),
-        Channel("s3", "奥林匹克", "经典回顾"),
+        Channel("s1", "体育赛事", "直播与集锦", "https://cctvihrd.cctv.com/live/huaweiiptv/5/1/index.m3u8"),
+        Channel("s2", "足球世界", "联赛专题", "https://cctvihrd.cctv.com/live/huaweiiptv/6/1/index.m3u8"),
+        Channel("s3", "奥林匹克", "经典回顾", "https://cctvihrd.cctv.com/live/huaweiiptv/7/1/index.m3u8"),
     )
 }
