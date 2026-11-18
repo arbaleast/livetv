@@ -26,7 +26,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -35,13 +35,19 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # runner 自带 Android SDK，无需 setup-android 动作
+      # （setup-android 内置的 `sdkmanager tools` 在当前 runner 上会失败：Failed to find package 'tools'）
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '11076708'
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+          log-accepted-android-sdk-licenses: true
 
       - name: Install SDK platform and build-tools
         run: |
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
           yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Kotlin compile check
         run: ./gradlew compileDebugKotlin --console=plain --no-daemon
