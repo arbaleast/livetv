@@ -15,7 +15,7 @@
 | ViewBinding | `app/build.gradle.kts` `buildFeatures { viewBinding = true }` |
 | TV 声明齐全：`leanback` required、`touchscreen` required=false、`banner`、`LEANBACK_LAUNCHER` | `app/src/main/AndroidManifest.xml` |
 | GitHub Actions CI：`push`/`pull_request` 触发，跑编译 + Lint + 单元测试 + 打包 Debug APK | `.github/workflows/android-ci.yml` |
-| 纯 JVM 单元测试链路（JUnit4，`Channel` 模型冒烟测试） | `app/src/test/java/com/livetv/android/model/ChannelTest.kt` |
+| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，4 个测试类 / 22 个用例） | `app/src/test/java/com/livetv/android/` |
 | 格式与忽略规则（`.editorconfig`、`.gitignore` 排除构建产物/密钥/`.tmp/`） | 仓库根目录 |
 
 ### 功能
@@ -23,20 +23,26 @@
 | 能力 | 证据 |
 |---|---|
 | Leanback 浏览页：标题、品牌色、Header 栏、Back 逐层返回 | `MainBrowseFragment.setupUi()` |
-| 两行频道卡片（新闻、体育），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
+| 频道分类与卡片（新闻、体育两行），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
+| 频道数据来自 APK 内 `assets/channels.json`（6 个 CCTV HLS 源），**UI 层不再硬编码** | `LocalAssetChannelSource`、`assets/channels.json` |
+| JSON 解析与安全校验（http/https 白名单、必填校验、disabled 与空分类过滤） | `ChannelJsonParser`、`ChannelJsonParserTest` |
+| 轻量分层：`domain/`（模型 + 仓库接口）与 `data/`（DTO / 解析器 / 数据源 / 仓库实现） | `app/src/main/java/com/livetv/android/domain/`、`data/` |
 | OK 键进入播放页；无播放源时 Toast 提示 | `MainBrowseFragment.setupEventListeners()` |
 | HLS 直播流播放（Media3 ExoPlayer + `HlsMediaSource` + `DefaultHttpDataSource`） | `PlayerActivity.initializePlayer()` |
 | 播放进度与 `playWhenReady` 跨生命周期保存 | `PlayerActivity.releasePlayer()` |
 | 播放失败在页面显示错误文案 | `PlayerActivity` 的 `Player.Listener.onPlayerError` |
 | 播放页屏幕常亮 | `PlayerActivity.onCreate` 的 `FLAG_KEEP_SCREEN_ON` |
+| 领域模型已预留主备源 / 请求头 / 图标 / EPG 字段（**尚无消费方**） | `domain/model/Channel.kt` |
 
 ### 明确**没有**的能力（避免误判）
 
-- 频道源配置 / 导入 / 管理（数据硬编码在 `MainBrowseFragment`）
+- 频道源的导入 / 管理 / 用户自定义（配置只能改 `assets/channels.json` 后重新打包）
+- M3U 导入、网络拉取频道列表、持久化存储
+- 主备源切换（Failover）与自定义 HTTP 请求头——**字段已存在但未接线**
 - EPG 节目单、搜索、收藏、播放历史、设置页、Menu 菜单
 - 多码率 / 清晰度切换、播放重试、线路切换
-- 账号体系、持久化存储、网络层与解析器
-- 仪器测试（`androidTest`）与 UI 自动化
+- 账号体系、网络层、仪器测试（`androidTest`）与 UI 自动化
+- 加载中 / 空态 / 错误态的界面反馈（当前取不到内容时页面直接为空）
 
 ---
 
@@ -60,18 +66,43 @@
 
 ---
 
+## 阶段二（本次交付）：频道数据系统与 Repository 轻量分层
+
+目标：把频道数据从 UI 层剥离出来，建立可扩展、可测试的 `data/` + `domain/` 轻量分层。
+
+- [x] `domain/` 分层：`Channel`（迁移并扩展）/ `ChannelCategory` / `ChannelRepository` 接口
+- [x] `data/` 分层：`ChannelConfigDto` / `ChannelJsonParser` / `ChannelDataSource` /
+      `LocalAssetChannelSource` / `DefaultChannelRepository`
+- [x] `assets/channels.json`：默认频道配置，阶段一 6 个硬编码频道**无损迁移**
+- [x] UI 解耦：`MainBrowseFragment` 移除 `sampleNewsChannels()` / `sampleSportsChannels()`，
+      改由 `ChannelRepository` 提供分类；`PlayerActivity` 的 Intent Extra 与播放链路保持不变
+- [x] 领域模型前瞻字段：`backupUrls` / `headers` / `logo` / `epgId` / `enabled`
+- [x] 安全容错：URL 仅允许 `http/https`（忽略大小写），非法频道与空分类被过滤，
+      缺省字段回退默认值，异常 JSON 返回空列表且不崩溃
+- [x] 纯 JVM 单测 22 个用例（解析器 11 / 领域模型 5 / 仓库 3 / 真实 assets 3），
+      含 `org.json:json:20231013` 测试依赖
+- [x] 同步更新 `docs/ARCHITECTURE.md`（包结构、数据流、Schema 与容错规则）
+
+### 阶段二未做（留给后续阶段）
+
+- M3U/M3U8 解析器、多数据源聚合、用户导入与持久化
+- 主备源切换与自定义请求头的**接线**（字段已预留）
+- 加载中 / 空态 / 错误态的界面反馈
+
+---
+
 ## P1：核心架构与数据系统
 
 目标：让"频道从哪来"可配置、可解析、可测试。
 
 | # | 能力 | 交付要点 |
 |---|---|---|
-| P1-1 | `ChannelRepository` 接口 + 内存实现 | 先抽接口，UI 行为不变；仓库层可用 L1 单测覆盖 |
-| P1-2 | 源解析器（m3u / m3u8 / 简单 XML） | 纯函数 `String -> List<Channel>`，逐个输入输出写单测 |
+| P1-1 | `ChannelRepository` 接口 + 内存实现 | **阶段二已完成基础版**（接口 + assets 实现）；后续补多源聚合 |
+| P1-2 | 源解析器（m3u / m3u8 / 简单 XML） | JSON 解析器阶段二已完成；m3u 系列按同样"纯函数 + L1 单测"模式补齐 |
 | P1-3 | 源管理与本地持久化 | 频道源增删改查；持久化方案**待定**（轻量方案优先，不预设 Room/数据库框架） |
 | P1-4 | 状态流转（Loading / Content / Empty / Error） | 用 sealed class + StateFlow 表达，UI 订阅随生命周期启停 |
 | P1-5 | 网络层与错误分类 | 区分网络失败/解析失败/源无效，给出可行动提示 |
-| P1-6 | 单元测试体系补齐 | 解析器、Repository、状态流转全覆盖 L1 |
+| P1-6 | 单元测试体系补齐 | **阶段二已完成解析器/仓库/模型**；状态流转落地后补对应 L1 测试 |
 
 > 约束：不引入 Hilt/Dagger 等 DI 框架；不拆多模块；依赖注入用手动构造。
 
@@ -94,7 +125,7 @@
 | P2-2 | 搜索（频道名 / 拼音） | Leanback `SearchSupportFragment` |
 | P2-3 | 收藏与播放历史 | 需持久化方案落地 |
 | P2-4 | 设置页（默认线路、播放偏好） | |
-| P2-5 | 频道 Logo 与分类细化 | `Channel` 增加 logo 字段，Presenter 绑定图片 |
+| P2-5 | 频道 Logo 与分类细化 | `Channel.logo` **字段已在阶段二预留**，待 Presenter 绑定图片 |
 | P2-6 | 多语言 | 现有资源仅中文 |
 | P2-7 | 仪器测试 / UI 自动化 | 需引入 `androidx.test` 依赖（属新增依赖，需单独论证） |
 | P2-8 | Release 流程 | 签名配置、混淆规则、产物归档；与 CI 的 PR 检查**分离** |

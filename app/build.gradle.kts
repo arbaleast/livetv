@@ -48,4 +48,7 @@ dependencies {
 
     // 纯 JVM 单元测试（app/src/test）；不引入模拟器/仪器测试依赖
     testImplementation("junit:junit:4.13.2")
+    // Android 的 android.jar 里 org.json.* 只是抛 "not mocked" 的 Stub，
+    // 纯 JVM 单测必须引入真实实现，否则 ChannelJsonParser 无法被测试。
+    testImplementation("org.json:json:20231013")
 }

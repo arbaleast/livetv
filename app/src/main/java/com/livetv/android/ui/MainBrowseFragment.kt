@@ -14,9 +14,17 @@ import androidx.leanback.widget.Presenter
 import androidx.leanback.widget.Row
 import androidx.leanback.widget.RowPresenter
 import com.livetv.android.R
-import com.livetv.android.model.Channel
+import com.livetv.android.data.repository.DefaultChannelRepository
+import com.livetv.android.data.source.LocalAssetChannelSource
+import com.livetv.android.domain.model.Channel
+import com.livetv.android.domain.repository.ChannelRepository
 
 class MainBrowseFragment : BrowseSupportFragment() {
+
+    /** 频道数据仓库；默认从 assets/channels.json 读取。 */
+    private val channelRepository: ChannelRepository by lazy {
+        DefaultChannelRepository(LocalAssetChannelSource(requireContext().assets))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,18 +42,12 @@ class MainBrowseFragment : BrowseSupportFragment() {
 
     private fun loadRows() {
         val rowsAdapter = ArrayObjectAdapter(ListRowPresenter())
-        val newsHeader = HeaderItem(getString(R.string.row_news))
-        val newsAdapter = ArrayObjectAdapter(ChannelCardPresenter()).apply {
-            addAll(0, sampleNewsChannels())
+        channelRepository.getCategories().forEach { category ->
+            val channelAdapter = ArrayObjectAdapter(ChannelCardPresenter()).apply {
+                addAll(0, category.channels)
+            }
+            rowsAdapter.add(ListRow(HeaderItem(category.name), channelAdapter))
         }
-        rowsAdapter.add(ListRow(newsHeader, newsAdapter))
-
-        val sportsHeader = HeaderItem(getString(R.string.row_sports))
-        val sportsAdapter = ArrayObjectAdapter(ChannelCardPresenter()).apply {
-            addAll(0, sampleSportsChannels())
-        }
-        rowsAdapter.add(ListRow(sportsHeader, sportsAdapter))
-
         adapter = rowsAdapter
     }
 
@@ -68,16 +70,4 @@ class MainBrowseFragment : BrowseSupportFragment() {
                 }
             }
     }
-
-    private fun sampleNewsChannels(): List<Channel> = listOf(
-        Channel("n1", "综合新闻", "24 小时滚动", "https://cctvihrd.cctv.com/live/huaweiiptv/1/1/index.m3u8"),
-        Channel("n2", "财经频道", "市场与政策", "https://cctvihrd.cctv.com/live/huaweiiptv/2/1/index.m3u8"),
-        Channel("n3", "国际资讯", "全球热点", "https://cctvihrd.cctv.com/live/huaweiiptv/3/1/index.m3u8"),
-    )
-
-    private fun sampleSportsChannels(): List<Channel> = listOf(
-        Channel("s1", "体育赛事", "直播与集锦", "https://cctvihrd.cctv.com/live/huaweiiptv/5/1/index.m3u8"),
-        Channel("s2", "足球世界", "联赛专题", "https://cctvihrd.cctv.com/live/huaweiiptv/6/1/index.m3u8"),
-        Channel("s3", "奥林匹克", "经典回顾", "https://cctvihrd.cctv.com/live/huaweiiptv/7/1/index.m3u8"),
-    )
 }

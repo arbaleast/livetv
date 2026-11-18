@@ -7,9 +7,18 @@
 
 | 层级 | 运行环境 | 覆盖对象 | 现状 |
 |---|---|---|---|
-| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、纯函数 | **已建立**：`app/src/test/.../model/ChannelTest.kt` |
+| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、纯函数 | **已建立**：4 个测试类 / 22 个用例（`app/src/test/`） |
 | L2 仪器测试 | 模拟器/真机，`connectedDebugAndroidTest` | View 渲染、Leanback 焦点、Activity 生命周期 | **未建立**：无 `androidTest` 源集、无 `androidx.test` 依赖 |
 | L3 真机验收 | 真实 Android TV 设备 | 遥控器手感、直播流实际解码、长期稳定性 | **手动**：无自动化 |
+
+现有 L1 用例分布：
+
+| 测试类 | 用例数 | 覆盖 |
+|---|---|---|
+| `data/parser/ChannelJsonParserTest` | 11 | 标准解析、缺省字段容错、禁用/空分类过滤、URL 协议拦截、异常数据恢复 |
+| `domain/model/ChannelTest` | 5 | 字段默认值、值语义相等、`copy` 语义 |
+| `data/repository/DefaultChannelRepositoryTest` | 3 | 数据源透传、空结果兜底、异常吞噬 |
+| `data/LocalAssetsChannelsTest` | 3 | 直接读 `src/main/assets/channels.json`，校验随包默认配置合法且 6 个频道无损 |
 
 ## 2. 命令
 
@@ -45,6 +54,25 @@ L1 测试的前提是**被测逻辑不碰 Android framework**：一旦用到 `Co
    一次就绿的新测试通常没测到东西。
 5. **不改旧断言凑绿**：旧用例失败先怀疑实现或口径；确属口径变更才改，并在提交说明里写清原因。
 
+### 4.1 `org.json` 在纯 JVM 单测里的坑（必读）
+
+Android 的 `android.jar` 只是编译期桩，`org.json.JSONObject` / `JSONArray` 的方法体全部是
+`throw RuntimeException("Method ... not mocked.")`。**纯 JVM 单测直接调用会崩**。
+
+因此凡是用 `org.json` 实现解析器，必须在 `app/build.gradle.kts` 显式引入真实实现：
+
+```kotlin
+testImplementation("org.json:json:20231013")
+```
+
+这**只是测试期依赖**（`testImplementation`），不进 APK，不影响运行期体积；
+它让 `ChannelJsonParser` 的真实解析逻辑能在 JVM 上跑，无需模拟器。
+
+替代方案（未采用）：自己手写 JSON 解析器——成本高、易出解析 bug，且与 Android 运行期行为不一致。
+
+> 提示：`org.json` 的 `optString(key, default)` 在**键存在但值为 null** 时返回默认值，
+> 在**键存在且值为 JSON null** 时返回字符串 `"null"`——写解析器时要留意这两种语义。
+
 ## 5. L2 仪器测试的边界
 
 当前仓库**没有** `app/src/androidTest` 源集，也没有 `androidx.test` / `espresso` 依赖。
@@ -75,5 +103,7 @@ L1 测试的前提是**被测逻辑不碰 Android framework**：一旦用到 `Co
 
 ## 7. 现状与下一步
 
-- 现状只有 L1 的 `Channel` 冒烟测试，用于保证 `testDebugUnitTest` 链路通畅（阶段一目标）。
-- P1 随数据层落地，应补齐：解析器、Repository、状态流转的 L1 测试（详见 `docs/ROADMAP.md`）。
+- 阶段一建立 L1 链路；阶段二补齐**数据层**的 L1 覆盖（解析器 / 仓库 / 模型 / 真实 assets 文件）。
+- 仍未建立 L2（`androidTest` 源集与 `androidx.test` 依赖均不存在）。
+- 后续随状态流转（P1-4）、M3U 解析器（P1-2）、主备源切换（P1-7）落地，
+  继续按"L1 优先"补齐对应纯 JVM 用例（详见 `docs/ROADMAP.md`）。

@@ -3,7 +3,7 @@ package com.livetv.android.ui
 import android.view.ViewGroup
 import androidx.leanback.widget.ImageCardView
 import androidx.leanback.widget.Presenter
-import com.livetv.android.model.Channel
+import com.livetv.android.domain.model.Channel
 import kotlin.math.roundToInt
 
 class ChannelCardPresenter : Presenter() {

@@ -63,12 +63,21 @@ adb shell am start -n com.livetv.android/.MainActivity
 
 ```
 app/src/main/java/com/livetv/android/
-├── MainActivity.kt          # 宿主 Activity，装载 MainBrowseFragment
-├── model/Channel.kt         # 唯一的数据模型（data class）
+├── MainActivity.kt                 # 宿主 Activity，装载 MainBrowseFragment
+├── data/                           # 数据层
+│   ├── model/ChannelConfigDto.kt   # JSON 映射 DTO
+│   ├── parser/ChannelJsonParser.kt # JSON 解析与安全校验（纯函数）
+│   ├── source/                     # 数据源接口 + assets 实现
+│   └── repository/DefaultChannelRepository.kt
+├── domain/                         # 领域层
+│   ├── model/                      # Channel / ChannelCategory
+│   └── repository/ChannelRepository.kt
 └── ui/
-    ├── MainBrowseFragment.kt # Leanback 浏览页（频道数据目前硬编码在此）
-    ├── ChannelCardPresenter.kt # 频道卡片 Presenter
-    └── PlayerActivity.kt    # Media3 播放器页（HLS）
+    ├── MainBrowseFragment.kt       # Leanback 浏览页（通过 Repository 取分类）
+    ├── ChannelCardPresenter.kt     # 频道卡片 Presenter
+    └── PlayerActivity.kt           # Media3 播放器页（HLS）
+
+app/src/main/assets/channels.json   # 默认频道配置（分类 + 频道）
 ```
 
 ## 文档
@@ -84,7 +93,9 @@ app/src/main/java/com/livetv/android/
 
 ## 当前状态与限制
 
-- 频道列表是 `MainBrowseFragment` 里的硬编码样例数据（6 个 CCTV HLS 直播源），**不**可配置。
-- 播放仅支持 HLS 直链，播放失败时在页面上显示错误文案，不重试、不换源。
+- 频道列表来自 APK 内的 `assets/channels.json`（默认 6 个 CCTV HLS 直播源），
+  改配置需要改文件后**重新打包**；暂不支持 M3U 导入、网络拉取与用户自定义源。
+- 播放仅支持 HLS 直链，播放失败时在页面上显示错误文案，不重试、不换源
+  （`backupUrls` 备用源字段已在模型中预留，但尚未接线）。
 - 无 EPG、无搜索、无收藏、无播放历史、无设置页。
-- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试。
+- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试（当前 22 个）。
