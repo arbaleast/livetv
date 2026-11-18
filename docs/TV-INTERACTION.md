@@ -7,10 +7,10 @@
 
 | 按键 | KeyEvent | 语义 | 当前实现现状 |
 |---|---|---|---|
-| 上 / 下 | `KEYCODE_DPAD_UP` / `KEYCODE_DPAD_DOWN` | 在行（Row）之间纵向移动焦点 | 依赖 Leanback 默认行为：`ListRow` 纵向排列，`BrowseSupportFragment` 自动处理 |
+| 上 / 下 | `KEYCODE_DPAD_UP` / `KEYCODE_DPAD_DOWN` | 在行（Row）之间纵向移动焦点 | 浏览页：依赖 Leanback 默认行为（`ListRow` 纵向排列）。**播放页**：阶段三起改为**切上/下一台**（详见 4.1） |
 | 左 / 右 | `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | 在行内卡片之间横向移动焦点；在首列向左且有 Header 时切到 Header 栏 | 依赖 Leanback 默认行为（`headersState = HEADERS_ENABLED`） |
-| OK | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | 激活当前焦点项（= 点击） | Leanback 默认把 OK 转成点击 → 触发 `MainBrowseFragment.onItemViewClickedListener` |
-| Back | `KEYCODE_BACK` | 逐层返回：先关 Header，再退到上一个 Activity | 已启用 `isHeadersTransitionOnBackEnabled = true`（`MainBrowseFragment.setupUi()`） |
+| OK | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | 激活当前焦点项（= 点击） | 浏览页：Leanback 默认转成点击 → 触发 `MainBrowseFragment.onItemViewClickedListener`。**播放页**：Error 态手动重置，否则呼出/隐藏控制器 |
+| Back | `KEYCODE_BACK` | 逐层返回：先关 Header，再退到上一个 Activity | 浏览页已启用 `isHeadersTransitionOnBackEnabled = true`；**播放页**：控制器显示时先隐藏控制器 |
 | Menu | `KEYCODE_MENU` | 打开应用级菜单 / 设置 | **未实现**：全项目无 `onKeyDown` 处理 Menu 键，无菜单页 |
 
 补充约定：
@@ -29,6 +29,18 @@
 3. **焦点不得丢失**：任何异步加载完成后，若当前焦点为空或落在已移除的卡片上，
    必须在下一个焦点请求时把焦点放回第一个可见卡片（否则遥控器"没反应"）。
 4. **不劫持方向键**：除"焦点为空时的兜底恢复"外，不要在 `onKeyDown` 里拦截 D-Pad。
+   （**例外**：播放页阶段三起显式拦截上下键做切台，见 4.1——这是有意为之，
+   因为播放页没有可聚焦的频道列表，上下键在播放语境下的自然语义就是"换台"。）
+
+## 2.1 播放页的焦点例外说明
+
+浏览页的"不劫持方向键"规则**不适用于播放页**：
+
+- 浏览页有可聚焦的卡片列表，方向键必须留给焦点系统；
+- 播放页没有频道列表，方向键若不被接管就毫无作用；按 TV 设备惯例
+  （如运营商 IPTV 机顶盒），上下键在播放态就是"上/下一频道"；
+- 播放页的控制器（`PlayerView` 控制器）显示时，方向键交还 `PlayerView` 处理自身焦点，
+  避免与控制器内的控件冲突。
 
 ## 3. Leanback Presenter 绑定 / 解绑规范
 
@@ -53,20 +65,48 @@
 
 ## 4. 播放页交互规范
 
+### 4.1 阶段三实现的按键映射
+
+播放页 `PlayerActivity` 在 `onKeyDown` 中显式处理以下按键（实现见 `PlayerActivity.onKeyDown`）：
+
+| 按键 | KeyEvent | 控制器**隐藏**时 | 控制器**显示**时 | 返回值 |
+|---|---|---|---|---|
+| 上 | `KEYCODE_DPAD_UP` | **切上一台**（循环：首 → 末），画面短暂显示频道名 | 交还 `PlayerView` 处理焦点，**不切台** | 隐藏时 `true`；显示时交回 `super` |
+| 下 | `KEYCODE_DPAD_DOWN` | **切下一台**（循环：末 → 首），画面短暂显示频道名 | 交还 `PlayerView` 处理焦点，**不切台** | 同上 |
+| 确认 | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | **Error 态**：手动重置（回主源、计数归零、立即重连当前频道）；正常态：呼出控制器 | 隐藏控制器 | 恒 `true` |
+| 返回 | `KEYCODE_BACK` | 正常关闭 Activity（退出播放页） | **仅隐藏控制器**，不退出 Activity | 隐藏时 `true` |
+
+其它按键（左右、MENU 等）一律交回系统默认处理。
+
+### 4.2 切台的连带行为
+
+- 切台**必须**丢弃旧频道的重试状态（`RetryPolicy.onChannelSwitched`）：新频道从主源、计数 0 重新开始。
+- 切台**不重建 ExoPlayer**：`PlayerManager` 在 `onStart` → `onStop` 期间复用同一个实例，
+  只重建 `MediaSource`（请求头随频道变化）。
+- 切台**不新建 Channel**：新频道来自 `ChannelNavigator`（仓库扁平列表），定位失败时保留当前频道不变。
+- 切台会清空待执行的重试任务（`retryHandler.removeCallbacksAndMessages(null)`），
+  且旧任务的延迟回调会校验"频道没变"，避免误伤新频道。
+
+### 4.3 播放页规范与现状
+
 | 项 | 规范 | 现状 |
 |---|---|---|
-| 进入 | OK 触发后由 `MainBrowseFragment` `startActivity(PlayerActivity)`，通过 `EXTRA_CHANNEL_NAME` / `EXTRA_STREAM_URL` 传参 | 已实现 |
+| 进入 | OK 触发后由 `MainBrowseFragment` `startActivity(PlayerActivity)`，通过 `EXTRA_CHANNEL_ID` / `EXTRA_CHANNEL_NAME` / `EXTRA_STREAM_URL` 传参 | 已实现（阶段三新增 `EXTRA_CHANNEL_ID`） |
+| 频道定位 | 用 `EXTRA_CHANNEL_ID` 在仓库中定位完整频道（含 `backupUrls` / `headers`）；未命中则按地址匹配；再未命中用 Extra 构造临时单频道 | 已实现，保证旧调用 100% 兼容 |
 | 返回 | Back 退出播放页回到浏览页，焦点按第 2 节规则恢复 | 依赖 Leanback/系统默认，**需真机验证** |
 | 全屏 | 隐藏状态栏与导航栏（沉浸式） | 已实现，但用的是**已废弃**的 `systemUiVisibility`（`PlayerActivity.hideSystemUi()`，已 `@Suppress("DEPRECATION")`）；API 30+ 应改用 `WindowInsetsController`（**未实现**） |
 | 屏幕常亮 | 播放期间禁止自动熄屏 | 已实现：`PlayerActivity.onCreate` 里 `window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)` |
-| 错误提示 | 播放失败时在页面上给出文案，不崩溃 | 已实现：`PlayerActivity` 的 `Player.Listener.onPlayerError` 显示 `binding.errorText`，文案硬编码为中文（**未走 `strings.xml`**） |
+| 加载/缓冲提示 | Loading / Buffering / 自动重试 / 切备用线时显示提示，Playing 时隐藏 | 已实现（阶段三新增 `statusText`，文案见 `strings.xml` 的 `player_*`） |
+| 错误提示 | 按错误分类给出说明 + "按确认键重试 · 按上下键切换频道"指引 | 已实现（阶段三改为按 `PlaybackError` 分类，文案全部走 `strings.xml`） |
 | 菜单 | Menu 键呼出播放设置（码率/线路） | **未实现** |
 
 ## 5. 无障碍与文案
 
-- 所有可见文案必须走 `strings.xml`（当前 `PlayerActivity` 的"播放失败: ..."是**反例**，待修）。
+- 所有可见文案必须走 `strings.xml`（阶段三已把播放页文案全部迁入 `strings.xml` 的 `player_*`）。
 - 焦点项要有可读的内容描述；`ImageCardView` 的标题/描述即读屏文案来源。
 - 颜色对比度要满足 TV 大屏远距离观看；品牌色当前为 `#1565C0`（`@color/brand_primary`）。
+- 错误提示必须给出**可执行的指引**（当前为"按确认键重试 · 按上下键切换频道"），
+  不要只报错误码——用户在电视上无法操作调试信息。
 
 ## 6. 新增界面时的自检清单
 

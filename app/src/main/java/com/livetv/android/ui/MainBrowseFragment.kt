@@ -57,6 +57,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
                 if (item is Channel) {
                     if (item.streamUrl.isNotEmpty()) {
                         startActivity(Intent(requireContext(), PlayerActivity::class.java).apply {
+                            putExtra(PlayerActivity.EXTRA_CHANNEL_ID, item.id)
                             putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, item.name)
                             putExtra(PlayerActivity.EXTRA_STREAM_URL, item.streamUrl)
                         })

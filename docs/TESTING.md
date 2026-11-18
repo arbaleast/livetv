@@ -7,7 +7,7 @@
 
 | 层级 | 运行环境 | 覆盖对象 | 现状 |
 |---|---|---|---|
-| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、纯函数 | **已建立**：4 个测试类 / 22 个用例（`app/src/test/`） |
+| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航 | **已建立**：10 个测试类 / **77 个用例**（`app/src/test/`） |
 | L2 仪器测试 | 模拟器/真机，`connectedDebugAndroidTest` | View 渲染、Leanback 焦点、Activity 生命周期 | **未建立**：无 `androidTest` 源集、无 `androidx.test` 依赖 |
 | L3 真机验收 | 真实 Android TV 设备 | 遥控器手感、直播流实际解码、长期稳定性 | **手动**：无自动化 |
 
@@ -15,9 +15,15 @@
 
 | 测试类 | 用例数 | 覆盖 |
 |---|---|---|
+| `player/RetryPolicyTest` | 15 | 候选源生成与协议过滤、主源重试（1500/3000ms）、Failover 到备用源、全部耗尽、手动重置、切台重置 |
+| `player/PlaybackReducerTest` | 15 | 合法状态路径、非法转换保持原状态、Error 态忽略后续回调、致命错误、Released |
+| `player/ChannelNavigatorTest` | 11 | id/streamUrl 定位（含同 URL 取第一个）、上下切台、首尾循环、单频道、空列表、分类扁平化 |
+| `player/PlaybackErrorMapperTest` | 7 | HTTP 状态码、超时、网络、源解析、未知原因 |
+| `player/PlayerLayerPurityTest` | 3 | **架构约束**：纯策略层不得引用 `android.*` / `androidx.media3.*`（源码扫描） |
 | `data/parser/ChannelJsonParserTest` | 11 | 标准解析、缺省字段容错、禁用/空分类过滤、URL 协议拦截、异常数据恢复 |
 | `domain/model/ChannelTest` | 5 | 字段默认值、值语义相等、`copy` 语义 |
 | `data/repository/DefaultChannelRepositoryTest` | 3 | 数据源透传、空结果兜底、异常吞噬 |
+| `data/repository/ChannelRepositoryResilienceTest` | 4 | assets 缺失 / IO 异常时仓库返回空列表且不抛异常 |
 | `data/LocalAssetsChannelsTest` | 3 | 直接读 `src/main/assets/channels.json`，校验随包默认配置合法且 6 个频道无损 |
 
 ## 2. 命令
@@ -35,13 +41,20 @@
 
 | 目标 | 示例 |
 |---|---|
-| 数据解析 | `m3u` / `m3u8` / XML 文本 → `List<Channel>`（纯函数，输入输出可断言） |
+| 数据解析 | `m3u` / `m3u8` / JSON 文本 → `List<Channel>`（纯函数，输入输出可断言） |
 | Repository | 给定假数据源，断言返回的频道列表顺序、字段映射、空结果处理 |
-| 状态流转 | Loading → Content / Error 的 sealed class 流转断言 |
+| 状态流转 | `PlaybackReducer.reduce(state, event)` 的合法路径与非法转换 |
+| 重试 / Failover | `RetryPolicy.onFailure(state, error)` 返回 `Retry(delay)` / `SwitchSource(index)` / `Fatal` |
+| 频道导航 | `ChannelNavigator` 的定位、循环切台、空列表行为 |
+| 错误分类 | `PlaybackErrorMapper.map(responseCode, causeKind)` |
 | 模型 | `Channel` 的默认值、相等性、拷贝语义 |
 
-L1 测试的前提是**被测逻辑不碰 Android framework**：一旦用到 `Context`、`View`、`Uri`，
-要么改写为纯函数/注入接口，要么升级到 L2。
+L1 测试的前提是**被测逻辑不碰 Android framework**：一旦用到 `Context`、`View`、`Uri`、
+`Handler`，要么改写为纯函数/注入接口，要么升级到 L2。
+
+> **阶段三的分层约定**：`app/src/main/java/com/livetv/android/player/` 下除 `PlayerManager.kt`
+> 外全部是**纯策略层**，禁止引用 `android.*` 与 `androidx.media3.*`。
+> 这条约定由 `PlayerLayerPurityTest` 扫描源码强制执行——新增文件时若违反会直接测试失败。
 
 ## 4. L1 测试写法规则（强制）
 
@@ -101,9 +114,24 @@ testImplementation("org.json:json:20231013")
 | 7 | 错误流 | 指向无效 URL 时页面显示"播放失败: ..."，不崩溃 |
 | 8 | 稳定性 | 连续进出播放页 10 次，`dumpsys meminfo com.livetv.android` 无持续增长 |
 
+### 6.1 阶段三新增的遥控器验收项
+
+| # | 验收项 | 期望 |
+|---|---|---|
+| 9 | 播放页上/下键 | 切换到上/下一台，频道名变化，画面短暂显示"已切换到：xxx" |
+| 10 | 切台循环 | 在最后一台按下键回到第一台；第一台按上键回到最后一台 |
+| 11 | 控制器焦点 | 按 OK 呼出控制器后，上下键在控制器内移动焦点，**不切台** |
+| 12 | Back 关闭控制器 | 控制器显示时按 Back 只隐藏控制器；再按 Back 才退出播放页 |
+| 13 | OK 手动重试 | 错误态按 OK 回主源重新连接，提示消失 |
+| 14 | 主备源切换 | 主源失效时自动重试 2 次（1500/3000ms）后切到备用源，提示"主线路不可用…" |
+| 15 | 全部源失效 | 所有候选源耗尽后显示错误分类说明，等待手动重置 |
+| 16 | 切台不重建播放器 | 日志确认 ExoPlayer 实例在切台/切源/重试过程中未被 release 重建 |
+
 ## 7. 现状与下一步
 
-- 阶段一建立 L1 链路；阶段二补齐**数据层**的 L1 覆盖（解析器 / 仓库 / 模型 / 真实 assets 文件）。
+- 阶段一建立 L1 链路；阶段二补齐**数据层**的 L1 覆盖（解析器 / 仓库 / 模型 / 真实 assets 文件）；
+  阶段三补齐**播放器层**的 L1 覆盖（重试策略 / 状态归约 / 错误映射 / 频道导航 + 纯度约束），
+  合计 **77 个用例**。
 - 仍未建立 L2（`androidTest` 源集与 `androidx.test` 依赖均不存在）。
-- 后续随状态流转（P1-4）、M3U 解析器（P1-2）、主备源切换（P1-7）落地，
+- 后续随浏览页状态流转（P1-4）、M3U 解析器（P1-2）、多码率（P1-8）落地，
   继续按"L1 优先"补齐对应纯 JVM 用例（详见 `docs/ROADMAP.md`）。

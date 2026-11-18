@@ -27,22 +27,28 @@
 | 频道数据来自 APK 内 `assets/channels.json`（6 个 CCTV HLS 源），**UI 层不再硬编码** | `LocalAssetChannelSource`、`assets/channels.json` |
 | JSON 解析与安全校验（http/https 白名单、必填校验、disabled 与空分类过滤） | `ChannelJsonParser`、`ChannelJsonParserTest` |
 | 轻量分层：`domain/`（模型 + 仓库接口）与 `data/`（DTO / 解析器 / 数据源 / 仓库实现） | `app/src/main/java/com/livetv/android/domain/`、`data/` |
+| 播放器分层：`player/` 纯策略层（状态机 / 错误分类 / 重试策略 / 频道导航）+ `PlayerManager` 桥接层 | `app/src/main/java/com/livetv/android/player/` |
+| 播放状态机：Idle / Loading / Buffering / Playing / Paused / Error（含致命错误） | `PlaybackState`、`PlaybackReducer`、`PlaybackReducerTest` |
+| 主备源自动重试与切换：每源最多重试 2 次（1500/3000ms 退避），耗尽后切备用源，全耗尽则致命错误 | `RetryPolicy`、`PlayerManager`、`RetryPolicyTest` |
+| 自定义 HTTP 请求头走 DataSource 层（含 10s 连接/读取超时、允许跨协议重定向） | `PlayerManager.buildMediaSource()` |
+| 遥控器切台：播放页上下键循环切台、OK 手动重试、Back 先关控制器 | `PlayerActivity.onKeyDown()`、`docs/TV-INTERACTION.md` §4.1 |
+| 播放错误分类提示（网络 / HTTP 码 / 源解析 / 超时 / 未知）+ 操作指引，全部走 `strings.xml` | `PlaybackErrorMapper`、`strings.xml` 的 `player_*` |
 | OK 键进入播放页；无播放源时 Toast 提示 | `MainBrowseFragment.setupEventListeners()` |
 | HLS 直播流播放（Media3 ExoPlayer + `HlsMediaSource` + `DefaultHttpDataSource`） | `PlayerActivity.initializePlayer()` |
 | 播放进度与 `playWhenReady` 跨生命周期保存 | `PlayerActivity.releasePlayer()` |
 | 播放失败在页面显示错误文案 | `PlayerActivity` 的 `Player.Listener.onPlayerError` |
 | 播放页屏幕常亮 | `PlayerActivity.onCreate` 的 `FLAG_KEEP_SCREEN_ON` |
-| 领域模型已预留主备源 / 请求头 / 图标 / EPG 字段（**尚无消费方**） | `domain/model/Channel.kt` |
+| 领域模型已预留主备源 / 请求头 / 图标 / EPG 字段 | `domain/model/Channel.kt` |
 
 ### 明确**没有**的能力（避免误判）
 
 - 频道源的导入 / 管理 / 用户自定义（配置只能改 `assets/channels.json` 后重新打包）
 - M3U 导入、网络拉取频道列表、持久化存储
-- 主备源切换（Failover）与自定义 HTTP 请求头——**字段已存在但未接线**
 - EPG 节目单、搜索、收藏、播放历史、设置页、Menu 菜单
-- 多码率 / 清晰度切换、播放重试、线路切换
+- 多码率 / 清晰度切换、倍速、播放进度记忆
 - 账号体系、网络层、仪器测试（`androidTest`）与 UI 自动化
-- 加载中 / 空态 / 错误态的界面反馈（当前取不到内容时页面直接为空）
+- **浏览页**的加载中 / 空态 / 错误态反馈（播放页已有状态提示；浏览页取不到内容时页面直接为空）
+- 播放器控制器按钮里的"上一台/下一台"（切台只支持遥控器上下键）
 
 ---
 
@@ -86,8 +92,37 @@
 ### 阶段二未做（留给后续阶段）
 
 - M3U/M3U8 解析器、多数据源聚合、用户导入与持久化
-- 主备源切换与自定义请求头的**接线**（字段已预留）
-- 加载中 / 空态 / 错误态的界面反馈
+- ~~主备源切换与自定义请求头的**接线**~~ **阶段三已完成**
+- ~~加载中 / 空态 / 错误态的界面反馈~~ **播放页阶段三已完成**；浏览页仍缺（见技术债 #15）
+
+---
+
+## 阶段三（本次交付）：播放器状态机封装、错误恢复与遥控器切台
+
+目标：把 `PlayerActivity` 里的 Media3 逻辑抽离成独立 `player/` 包，建立可测的状态机、
+主备源自动重试与切换，并实现符合 TV 直觉的遥控器切台。
+
+- [x] `player/` 纯策略层（**不依赖 `android.*` / `media3.*`**，由 `PlayerLayerPurityTest` 固化）：
+      `PlaybackState` / `PlaybackEvent` / `PlaybackReducer` / `PlaybackError` /
+      `PlaybackErrorMapper` / `RetryPolicy` / `ChannelNavigator`
+- [x] `player/PlayerManager.kt` 桥接层：ExoPlayer **实例复用**（切台/切源/重试不重建）、
+      请求头与超时走 `DataSource` 层、独立 `retryHandler`、Media3 事件翻译
+- [x] 播放状态机：Idle / Loading / Buffering / Playing / Paused / Error(error, fatal)
+- [x] 主备源 Failover：每源最多重试 2 次（1500ms / 3000ms 退避），耗尽切下一条源，
+      全部耗尽 → 致命错误等待手动重置
+- [x] 遥控器切台：播放页上下键循环切台、OK 手动重试、Back 先关控制器
+- [x] `EXTRA_CHANNEL_ID` 新增 + 仓库定位完整频道（带 `backupUrls` / `headers`），旧 Extra 仍兼容
+- [x] 播放页文案全部迁入 `strings.xml`（消除 Lint `SetTextI18n`）
+- [x] 纯 JVM 单测 **77 个**（阶段二 22 + 阶段三新增 55），两次"先红后绿"红检已记录
+- [x] 同步更新 `docs/ARCHITECTURE.md`（包结构、状态流转、Failover 机制）、
+      `docs/TV-INTERACTION.md`（按键映射表）、`docs/TESTING.md`、`docs/ROADMAP.md`
+
+### 阶段三未做（留给后续阶段）
+
+- 播放进度记忆（切台后重播从头开始）
+- 播放器控制器按钮里的"上一台/下一台"
+- 浏览页的加载/空态反馈
+- 真机验收（本机无 Android TV 设备，见 `docs/TESTING.md` §6）
 
 ---
 
@@ -100,9 +135,9 @@
 | P1-1 | `ChannelRepository` 接口 + 内存实现 | **阶段二已完成基础版**（接口 + assets 实现）；后续补多源聚合 |
 | P1-2 | 源解析器（m3u / m3u8 / 简单 XML） | JSON 解析器阶段二已完成；m3u 系列按同样"纯函数 + L1 单测"模式补齐 |
 | P1-3 | 源管理与本地持久化 | 频道源增删改查；持久化方案**待定**（轻量方案优先，不预设 Room/数据库框架） |
-| P1-4 | 状态流转（Loading / Content / Empty / Error） | 用 sealed class + StateFlow 表达，UI 订阅随生命周期启停 |
-| P1-5 | 网络层与错误分类 | 区分网络失败/解析失败/源无效，给出可行动提示 |
-| P1-6 | 单元测试体系补齐 | **阶段二已完成解析器/仓库/模型**；状态流转落地后补对应 L1 测试 |
+| P1-4 | 状态流转（Loading / Content / Empty / Error） | **播放页阶段三已完成**（`PlaybackState` + `PlaybackReducer`）；浏览页仍需 sealed class + StateFlow |
+| P1-5 | 网络层与错误分类 | **阶段三已完成播放错误分类**（Network / HttpStatus / SourceParsing / Timeout / Unknown）；浏览页的网络层仍待做 |
+| P1-6 | 单元测试体系补齐 | **阶段二完成数据层、阶段三完成播放器层**；状态流转落地后补浏览页 L1 测试 |
 
 > 约束：不引入 Hilt/Dagger 等 DI 框架；不拆多模块；依赖注入用手动构造。
 
@@ -110,11 +145,11 @@
 
 | # | 能力 | 交付要点 |
 |---|---|---|
-| P1-7 | 播放重试与线路切换 | 失败自动重试 N 次；多线路可切换 |
+| P1-7 | 播放重试与线路切换 | **阶段三已完成**：每源 2 次重试 + 主备源自动切换 + 手动重置 |
 | P1-8 | 多码率 / 清晰度 | 使用 Media3 的轨道选择能力 |
 | P1-9 | 沉浸式全屏现代化 | `systemUiVisibility` → `WindowInsetsController`（API 30+ 正确行为） |
-| P1-10 | 错误文案本地化 | 播放错误等文案移入 `strings.xml` |
-| P1-11 | 焦点与遥控器细节完善 | 焦点丢失兜底、刷新后焦点恢复、Menu 键入口 |
+| P1-10 | 错误文案本地化 | **阶段三已完成**（播放页文案全部移入 `strings.xml`） |
+| P1-11 | 焦点与遥控器细节完善 | **阶段三完成播放页上下键切台**；浏览页焦点兜底、刷新后焦点恢复、Menu 键入口仍待做 |
 | P1-12 | 播放页主题统一 | `PlayerActivity` 与主界面共用 Leanback 主题/品牌色 |
 
 ## P2：扩展能力

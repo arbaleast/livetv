@@ -5,4 +5,18 @@
     <string name="row_news">新闻</string>
     <string name="row_sports">体育</string>
     <string name="channel_selected">已选择：%1$s</string>
+
+    <!-- 播放页 -->
+    <string name="player_loading">正在加载：%1$s</string>
+    <string name="player_buffering">缓冲中…</string>
+    <string name="player_retrying">播放失败，正在重试（%1$d/%2$d）…</string>
+    <string name="player_switching_source">主线路不可用，正在切换备用线路…</string>
+    <string name="player_error_network">网络连接失败</string>
+    <string name="player_error_http">服务器返回错误（HTTP %1$d）</string>
+    <string name="player_error_source">直播源无法解析</string>
+    <string name="player_error_timeout">连接超时</string>
+    <string name="player_error_unknown">播放失败</string>
+    <string name="player_error_hint">按确认键重试 · 按上下键切换频道</string>
+    <string name="player_switched_to">已切换到：%1$s</string>
+    <string name="player_no_channel">没有可播放的频道</string>
 </resources>
