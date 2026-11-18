@@ -1,13 +1,42 @@
-*.iml
-.gradle
+# ---- Gradle ----
+.gradle/
+**/build/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ---- 本机环境（绝不入库；模板 local.properties.example 必须入库）----
 /local.properties
-/.idea
-.DS_Store
-/build
-**/build
-/captures
-.externalNativeBuild
-.cxx
+!local.properties.example
+
+# ---- Android / IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+captures/
+.externalNativeBuild/
+.cxx/
+*.hprof
+
+# ---- 构建产物 ----
 *.apk
 *.ap_
 *.aab
+*.dex
+*.class
+
+# ---- 签名材料（绝不入库）----
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# ---- 临时目录与日志 ----
+.tmp/
+tmp/
+*.log
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini

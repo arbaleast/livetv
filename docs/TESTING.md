@@ -1,0 +1,79 @@
+# TESTING — 测试策略与边界
+
+## 1. 总体策略
+
+**默认用纯 JVM 单元测试**：不依赖模拟器、不依赖设备、秒级完成、可在 CI 无条件执行。
+只有真正无法在 JVM 上表达的（焦点、渲染、播放器解码、系统交互）才下沉到仪器测试或真机验收。
+
+| 层级 | 运行环境 | 覆盖对象 | 现状 |
+|---|---|---|---|
+| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、纯函数 | **已建立**：`app/src/test/.../model/ChannelTest.kt` |
+| L2 仪器测试 | 模拟器/真机，`connectedDebugAndroidTest` | View 渲染、Leanback 焦点、Activity 生命周期 | **未建立**：无 `androidTest` 源集、无 `androidx.test` 依赖 |
+| L3 真机验收 | 真实 Android TV 设备 | 遥控器手感、直播流实际解码、长期稳定性 | **手动**：无自动化 |
+
+## 2. 命令
+
+```bash
+./gradlew testDebugUnitTest --console=plain --no-daemon          # L1
+./gradlew testDebugUnitTest --tests "*ChannelTest" --console=plain --no-daemon   # 只跑某个类
+./gradlew connectedDebugAndroidTest --console=plain --no-daemon  # L2（需先 adb devices 有设备）
+```
+
+报告位置：`app/build/reports/tests/testDebugUnitTest/index.html`，
+机器可读结果：`app/build/test-results/testDebugUnitTest/*.xml`。
+
+## 3. 什么该写成 L1 测试
+
+| 目标 | 示例 |
+|---|---|
+| 数据解析 | `m3u` / `m3u8` / XML 文本 → `List<Channel>`（纯函数，输入输出可断言） |
+| Repository | 给定假数据源，断言返回的频道列表顺序、字段映射、空结果处理 |
+| 状态流转 | Loading → Content / Error 的 sealed class 流转断言 |
+| 模型 | `Channel` 的默认值、相等性、拷贝语义 |
+
+L1 测试的前提是**被测逻辑不碰 Android framework**：一旦用到 `Context`、`View`、`Uri`，
+要么改写为纯函数/注入接口，要么升级到 L2。
+
+## 4. L1 测试写法规则（强制）
+
+1. **期望值硬编码字面量**：断言里的期望结果直接写字面量（`assertEquals(3, channels.size)`），
+   不得调用被测逻辑再算一遍——那样断言恒真，测的是实现自己。
+2. **强断言**：禁止 `assertNotNull` / `assertTrue(x)` / `assertTrue(x >= 0)` 这类弱断言，
+   要断言**具体值**（状态、字段、顺序）。
+3. **mock 只挡外部依赖**：网络、文件系统、时钟可以 mock；**被测单元的纯逻辑不许 mock**。
+4. **先红后绿**：新测试必须先在"空实现/旧实现"上跑出**失败**，再让实现通过。
+   一次就绿的新测试通常没测到东西。
+5. **不改旧断言凑绿**：旧用例失败先怀疑实现或口径；确属口径变更才改，并在提交说明里写清原因。
+
+## 5. L2 仪器测试的边界
+
+当前仓库**没有** `app/src/androidTest` 源集，也没有 `androidx.test` / `espresso` 依赖。
+若将来需要引入，属于**新增依赖**，必须在交付说明里写明"为什么必须加、替代方案为何不可行"。
+
+适合 L2 的场景：
+
+- Leanback 焦点在 `ListRow` 之间的移动与记忆；
+- `ChannelCardPresenter` 的 `onBindViewHolder` / `onUnbindViewHolder` 是否被正确回调；
+- `PlayerActivity` 在 `onStart`/`onStop` 之间是否正确创建/释放播放器（可用计数 fake 验证）。
+
+不适合 L2 的场景（应当下沉到 L1）：解析、映射、状态机、排序、过滤。
+
+## 6. L3 真机验收清单（手动）
+
+在真实 Android TV 设备（或带遥控器的模拟器）上逐条确认：
+
+| # | 验收项 | 期望 |
+|---|---|---|
+| 1 | 冷启动 | 显示"电视节目"标题、新闻/体育两行卡片、焦点落在首个卡片 |
+| 2 | 方向键 | 上/下在行间移动，左/右在行内移动卡片，焦点样式可见 |
+| 3 | OK 键 | 跳转到 `PlayerActivity`，左上角显示频道名 |
+| 4 | Back 键 | 从播放页返回浏览页，焦点位置与进入前一致 |
+| 5 | 播放 | HLS 直播流实际出画（需真实网络） |
+| 6 | 屏幕常亮 | 播放期间屏幕不自动熄灭 |
+| 7 | 错误流 | 指向无效 URL 时页面显示"播放失败: ..."，不崩溃 |
+| 8 | 稳定性 | 连续进出播放页 10 次，`dumpsys meminfo com.livetv.android` 无持续增长 |
+
+## 7. 现状与下一步
+
+- 现状只有 L1 的 `Channel` 冒烟测试，用于保证 `testDebugUnitTest` 链路通畅（阶段一目标）。
+- P1 随数据层落地，应补齐：解析器、Repository、状态流转的 L1 测试（详见 `docs/ROADMAP.md`）。

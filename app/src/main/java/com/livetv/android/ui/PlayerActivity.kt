@@ -7,11 +7,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import com.livetv.android.databinding.ActivityPlayerBinding
 
+// HlsMediaSource / ExoPlayer.setMediaSource(MediaSource) 属于 Media3 的实验性 API，
+// 显式声明 opt-in 以通过 Android Lint 的 UnsafeOptInUsageError 检查。
+@androidx.annotation.OptIn(UnstableApi::class)
 class PlayerActivity : AppCompatActivity() {
 
     companion object {
@@ -39,14 +43,6 @@ class PlayerActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemUi()
-        if (player == null) {
-            initializePlayer()
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        releasePlayer()
     }
 
     override fun onStop() {
@@ -55,6 +51,8 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun initializePlayer() {
+        // 防止重复初始化导致播放器实例泄漏（onStart 之后 player 应始终为空或已存在）
+        if (player != null) return
         val streamUrl = intent.getStringExtra(EXTRA_STREAM_URL) ?: run {
             finish()
             return
@@ -92,6 +90,8 @@ class PlayerActivity : AppCompatActivity() {
         player?.let {
             playbackPosition = it.currentPosition
             playWhenReady = it.playWhenReady
+            // 先解除 PlayerView 对已释放播放器的引用，避免视图持有失效实例
+            binding.playerView.player = null
             it.release()
         }
         player = null
