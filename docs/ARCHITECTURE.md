@@ -319,6 +319,20 @@ https://example.com/live/cctv1.m3u8
 
 ---
 
+### 6. 播放页按键与控制器（阶段 5.5 真机校准）
+
+真机实测暴露了一个**单测在结构上无法覆盖**的层次问题，这里作为长期约束记录：
+
+| 事实 | 说明 |
+|---|---|
+| Media3 抢先消费方向键 | `PlayerView.dispatchKeyEvent` 在"方向键 + 控制器未完全可见"时调用 `maybeShowController()` 并返回 `true`，`Activity.onKeyDown` 永远收不到 |
+| 因此按键拦截在 `dispatchKeyEvent` | 切台 / OK 重试都在视图树分发之前处理 |
+| 控制器不再自动弹出 | `controllerAutoShow = false`；Media3 会在切换媒体源后异步弹起控制器，把方向键吞掉，导致连续换台只切一台 |
+| 切台闸门不用控制器可见性 | 改用"用户是否主动呼出过控制器"标记（`isControllerOpenedByUser`），避免受 Media3 异步弹窗与隐藏动画影响 |
+| 状态提示的写入顺序有讲究 | `showChannelSwitchedHint()` 必须在 `playerManager.switchChannel()` **之后**，否则被同步派发的 Loading 文案覆盖 |
+
+---
+
 ## 第二部分：现有技术债（带证据）
 
 | # | 技术债 | 证据 | 影响 |
@@ -344,20 +358,6 @@ https://example.com/live/cctv1.m3u8
 | 16 | **播放页未接 `PlayerView` 控制器按钮** | 切台只通过遥控器方向键；控制器里的"上一台/下一台"按钮未接入 `ChannelNavigator` | 触屏/控制器操作无法切台 |
 | 17 | ~~HTTP 状态码识别依赖 Media3 错误码区间~~ **阶段 3.5 修复，阶段 5.5 修正** | `findInvalidResponseCode()` 遍历 cause 链取 `InvalidResponseCodeException.responseCode`。阶段 3.5 曾保留 `HTTP_STATUS_RANGE = 2000..2999` 作为兜底，**该兜底是错的**：2000-2008 是 Media3 的 IO 错误段（2001=网络连接失败、2002=连接超时），真机上把网络故障显示成了"HTTP 2001"。阶段 5.5 已删除该区间，只信 cause 链里的真实响应码 | 错误文案不再误导；`classifyCause()` 同时改为遍历 cause 链，能识别被 `HttpDataSourceException` 包住的 `UnknownHostException`/`SocketTimeoutException` |
 | 18 | ~~切台提示不自动消失~~ **阶段 3.5 已修复** | `PlayerActivity.showChannelSwitchedHint()` 用 `lifecycleScope.launch { delay(3000) }` 自动隐藏 `statusText`；显示新提示前 `cancel()` 旧 Job，`onDestroy()` 再兜底取消 | 短时提示不再长期遮挡画面 |
-
----
-
-### 4.2 播放页按键与控制器（阶段 5.5 真机校准）
-
-真机实测暴露了一个**单测在结构上无法覆盖**的层次问题，这里作为长期约束记录：
-
-| 事实 | 说明 |
-|---|---|
-| Media3 抢先消费方向键 | `PlayerView.dispatchKeyEvent` 在"方向键 + 控制器未完全可见"时调用 `maybeShowController()` 并返回 `true`，`Activity.onKeyDown` 永远收不到 |
-| 因此按键拦截在 `dispatchKeyEvent` | 切台 / OK 重试都在视图树分发之前处理 |
-| 控制器不再自动弹出 | `controllerAutoShow = false`；Media3 会在切换媒体源后异步弹起控制器，把方向键吞掉，导致连续换台只切一台 |
-| 切台闸门不用控制器可见性 | 改用"用户是否主动呼出过控制器"标记（`isControllerOpenedByUser`），避免受 Media3 异步弹窗与隐藏动画影响 |
-| 状态提示的写入顺序有讲究 | `showChannelSwitchedHint()` 必须在 `playerManager.switchChannel()` **之后**，否则被同步派发的 Loading 文案覆盖 |
 
 ---
 

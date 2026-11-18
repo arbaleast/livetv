@@ -34,7 +34,7 @@
 | 播放状态机：Idle / Loading / Buffering / Playing / Paused / Error（含致命错误） | `PlaybackState`、`PlaybackReducer`、`PlaybackReducerTest` |
 | 主备源自动重试与切换：每源最多重试 2 次（1500/3000ms 退避），耗尽后切备用源，全耗尽则致命错误 | `RetryPolicy`、`PlayerManager`、`RetryPolicyTest` |
 | 自定义 HTTP 请求头走 DataSource 层（含 10s 连接/读取超时、允许跨协议重定向） | `PlayerManager.buildMediaSource()` |
-| 遥控器切台：播放页上下键循环切台、OK 手动重试、Back 先关控制器 | `PlayerActivity.onKeyDown()`、`docs/TV-INTERACTION.md` §4.1 |
+| 遥控器切台：播放页上下键循环切台、OK 手动重试、Back 先关控制器 | `PlayerActivity.dispatchKeyEvent()`、`docs/TV-INTERACTION.md` §4.1 |
 | 播放错误分类提示（网络 / HTTP 码 / 源解析 / 超时 / 未知）+ 操作指引，全部走 `strings.xml` | `PlaybackErrorMapper`、`strings.xml` 的 `player_*` |
 | OK 键进入播放页；无播放源时 Toast 提示 | `MainBrowseFragment.setupEventListeners()` |
 | HLS 直播流播放（Media3 ExoPlayer + `HlsMediaSource` + `DefaultHttpDataSource`） | `PlayerActivity.initializePlayer()` |
