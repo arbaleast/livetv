@@ -287,9 +287,210 @@ class M3uPlaylistParserTest {
 
         val categories = M3uPlaylistParser.parse(playlist)
 
-        // 不崩溃即可：具体取值取决于容错策略，但必须产出一个合法频道
+        // 引号未闭合时无法定位引号外的分隔逗号 -> 该条目的显示名无法确定，
+        // 按"坏条目丢弃"处理：不崩溃、不产生非法频道。
+        assertEquals(0, categories.size)
+    }
+
+    // ---------- 阶段五：引号内逗号切分 ----------
+
+    @Test
+    fun `comma inside quoted attribute value does not split the display name`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="新闻,综合",CCTV-1
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val categories = M3uPlaylistParser.parse(playlist)
+
+        assertEquals(1, categories.size)
+        assertEquals("新闻,综合", categories[0].name)
+        assertEquals(1, categories[0].channels.size)
+        assertEquals("CCTV-1", categories[0].channels[0].name)
+    }
+
+    @Test
+    fun `comma inside single quoted attribute value does not split the display name`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title='体育,赛事',赛事频道
+            https://example.com/sports.m3u8
+        """.trimIndent()
+
+        val categories = M3uPlaylistParser.parse(playlist)
+
+        assertEquals(1, categories.size)
+        assertEquals("体育,赛事", categories[0].name)
+        assertEquals("赛事频道", categories[0].channels[0].name)
+    }
+
+    @Test
+    fun `display name may still contain commas after the separator`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="新闻",CCTV-1 综合,高清
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val categories = M3uPlaylistParser.parse(playlist)
+
+        assertEquals("新闻", categories[0].name)
+        assertEquals("CCTV-1 综合,高清", categories[0].channels[0].name)
+    }
+
+    // ---------- 阶段五：#EXTVLCOPT / #KODIPROP 请求头 ----------
+
+    @Test
+    fun `extvlcopt user agent becomes the User-Agent header`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",CCTV-1 综合
+            #EXTVLCOPT:http-user-agent=Mozilla/5.0 (Linux; Android 11)
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        assertEquals("Mozilla/5.0 (Linux; Android 11)", channel.headers["User-Agent"])
+    }
+
+    @Test
+    fun `extvlcopt referrer and referer both become the Referer header`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",CCTV-1 综合
+            #EXTVLCOPT:http-referrer=https://example.com/page
+            #EXTVLCOPT:http-referer=https://example.com/other
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        // 后出现的同名指令覆盖先出现的
+        assertEquals("https://example.com/other", channel.headers["Referer"])
+    }
+
+    @Test
+    fun `extvlcopt origin becomes the Origin header`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",CCTV-1 综合
+            #EXTVLCOPT:http-origin=https://example.com
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        assertEquals("https://example.com", channel.headers["Origin"])
+    }
+
+    @Test
+    fun `kodiprop directives are parsed like extvlcopt ones`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",CCTV-1 综合
+            #KODIPROP:inputstream.adaptive.stream_headers=User-Agent=Kodi
+            #KODIPROP:inputstream.adaptive.manifest_headers=Referer=https://example.com
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        // KODIPROP 的键名形态是 `xxx.headers=Key=Value`，本解析器识别尾部 `Key=Value`
+        assertEquals("Kodi", channel.headers["User-Agent"])
+        assertEquals("https://example.com", channel.headers["Referer"])
+    }
+
+    @Test
+    fun `quoted directive values are unwrapped and empty values are ignored`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",CCTV-1 综合
+            #EXTVLCOPT:http-user-agent="QuotedAgent/1.0"
+            #EXTVLCOPT:http-origin=''
+            #EXTVLCOPT:http-referrer=
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        assertEquals("QuotedAgent/1.0", channel.headers["User-Agent"])
+        assertEquals(null, channel.headers["Origin"])
+        assertEquals(null, channel.headers["Referer"])
+    }
+
+    @Test
+    fun `directive keys are matched case insensitively`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",CCTV-1 综合
+            #EXTVLCOPT:HTTP-USER-AGENT=UpperCaseAgent
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        assertEquals("UpperCaseAgent", channel.headers["User-Agent"])
+    }
+
+    @Test
+    fun `inline extinf attributes can carry request headers`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视" user-agent="InlineAgent/2.0" referer="https://example.com/inline",CCTV-1 综合
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        assertEquals("InlineAgent/2.0", channel.headers["User-Agent"])
+        assertEquals("https://example.com/inline", channel.headers["Referer"])
+    }
+
+    @Test
+    fun `extvlcopt overrides the inline attribute with the same header`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视" user-agent="InlineAgent/2.0",CCTV-1 综合
+            #EXTVLCOPT:http-user-agent=DirectiveAgent/3.0
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        // 固定优先级：指令行覆盖行内属性（指令在行内属性之后解析）
+        assertEquals("DirectiveAgent/3.0", channel.headers["User-Agent"])
+    }
+
+    @Test
+    fun `headers of an abandoned entry never leak into the next channel`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",没有地址的频道
+            #EXTVLCOPT:http-user-agent=ShouldNotLeak
+            #EXTINF:-1 group-title="央视",正常频道
+            https://example.com/ok.m3u8
+        """.trimIndent()
+
+        val categories = M3uPlaylistParser.parse(playlist)
+
         assertEquals(1, categories.size)
         assertEquals(1, categories[0].channels.size)
-        assertEquals("https://example.com/ok.m3u8", categories[0].channels[0].streamUrl)
+        assertEquals("正常频道", categories[0].channels[0].name)
+        assertEquals(emptyMap<String, String>(), categories[0].channels[0].headers)
+    }
+
+    @Test
+    fun `channels without any header carry an empty header map`() {
+        val playlist = """
+            #EXTM3U
+            #EXTINF:-1 group-title="央视",CCTV-1 综合
+            https://example.com/cctv1.m3u8
+        """.trimIndent()
+
+        val channel = M3uPlaylistParser.parse(playlist)[0].channels[0]
+
+        assertEquals(emptyMap<String, String>(), channel.headers)
     }
 }

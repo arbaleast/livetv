@@ -13,23 +13,16 @@ import androidx.leanback.widget.OnItemViewClickedListener
 import androidx.leanback.widget.Presenter
 import androidx.leanback.widget.Row
 import androidx.leanback.widget.RowPresenter
+import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
-import com.livetv.android.data.repository.DefaultChannelRepository
-import com.livetv.android.data.source.LocalAssetChannelSource
-import com.livetv.android.data.source.LocalM3uChannelSource
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.repository.ChannelRepository
 
 class MainBrowseFragment : BrowseSupportFragment() {
 
-    /** 频道数据仓库；默认合并 assets/channels.json（JSON 源）与 assets/sample.m3u（M3U 源）。 */
+    /** 频道数据仓库；取自全局 [LiveTvApplication]（JSON 源 + M3U 源，带内存缓存）。 */
     private val channelRepository: ChannelRepository by lazy {
-        DefaultChannelRepository(
-            listOf(
-                LocalAssetChannelSource(requireContext().assets),
-                LocalM3uChannelSource(requireContext().assets),
-            ),
-        )
+        (requireActivity().application as LiveTvApplication).channelRepository
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

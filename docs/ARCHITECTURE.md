@@ -33,6 +33,7 @@
 
 ```
 app/src/main/java/com/livetv/android/
+├── LiveTvApplication.kt                  # ← 阶段五新增：全局 ChannelRepository 单例（带内存缓存）
 ├── MainActivity.kt                       # 宿主 Activity
 ├── data/                                 # ← 阶段二新增：数据获取与解析（阶段四扩展 M3U）
 │   ├── model/ChannelConfigDto.kt        # JSON 映射 DTO（version / categories / channels）
@@ -41,7 +42,7 @@ app/src/main/java/com/livetv/android/
 │   ├── source/ChannelDataSource.kt       # 数据源接口
 │   ├── source/LocalAssetChannelSource.kt # 读 assets/channels.json 并调用 Parser
 │   ├── source/LocalM3uChannelSource.kt  # ← 阶段四新增：读 assets/sample.m3u 并调用 Parser
-│   └── repository/DefaultChannelRepository.kt   # ← 阶段四升级：多数据源合并
+│   └── repository/DefaultChannelRepository.kt   # ← 阶段四升级：多数据源合并（阶段五加缓存）
 ├── domain/                               # ← 阶段二新增：领域层
 │   ├── model/Channel.kt                  # 领域模型（由阶段一 model/Channel.kt 升级迁移）
 │   ├── model/ChannelCategory.kt          # 分类领域模型
@@ -64,6 +65,7 @@ app/src/main/java/com/livetv/android/
 | 类 | 职责 |
 |---|---|
 | `MainActivity` | 宿主 Activity，`setContentView(R.layout.activity_main)`，在 `savedInstanceState == null` 时提交 `MainBrowseFragment` |
+| `LiveTvApplication`（阶段五） | 全局 `ChannelRepository` 持有者（`by lazy` 装配 JSON + M3U 两个数据源）；提供 `refreshChannels()` 强制重算 |
 | `MainBrowseFragment` | 浏览页：标题/品牌色，**通过 `ChannelRepository` 取分类列表**并组装 `ListRow`，处理卡片点击跳转播放 |
 | `ChannelCardPresenter` | 渲染 `ImageCardView` 卡片（标题 + 描述） |
 | `PlayerActivity` | 播放页：加载频道、渲染状态与提示、**遥控器按键映射**；不含 ExoPlayer 逻辑 |
@@ -73,9 +75,9 @@ app/src/main/java/com/livetv/android/
 | `ChannelDataSource`（data） | 数据源接口：`loadCategories(): List<ChannelCategory>` |
 | `LocalAssetChannelSource`（data） | 读 `assets/channels.json` → 交给 `ChannelJsonParser` |
 | `LocalM3uChannelSource`（data） | **阶段四**：读 `assets/sample.m3u` → 交给 `M3uPlaylistParser` |
-| `DefaultChannelRepository`（data） | **阶段四**：聚合多个数据源，**按分类名合并同名分类**，单源异常只跳过该源 |
+| `DefaultChannelRepository`（data） | **阶段四**：聚合多个数据源，**按分类名合并同名分类**，单源异常只跳过该源；**阶段五**：加内存缓存（`enableCache` / `refresh()` / `invalidateCache()`） |
 | `ChannelJsonParser`（data） | 纯函数解析 + 校验（URL 协议白名单、必填字段、disabled/空分类过滤） |
-| `M3uPlaylistParser`（data，纯） | 纯函数解析 M3U：`#EXTINF` 属性提取（`tvg-id` / `tvg-logo` / `group-title`）、URL 校验、坏条目跳过 |
+| `M3uPlaylistParser`（data，纯） | 纯函数解析 M3U：`#EXTINF` 属性提取（`tvg-id` / `tvg-logo` / `group-title`）、**引号感知逗号切分**、**`#EXTVLCOPT`/`#KODIPROP` 与行内属性 -> `Channel.headers`**、URL 校验、坏条目跳过 |
 | `ChannelConfigDto` 等（data） | JSON 原始形状的 DTO，只做映射不做业务校验 |
 | `PlaybackState`（player，纯） | 状态：`Idle` / `Loading` / `Buffering` / `Playing` / `Paused` / `Error(error, fatal)` |
 | `PlaybackEvent`（player，纯） | 事件：`Prepare` / `Buffering` / `Ready` / `Playing` / `Paused` / `Failed` / `Fatal` / `ManualReset` / `Released` |
@@ -99,12 +101,10 @@ MainActivity.onCreate
 MainBrowseFragment.onCreate
   ├─ setupUi()      title / headersState=HEADERS_ENABLED / isHeadersTransitionOnBackEnabled=true / brandColor
   ├─ loadRows()
-  │     channelRepository = DefaultChannelRepository([
-  │         LocalAssetChannelSource(requireContext().assets),   // JSON 源
-  │         LocalM3uChannelSource(requireContext().assets),     // M3U 源（阶段四）
-  │     ])
+  │     channelRepository = (requireActivity().application as LiveTvApplication).channelRepository
+  │                            ↑ 阶段五：全局单例（带内存缓存），UI 层不再自行拼装数据源
   │     channelRepository.getCategories()               ← 领域接口
-  │       └─ DefaultChannelRepository.getCategories()   ← 逐源 try/catch，单源失败只跳过该源
+  │       └─ DefaultChannelRepository.getCategories()   ← 逐源 try/catch，单源失败只跳过该源；命中缓存则直接返回
   │           ├─ LocalAssetChannelSource.loadCategories()
   │           │     ├─ assets.open("channels.json").use { readBytes().toString(UTF_8) }   ← 失败 → emptyList()
   │           │     └─ ChannelJsonParser.parse(json)     ← 纯函数，失败 → emptyList()
@@ -116,7 +116,8 @@ MainBrowseFragment.onCreate
   │           ├─ LocalM3uChannelSource.loadCategories()      ← 阶段四
   │           │     ├─ assets.open("sample.m3u").use { readBytes().toString(UTF_8) }      ← 失败 → emptyList()
   │           │     └─ M3uPlaylistParser.parse(m3u)          ← 纯函数，失败 → emptyList()
-  │           │           ├─ 扫描 #EXTINF 行，提取属性与显示名
+  │           │           ├─ 扫描 #EXTINF 行，提取属性与显示名（引号感知逗号切分）
+  │           │           ├─ 收集 #EXTVLCOPT / #KODIPROP 与行内属性 -> HTTP 请求头
   │           │           ├─ 向下取第一个合法 http/https 行作为 URL
   │           │           ├─ 按 group-title 分组（缺失 → "未分类"）
   │           │           └─ 丢弃非法 URL / 空名称的频道
@@ -275,11 +276,17 @@ https://example.com/live/cctv1.m3u8
 | 环节 | 规则 |
 |---|---|
 | 入口 | 逐行扫描（`lineSequence()`），空行直接跳过 |
-| 条目起点 | 仅 `#EXTINF` 开头的行开启一个"待定条目"；新的 `#EXTINF` 会**作废**上一个还没等到 URL 的条目 |
-| 属性区 | `#EXTINF` 去掉前缀后按**第一个逗号**切分：逗号前是属性区（并去掉 `:-1` 时长前缀），逗号后是显示名 |
-| 显示名 | 逗号后的原文 `trim()`；允许包含逗号（只按第一个逗号切分）；为空则丢弃该频道 |
+| 条目起点 | 仅 `#EXTINF` 开头的行开启一个"待定条目"；新的 `#EXTINF` 会**作废**上一个还没等到 URL 的条目（连带其待定请求头一起丢弃） |
+| 属性区 | `#EXTINF` 去掉前缀后按**引号外**的第一个逗号切分：逗号前是属性区（并去掉 `:-1` 时长前缀），逗号后是显示名 |
+| 引号感知切分 | `indexOfTopLevelComma()` 逐字符扫描，跳过双引号 `"..."` / 单引号 `'...'` 内部的逗号；引号未闭合时按"到行尾都在引号内"处理（找不到分隔逗号 -> 该条目作废） |
+| 显示名 | 逗号后的原文 `trim()`；允许包含逗号（只按引号外的第一个逗号切分）；为空则丢弃该频道 |
 | 属性提取 | 正则 `([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"\|'([^']*)'\|([^\s"']+))`，**双引号 / 单引号 / 无引号三种写法都支持**，属性顺序任意、之间可有多个空白 |
 | 属性映射 | `tvg-id` → `Channel.epgId`（同时作为 `Channel.id`，缺失时用频道名兜底）；`tvg-logo` → `Channel.logo`；`group-title` → 分类名（缺失 → `未分类`） |
+| 请求头（指令行） | `#EXTVLCOPT:` / `#KODIPROP:` 指令 → `User-Agent` / `Referer` / `Origin`；键名大小写不敏感，值剥离外层引号，空值忽略；`http-referrer` 与 `http-referer` 等价 |
+| 请求头（KODIPROP 命名空间） | `#KODIPROP:inputstream.adaptive.stream_headers=User-Agent=Kodi` 形态下，**再往后拆一层 `=`**，真正的 Header 键在最后一层 |
+| 请求头（行内属性） | `#EXTINF` 行内的 `user-agent` / `http-user-agent` / `referer` / `http-referer` / `http-referrer` 等同样映射为标准 Header 键 |
+| 请求头优先级 | **指令行覆盖行内属性**（指令在行内属性之后解析）；同名指令后出现者覆盖先出现者 |
+| 状态清理 | 新 `#EXTINF` 到来时**丢弃**上一条待定条目的全部请求头，杜绝"串台"污染 |
 | URL | 该 `#EXTINF` 之后**向下第一个**非空、非注释行；中间夹杂 `#EXTVLCOPT` 等注释行不影响配对 |
 | URL 校验 | 复用 `ChannelJsonParser.isValidStreamUrl`：只接受 `http://` / `https://`（忽略大小写）；非法则丢弃该频道 |
 | 异常安全 | 任何输入（含空串、乱码、引号不闭合）都**不抛异常**，最多丢弃坏条目 |
@@ -293,6 +300,7 @@ https://example.com/live/cctv1.m3u8
 | 顺序 | 按数据源构造顺序、源内保持原有顺序 |
 | 去重 | 同名分类内 `id` + `streamUrl` 完全相同的频道只保留先出现的那个 |
 | 容错 | 单个数据源抛异常只跳过该源，其余源照常合并 |
+| 内存缓存 | **阶段五**：首次 `getCategories()` 聚合后缓存结果，后续直接返回；`refresh()` 强制重算并更新缓存，`invalidateCache()` 只作废缓存；`enableCache = false` 时每次都重算 |
 
 ### 5. 资源与 Manifest
 
@@ -301,6 +309,7 @@ https://example.com/live/cctv1.m3u8
 | `uses-feature` | `android.software.leanback` (required=true)、`android.hardware.touchscreen` (required=false) |
 | 权限 | 仅 `android.permission.INTERNET` |
 | Activity | `MainActivity` exported=true + `LEANBACK_LAUNCHER` + landscape；`PlayerActivity` exported=false + landscape + `Theme.AppCompat` |
+| Application | **阶段五**：`android:name=".LiveTvApplication"`（持有全局 `ChannelRepository`） |
 | 主题 | `Theme.LiveTv` parent=`Theme.Leanback`，含 `defaultBrandColor`/`defaultSearchColor` |
 | 颜色 | `primary`/`accent`/`brand_primary`(#1565C0)/`search_highlight` |
 | 字符串 | `app_name`/`browse_title`/`channel_selected` 在用；**`row_news`/`row_sports` 自阶段二起不再被引用**（行标题改由 JSON 的分类 `name` 提供）；阶段三新增 `player_loading`/`player_buffering`/`player_retrying`/`player_switching_source`/`player_error_*`/`player_error_hint`/`player_switched_to`/`player_no_channel` |
@@ -317,7 +326,7 @@ https://example.com/live/cctv1.m3u8
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二/三/四扩充** | `app/src/test` 现有 13 个测试类 / **104 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27） | 解析、过滤、重试、切台、状态流转已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二/三/四/五扩充** | `app/src/test` 现有 15 个测试类 / **124 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20） | 解析、过滤、重试、切台、状态流转、缓存、请求头已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |
@@ -328,7 +337,8 @@ https://example.com/live/cctv1.m3u8
 | 11 | **release 未混淆且无自定义 ProGuard 规则** | `app/build.gradle.kts` + 空 `app/proguard-rules.pro` | 体积与安全基线低 |
 | 12 | **`MainActivity` 使用 `FragmentActivity`** | 继承 `androidx.fragment.app.FragmentActivity` | 无法使用 AppCompat 主题能力 |
 | 13 | **数据同步仍靠重新打包 assets** | `LocalAssetChannelSource` 固定读 `assets/channels.json`、`LocalM3uChannelSource` 固定读 `assets/sample.m3u` | 换源需要改包；用户导入 / 网络源仍未做 |
-| 19 | **M3U 解析覆盖有限** | `M3uPlaylistParser` 只解析 `#EXTINF` 的 `tvg-id` / `tvg-logo` / `group-title`；不支持 `#EXTGRP`、`#EXTVLCOPT` 参数、直播地址参数（`?token=`）透传 | 复杂直播源需手工预处理 |
+| 20 | ~~数据源在 UI 层重复装配~~ **阶段五已修复** | 原 `MainBrowseFragment` 与 `PlayerActivity` 各自 `DefaultChannelRepository(LocalAssetChannelSource(...), LocalM3uChannelSource(...))`，会重复读 assets；现统一走 `LiveTvApplication.channelRepository`（全局单例 + 内存缓存） | 重复解析 assets 的冗余开销消除 |
+| 19 | ~~M3U 解析覆盖有限~~ **阶段五部分修复** | `M3uPlaylistParser` 现支持 `#EXTVLCOPT`/`#KODIPROP` 请求头与行内请求头属性、引号内逗号切分；仍不支持 `#EXTGRP` 分组、直播地址参数（`?token=`）透传 | 复杂直播源仍需手工预处理 |
 | 14 | **未使用的字符串资源** | `R.string.row_news` / `R.string.row_sports` 已无引用（Lint `UnusedResources`）；行标题改由 JSON 分类 `name` 提供 | 资源项成为残留，**保留未删**（避免扩大改动面），后续随 UI 文案整理一并清理 |
 | 15 | **浏览页仍无加载/空态反馈** | `MainBrowseFragment.loadRows()` 在 `onCreate` 同步取数，取不到内容时页面为空且无提示 | 用户无法区分"无频道"与"加载失败"（播放页已有状态提示） |
 | 16 | **播放页未接 `PlayerView` 控制器按钮** | 切台只通过遥控器方向键；控制器里的"上一台/下一台"按钮未接入 `ChannelNavigator` | 触屏/控制器操作无法切台 |
@@ -356,4 +366,5 @@ https://example.com/live/cctv1.m3u8
 | 9 | 播放器控制器按钮接切台 | `PlayerView` 控制器 + `ChannelNavigator` | 解决技术债 #16 |
 | 10 | ~~切台提示自动消失~~ **阶段 3.5 已完成** | `PlayerActivity` 的 `statusText` 定时隐藏（`lifecycleScope` + `delay(3000)`） | 已解决技术债 #18 |
 | 11 | 播放进度记忆 | `PlayerManager` 保存/恢复 `currentPosition` | 阶段一切台后重播的行为仍待评估 |
-| 12 | 用户导入 / 网络 M3U 源 | `data/source/` 新增 `NetworkM3uChannelSource` + 设置页 | 阶段四**刻意未做**（不引入网络层与导入 UI） |
+| 12 | 用户导入 / 网络 M3U 源 | `data/source/` 新增 `NetworkM3uChannelSource` + 设置页 | 阶段四**刻意未做**（不引入网络层与导入 UI）；阶段五补齐了请求头链路，导入 UI 仍未做 |
+| 13 | ~~数据源在 UI 层重复装配~~ **阶段五已完成** | `LiveTvApplication` 持有全局仓库（带缓存），UI 层只取用 | 解决技术债 #20 |

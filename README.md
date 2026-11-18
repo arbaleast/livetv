@@ -63,13 +63,14 @@ adb shell am start -n com.livetv.android/.MainActivity
 
 ```
 app/src/main/java/com/livetv/android/
+├── LiveTvApplication.kt            # 全局 ChannelRepository 单例（带内存缓存）
 ├── MainActivity.kt                 # 宿主 Activity，装载 MainBrowseFragment
 ├── data/                           # 数据层
 │   ├── model/ChannelConfigDto.kt   # JSON 映射 DTO
 │   ├── parser/ChannelJsonParser.kt # JSON 解析与安全校验（纯函数）
-│   ├── parser/M3uPlaylistParser.kt # M3U 解析与安全校验（纯函数）
+│   ├── parser/M3uPlaylistParser.kt # M3U 解析与安全校验（纯函数，含请求头提取）
 │   ├── source/                     # 数据源接口 + assets 实现（JSON / M3U）
-│   └── repository/DefaultChannelRepository.kt   # 多数据源合并（按分类名）
+│   └── repository/DefaultChannelRepository.kt   # 多数据源合并（按分类名）+ 内存缓存
 ├── domain/                         # 领域层
 │   ├── model/                      # Channel / ChannelCategory
 │   └── repository/ChannelRepository.kt
@@ -97,9 +98,11 @@ app/src/main/assets/
 ## 当前状态与限制
 
 - 频道列表来自 APK 内的两个本地源：`assets/channels.json`（JSON）与 `assets/sample.m3u`（M3U），
-  仓库层按**分类名合并**同名分类。改配置需要改文件后**重新打包**；
+  仓库层按**分类名合并**同名分类，并缓存结果（改配置需要改文件后**重新打包**）。
   暂不支持用户导入 M3U、网络拉取与频道源的自定义管理。
+- M3U 里的 `#EXTVLCOPT` / `#KODIPROP` 请求头（`User-Agent` / `Referer` / `Origin`）
+  会被解析成频道的自定义请求头，播放时随该频道一起下发。
 - 播放仅支持 HLS 直链，播放失败时在页面上显示错误文案，不重试、不换源
   （`backupUrls` 备用源字段已在模型中预留，但尚未接线）。
 - 无 EPG、无搜索、无收藏、无播放历史、无设置页。
-- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试（当前 104 个）。
+- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试（当前 124 个）。

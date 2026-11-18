@@ -17,15 +17,52 @@ import com.livetv.android.domain.repository.ChannelRepository
  * - **同名分类内不重复**：若两个源提供了完全相同的频道（`id` + `streamUrl` 都相同），
  *   只保留先出现的那一个，避免 UI 出现重复卡片；
  * - **单个源失败不影响其它源**：某个数据源抛异常时只跳过该源，其余源照常合并。
+ *
+ * 内存缓存（阶段五）：
+ * - [enableCache] 为 true 时，首次 [getCategories] 聚合结果并缓存，后续调用直接返回缓存；
+ * - [refresh] 强制重新聚合并返回新结果，[invalidateCache] 只作废缓存；
+ * - 关闭缓存时每次调用都重新聚合（单测用 `enableCache = false` 保持每次重算的语义）。
  */
 class DefaultChannelRepository(
     private val dataSources: List<ChannelDataSource>,
+    private val enableCache: Boolean = true,
 ) : ChannelRepository {
 
     /** 便捷构造：单个数据源。 */
-    constructor(dataSource: ChannelDataSource) : this(listOf(dataSource))
+    constructor(
+        dataSource: ChannelDataSource,
+        enableCache: Boolean = true,
+    ) : this(listOf(dataSource), enableCache)
+
+    /** 聚合结果的内存缓存；`null` 表示尚未缓存。 */
+    @Volatile
+    private var cachedCategories: List<ChannelCategory>? = null
 
     override fun getCategories(): List<ChannelCategory> {
+        if (!enableCache) {
+            return aggregate()
+        }
+        cachedCategories?.let { return it }
+        return aggregate().also { cachedCategories = it }
+    }
+
+    /**
+     * 强制重新聚合数据源并更新缓存。
+     *
+     * @return 重新聚合后的分类列表。
+     */
+    fun refresh(): List<ChannelCategory> {
+        val fresh = aggregate()
+        cachedCategories = fresh
+        return fresh
+    }
+
+    /** 作废缓存；下一次 [getCategories] 会重新聚合。 */
+    fun invalidateCache() {
+        cachedCategories = null
+    }
+
+    private fun aggregate(): List<ChannelCategory> {
         val merged = linkedMapOf<String, MergedCategory>()
 
         for (source in dataSources) {

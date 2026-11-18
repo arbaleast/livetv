@@ -24,9 +24,11 @@
 |---|---|
 | Leanback 浏览页：标题、品牌色、Header 栏、Back 逐层返回 | `MainBrowseFragment.setupUi()` |
 | 频道分类与卡片（新闻、体育两行），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
-| 频道数据来自 APK 内 `assets/channels.json`（6 个 CCTV HLS 源）**与** `assets/sample.m3u`（M3U 源），仓库层**按分类名合并**同名分类 | `LocalAssetChannelSource`、`LocalM3uChannelSource`、`DefaultChannelRepository` |
+| 频道数据来自 APK 内 `assets/channels.json`（JSON 源）**与** `assets/sample.m3u`（M3U 源），仓库层**按分类名合并**同名分类 | `LocalAssetChannelSource`、`LocalM3uChannelSource`、`DefaultChannelRepository` |
+| 全局仓库单例 + 内存缓存（UI 层零重复装配） | `LiveTvApplication`、`DefaultChannelRepository` 的 `enableCache`/`refresh()`/`invalidateCache()` |
 | JSON 解析与安全校验（http/https 白名单、必填校验、disabled 与空分类过滤） | `ChannelJsonParser`、`ChannelJsonParserTest` |
 | M3U 解析：`#EXTINF` 属性提取（`tvg-id` → `epgId`、`tvg-logo` → `logo`、`group-title` → 分类名），支持单/双/无引号、属性乱序、坏条目跳过 | `M3uPlaylistParser`、`M3uPlaylistParserTest` |
+| M3U **请求头**：`#EXTVLCOPT:` / `#KODIPROP:` 与 `#EXTINF` 行内属性 -> `User-Agent`/`Referer`/`Origin`，直通播放器 DataSource 层 | `M3uPlaylistParser`、`PlayerManager` |
 | 轻量分层：`domain/`（模型 + 仓库接口）与 `data/`（DTO / 解析器 / 数据源 / 仓库实现） | `app/src/main/java/com/livetv/android/domain/`、`data/` |
 | 播放器分层：`player/` 纯策略层（状态机 / 错误分类 / 重试策略 / 频道导航）+ `PlayerManager` 桥接层 | `app/src/main/java/com/livetv/android/player/` |
 | 播放状态机：Idle / Loading / Buffering / Playing / Paused / Error（含致命错误） | `PlaybackState`、`PlaybackReducer`、`PlaybackReducerTest` |
@@ -51,7 +53,7 @@
 - 账号体系、仪器测试（`androidTest`）与 UI 自动化
 - **浏览页**的加载中 / 空态 / 错误态反馈（播放页已有状态提示；浏览页取不到内容时页面直接为空）
 - 播放器控制器按钮里的"上一台/下一台"（切台只支持遥控器上下键）
-- M3U 的 `#EXTGRP` 分组、URL 参数（`?token=`）透传、`#EXTVLCOPT` 选项支持
+- M3U 的 `#EXTGRP` 分组、URL 参数（`?token=`）透传
 
 ---
 
@@ -172,6 +174,34 @@
 - 频道源的增删改查与持久化
 - M3U 的 `#EXTGRP` 分组、URL 参数透传、`#EXTVLCOPT` 选项
 - 频道图标在 Presenter 中的绑定（`Channel.logo` 已有值，但卡片仍只显示文字）
+
+---
+
+## 阶段五（本次交付）：全局 Repository 容器收敛与 M3U 请求头全链路打通
+
+目标：消除 UI 层的重复装配，并把 M3U 里的自定义请求头接到播放器的 DataSource 层。
+
+- [x] `DefaultChannelRepository` 支持**内存缓存**：`enableCache` 构造参数（默认 true）、
+      `refresh()` 强制重算、`invalidateCache()` 作废缓存
+- [x] 新增 `LiveTvApplication`（`android.app.Application`）：`by lazy` 持有全局
+      `ChannelRepository`（JSON 源 + M3U 源），并在 `AndroidManifest.xml` 注册
+- [x] `MainBrowseFragment` / `PlayerActivity` 收敛到 `(application as LiveTvApplication).channelRepository`，
+      UI 层不再各自拼装数据源（解决技术债 #20）
+- [x] `M3uPlaylistParser` 支持 **`#EXTVLCOPT:` / `#KODIPROP:`** 指令与 **`#EXTINF` 行内属性**
+      -> `Channel.headers`（`User-Agent` / `Referer` / `Origin`），
+      与阶段三 `PlayerManager` 的 `setDefaultRequestProperties` 形成闭环
+- [x] 修复 `#EXTINF` **引号内逗号**切分隐患（`group-title="新闻,综合",CCTV-1` 正确解析）
+- [x] 状态清理纪律：新 `#EXTINF` 到来时丢弃上一条待定条目的请求头，杜绝串台污染
+- [x] 纯 JVM 单测新增 20 个用例（M3U 解析 13 / 仓库缓存 7），用例总数 104 → **124**
+- [x] 先红后绿三次红检（盲目逗号切分 → 3 个失败；关闭指令头提取 → 7 个失败；关闭缓存 → 3 个失败）
+- [x] 回归：`lintDebug testDebugUnitTest assembleDebug` 全绿（**0 Error**，124 个用例全过）
+
+### 阶段五未做（留给后续阶段）
+
+- 用户导入 M3U / 网络拉取 M3U（仍不引入网络层与导入 UI）
+- M3U 的 `#EXTGRP` 分组与 URL 参数（`?token=`）透传
+- 频道图标在 Presenter 中的绑定
+- 真机验收（本机无 Android TV 设备，见 `docs/TESTING.md` §6）
 
 ---
 
