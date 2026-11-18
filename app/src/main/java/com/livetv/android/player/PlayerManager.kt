@@ -9,6 +9,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import com.livetv.android.domain.model.Channel
@@ -41,8 +42,11 @@ class PlayerManager(
         /** 切源后的等待时间（毫秒），给播放器一点缓冲再加载下一条源。 */
         const val SWITCH_SOURCE_DELAY_MS = 500L
 
-        /** Media3 中被视作 HTTP 状态码的错误码区间。 */
+        /** Media3 中被视作 HTTP 状态码的错误码区间（兜底防线）。 */
         val HTTP_STATUS_RANGE = 2000..2999
+
+        /** 遍历 cause 链的最大深度，防止异常成环时死循环。 */
+        const val MAX_CAUSE_DEPTH = 10
     }
 
     private val appContext: Context = context.applicationContext
@@ -258,23 +262,57 @@ class PlayerManager(
         retryState = RetryPolicy.onSuccess(retryState)
     }
 
-    /** 把 Media3 异常翻译成纯策略层的错误分类。 */
+    /**
+     * 把 Media3 异常翻译成纯策略层的错误分类。
+     *
+     * 状态码提取优先级：
+     * 1. **遍历 cause 链**找 `HttpDataSource.InvalidResponseCodeException`——这才是真正的 HTTP 响应码；
+     * 2. 兜底：`PlaybackException.errorCode` 落在 Media3 的"响应码类"区间时也当作 HTTP 状态码。
+     */
     private fun mapException(error: PlaybackException): PlaybackError {
-        val cause = error.cause
-        val kind = when {
-            cause is java.net.SocketTimeoutException -> PlaybackErrorMapper.CauseKind.TIMEOUT
-            cause is java.net.UnknownHostException -> PlaybackErrorMapper.CauseKind.NETWORK
-            cause is java.net.ConnectException -> PlaybackErrorMapper.CauseKind.NETWORK
-            cause is java.io.IOException -> PlaybackErrorMapper.CauseKind.NETWORK
-            else -> PlaybackErrorMapper.CauseKind.UNKNOWN
+        // 1) 优先从 cause 链里取真实响应码
+        val responseCode = findInvalidResponseCode(error)
+        if (responseCode != null) {
+            return PlaybackErrorMapper.map(responseCode, PlaybackErrorMapper.CauseKind.HTTP_STATUS)
         }
-        val responseCode = error.errorCode
-        val httpStatus = if (responseCode in HTTP_STATUS_RANGE) responseCode else null
-        return if (httpStatus != null) {
-            PlaybackErrorMapper.map(httpStatus, PlaybackErrorMapper.CauseKind.HTTP_STATUS)
+
+        // 2) 兜底：Media3 自身的错误码区间
+        val fallbackCode = error.errorCode.takeIf { it in HTTP_STATUS_RANGE }
+
+        val kind = classifyCause(error.cause)
+        return if (fallbackCode != null) {
+            PlaybackErrorMapper.map(fallbackCode, PlaybackErrorMapper.CauseKind.HTTP_STATUS)
         } else {
             PlaybackErrorMapper.map(null, kind)
         }
+    }
+
+    /**
+     * 沿 cause 链向下查找 `InvalidResponseCodeException`，返回其 HTTP 响应码。
+     *
+     * 链上可能有多个嵌套异常（`PlaybackException` → `HttpDataSourceException` → `InvalidResponseCodeException`），
+     * 因此必须逐层遍历而不是只看第一层 cause。
+     */
+    private fun findInvalidResponseCode(error: PlaybackException): Int? {
+        var cause: Throwable? = error.cause
+        var depth = 0
+        while (cause != null && depth < MAX_CAUSE_DEPTH) {
+            if (cause is HttpDataSource.InvalidResponseCodeException) {
+                return cause.responseCode
+            }
+            cause = cause.cause
+            depth++
+        }
+        return null
+    }
+
+    /** 按 cause 的具体类型归类失败原因。 */
+    private fun classifyCause(cause: Throwable?): PlaybackErrorMapper.CauseKind = when (cause) {
+        is java.net.SocketTimeoutException -> PlaybackErrorMapper.CauseKind.TIMEOUT
+        is java.net.UnknownHostException -> PlaybackErrorMapper.CauseKind.NETWORK
+        is java.net.ConnectException -> PlaybackErrorMapper.CauseKind.NETWORK
+        is java.io.IOException -> PlaybackErrorMapper.CauseKind.NETWORK
+        else -> PlaybackErrorMapper.CauseKind.UNKNOWN
     }
 
     /** 派发事件并更新状态。 */

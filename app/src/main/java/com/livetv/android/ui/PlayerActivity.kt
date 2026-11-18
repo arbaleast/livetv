@@ -5,6 +5,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
 import com.livetv.android.R
 import com.livetv.android.data.repository.DefaultChannelRepository
@@ -16,6 +17,9 @@ import com.livetv.android.player.ChannelNavigator
 import com.livetv.android.player.PlaybackError
 import com.livetv.android.player.PlaybackState
 import com.livetv.android.player.PlayerManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * 播放页。
@@ -35,6 +39,9 @@ class PlayerActivity : AppCompatActivity() {
 
         /** 阶段三新增：频道 id，用于在仓库中定位到完整频道（含 backupUrls / headers）。 */
         const val EXTRA_CHANNEL_ID = "channel_id"
+
+        /** 切台提示自动隐藏的延迟（毫秒）。 */
+        const val SWITCH_HINT_AUTO_HIDE_DELAY_MS = 3_000L
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -44,6 +51,14 @@ class PlayerActivity : AppCompatActivity() {
 
     /** 当前播放的频道。 */
     private var currentChannel: Channel? = null
+
+    /**
+     * 切台提示的自动隐藏任务。
+     *
+     * 每次显示新提示前会先 `cancel()` 掉上一个未完成的 Job，避免倒计时相互覆盖；
+     * `lifecycleScope` 在 Activity `onDestroy` 时自动取消所有子任务，不会泄漏 Activity 引用。
+     */
+    private var switchHintJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -76,6 +91,13 @@ class PlayerActivity : AppCompatActivity() {
     override fun onStop() {
         super.onStop()
         playerManager.stop()
+    }
+
+    override fun onDestroy() {
+        // 主动取消切台提示的倒计时任务（lifecycleScope 也会兜底取消）
+        switchHintJob?.cancel()
+        switchHintJob = null
+        super.onDestroy()
     }
 
     // ---------------- 频道解析 ----------------
@@ -186,12 +208,24 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     /**
-     * 切台成功提示（短暂展示频道名）。
+     * 切台成功提示：短暂展示频道名，3 秒后自动隐藏。
+     *
+     * 防泄漏/防竞态（方案 A）：
+     * - 先 `cancel()` 上一个未完成的 Job，保证新的 3 秒倒计时从此刻开始；
+     * - Job 运行在 `lifecycleScope` 中，Activity 销毁时自动取消，不会持有失效的 View。
      */
     private fun showChannelSwitchedHint(channel: Channel) {
         binding.statusText.visibility = View.VISIBLE
         binding.statusText.text = getString(R.string.player_switched_to, channel.name)
         binding.errorText.visibility = View.GONE
+
+        switchHintJob?.cancel()
+        switchHintJob = lifecycleScope.launch {
+            delay(SWITCH_HINT_AUTO_HIDE_DELAY_MS)
+            if (!isFinishing && !isDestroyed) {
+                binding.statusText.visibility = View.GONE
+            }
+        }
     }
 
     /**

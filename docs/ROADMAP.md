@@ -126,6 +126,22 @@
 
 ---
 
+## 阶段 3.5（本次交付）：体验优化收尾与 CI 验证
+
+目标：清理阶段三遗留的两个技术债，并把前三阶段代码推到远端跑通 CI。
+
+- [x] **技术债 #18**：切台提示 3 秒自动隐藏（`lifecycleScope.launch { delay(3000) }`，
+      显示新提示前 `cancel()` 旧 Job，`onDestroy()` 兜底取消）
+- [x] **技术债 #17**：HTTP 状态码改为**遍历 cause 链**取
+      `HttpDataSource.InvalidResponseCodeException.responseCode`；
+      Media3 的 `2000..2999` 错误码区间降级为兜底防线
+- [x] `PlaybackErrorMapperTest` 追加 2 个边界用例（code 保留、code=0），
+      用例总数 77 → **79**
+- [x] 回归：`lintDebug testDebugUnitTest assembleDebug` 全绿（**0 Error**，79 个用例全过）
+- [x] 推送到远端 `feat/livetv-phase3` 并触发 GitHub Actions
+
+---
+
 ## P1：核心架构与数据系统
 
 目标：让"频道从哪来"可配置、可解析、可测试。

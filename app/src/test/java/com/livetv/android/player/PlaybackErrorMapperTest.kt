@@ -60,4 +60,18 @@ class PlaybackErrorMapperTest {
             PlaybackErrorMapper.map(500, PlaybackErrorMapper.CauseKind.NETWORK),
         )
     }
+
+    @Test
+    fun `http status error keeps the code for display`() {
+        val error = PlaybackErrorMapper.map(403, PlaybackErrorMapper.CauseKind.HTTP_STATUS)
+
+        assertEquals(403, (error as PlaybackError.HttpStatus).code)
+    }
+
+    @Test
+    fun `response code zero is still treated as a valid http status`() {
+        val error = PlaybackErrorMapper.map(0, PlaybackErrorMapper.CauseKind.HTTP_STATUS)
+
+        assertEquals(PlaybackError.HttpStatus(0), error)
+    }
 }

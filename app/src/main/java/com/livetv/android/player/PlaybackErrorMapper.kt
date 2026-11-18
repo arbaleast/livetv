@@ -5,6 +5,9 @@ package com.livetv.android.player
  *
  * 只接收**原始字段**（HTTP 状态码 + 原因种类），不接触 Media3 的异常类型，
  * 因此可以在纯 JVM 单测中完整覆盖。
+ *
+ * 状态码提取由桥接层 `PlayerManager` 负责（它才知道 Media3 的异常类型），
+ * 本类只做"原始字段 → 分类"的映射。
  */
 object PlaybackErrorMapper {
 

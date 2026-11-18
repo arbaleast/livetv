@@ -7,7 +7,7 @@
 
 | 层级 | 运行环境 | 覆盖对象 | 现状 |
 |---|---|---|---|
-| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航 | **已建立**：10 个测试类 / **77 个用例**（`app/src/test/`） |
+| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航 | **已建立**：10 个测试类 / **79 个用例**（`app/src/test/`） |
 | L2 仪器测试 | 模拟器/真机，`connectedDebugAndroidTest` | View 渲染、Leanback 焦点、Activity 生命周期 | **未建立**：无 `androidTest` 源集、无 `androidx.test` 依赖 |
 | L3 真机验收 | 真实 Android TV 设备 | 遥控器手感、直播流实际解码、长期稳定性 | **手动**：无自动化 |
 
@@ -18,7 +18,7 @@
 | `player/RetryPolicyTest` | 15 | 候选源生成与协议过滤、主源重试（1500/3000ms）、Failover 到备用源、全部耗尽、手动重置、切台重置 |
 | `player/PlaybackReducerTest` | 15 | 合法状态路径、非法转换保持原状态、Error 态忽略后续回调、致命错误、Released |
 | `player/ChannelNavigatorTest` | 11 | id/streamUrl 定位（含同 URL 取第一个）、上下切台、首尾循环、单频道、空列表、分类扁平化 |
-| `player/PlaybackErrorMapperTest` | 7 | HTTP 状态码、超时、网络、源解析、未知原因 |
+| `player/PlaybackErrorMapperTest` | 9 | HTTP 状态码（含 code=0 边界）、超时、网络、源解析、未知原因 |
 | `player/PlayerLayerPurityTest` | 3 | **架构约束**：纯策略层不得引用 `android.*` / `androidx.media3.*`（源码扫描） |
 | `data/parser/ChannelJsonParserTest` | 11 | 标准解析、缺省字段容错、禁用/空分类过滤、URL 协议拦截、异常数据恢复 |
 | `domain/model/ChannelTest` | 5 | 字段默认值、值语义相等、`copy` 语义 |
@@ -129,9 +129,9 @@ testImplementation("org.json:json:20231013")
 
 ## 7. 现状与下一步
 
-- 阶段一建立 L1 链路；阶段二补齐**数据层**的 L1 覆盖（解析器 / 仓库 / 模型 / 真实 assets 文件）；
-  阶段三补齐**播放器层**的 L1 覆盖（重试策略 / 状态归约 / 错误映射 / 频道导航 + 纯度约束），
-  合计 **77 个用例**。
+- 阶段一建立 L1 链路；阶段二补齐**数据层**的 L1 覆盖；阶段三补齐**播放器层**的 L1 覆盖
+  （重试策略 / 状态归约 / 错误映射 / 频道导航 + 纯度约束）；阶段 3.5 追加 2 个错误映射边界用例，
+  合计 **79 个用例**。
 - 仍未建立 L2（`androidTest` 源集与 `androidx.test` 依赖均不存在）。
 - 后续随浏览页状态流转（P1-4）、M3U 解析器（P1-2）、多码率（P1-8）落地，
   继续按"L1 优先"补齐对应纯 JVM 用例（详见 `docs/ROADMAP.md`）。

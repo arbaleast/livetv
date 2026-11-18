@@ -280,8 +280,8 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
 | 14 | **未使用的字符串资源** | `R.string.row_news` / `R.string.row_sports` 已无引用（Lint `UnusedResources`）；行标题改由 JSON 分类 `name` 提供 | 资源项成为残留，**保留未删**（避免扩大改动面），后续随 UI 文案整理一并清理 |
 | 15 | **浏览页仍无加载/空态反馈** | `MainBrowseFragment.loadRows()` 在 `onCreate` 同步取数，取不到内容时页面为空且无提示 | 用户无法区分"无频道"与"加载失败"（播放页已有状态提示） |
 | 16 | **播放页未接 `PlayerView` 控制器按钮** | 切台只通过遥控器方向键；控制器里的"上一台/下一台"按钮未接入 `ChannelNavigator` | 触屏/控制器操作无法切台 |
-| 17 | **HTTP 状态码识别依赖 Media3 错误码区间** | `PlayerManager` 用 `HTTP_STATUS_RANGE = 2000..2999` 判定"响应码类"错误，再从 cause 细分 | Media3 升级时需复核该区间语义 |
-| 18 | **切台提示不自动消失** | `player_switched_to` 提示由 `statusText` 显示，下一次状态变更才被覆盖 | 短时提示应自动消失（待做） |
+| 17 | ~~HTTP 状态码识别依赖 Media3 错误码区间~~ **阶段 3.5 已修复** | `PlayerManager.findInvalidResponseCode()` 现在**遍历 cause 链**取 `HttpDataSource.InvalidResponseCodeException.responseCode`；`HTTP_STATUS_RANGE = 2000..2999` 降级为兜底防线 | 状态码来自真实 HTTP 响应，不再依赖 Media3 内部错误码语义 |
+| 18 | ~~切台提示不自动消失~~ **阶段 3.5 已修复** | `PlayerActivity.showChannelSwitchedHint()` 用 `lifecycleScope.launch { delay(3000) }` 自动隐藏 `statusText`；显示新提示前 `cancel()` 旧 Job，`onDestroy()` 再兜底取消 | 短时提示不再长期遮挡画面 |
 
 ---
 
@@ -301,5 +301,5 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
 | 7 | 持久化 | `data/` 引入轻量存储 | 方案待定，**不预设 Room** |
 | 8 | EPG | `Channel.epgId` | 字段已预留，格式与时区处理见 ROADMAP P2 |
 | 9 | 播放器控制器按钮接切台 | `PlayerView` 控制器 + `ChannelNavigator` | 解决技术债 #16 |
-| 10 | 切台提示自动消失 | `PlayerActivity` 的 `statusText` 定时隐藏 | 解决技术债 #18 |
+| 10 | ~~切台提示自动消失~~ **阶段 3.5 已完成** | `PlayerActivity` 的 `statusText` 定时隐藏（`lifecycleScope` + `delay(3000)`） | 已解决技术债 #18 |
 | 11 | 播放进度记忆 | `PlayerManager` 保存/恢复 `currentPosition` | 阶段一切台后重播的行为仍待评估 |
