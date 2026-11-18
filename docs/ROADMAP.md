@@ -139,6 +139,9 @@
       用例总数 77 → **79**
 - [x] 回归：`lintDebug testDebugUnitTest assembleDebug` 全绿（**0 Error**，79 个用例全过）
 - [x] 推送到远端 `feat/livetv-phase3` 并触发 GitHub Actions
+- [x] 修复 CI 的 "Set up Android SDK" 步骤失败（`setup-android` 内置 `sdkmanager tools` 在 runner 上
+      报 `Failed to find package 'tools'`；改为显式传 `cmdline-tools-version` + `packages`，
+      并把 license 接受放到 install 之前），CI 最终 **success**
 
 ---
 
