@@ -201,7 +201,32 @@
 - 用户导入 M3U / 网络拉取 M3U（仍不引入网络层与导入 UI）
 - M3U 的 `#EXTGRP` 分组与 URL 参数（`?token=`）透传
 - 频道图标在 Presenter 中的绑定
-- 真机验收（本机无 Android TV 设备，见 `docs/TESTING.md` §6）
+
+---
+
+## 阶段 5.5：局域网 ADB 真机 UI 与遥控器全链路验收
+
+目标：在真实硬件上跑完 `docs/TESTING.md` §6 的验收清单，修掉真机才暴露的缺陷。
+
+设备：OnePlus PKG110（**手机**，Android 16 / API 36），无线 ADB 连接。
+
+- [x] 无线 ADB 接入（`adb pair` + 端口探测 + `adb connect`），`HOME`/`ANDROID_USER_HOME` 指向可写目录
+- [x] 首页多源分类验证：**新闻（4 = JSON 3 + M3U 1，已合并）/ 体育（3）/ 卫视（2）**
+- [x] 焦点导航、进入播放页、Back 返回焦点恢复
+- [x] 修复 **D1/D2：上下键切台与 Error 态 OK 重试在真机上完全失效**
+      （Media3 `PlayerView.dispatchKeyEvent` 抢先吞键）→ 按键拦截前移到 `dispatchKeyEvent`
+- [x] 修复 **D3：「已切换到」提示一帧都看不到**（被同步派发的 Loading 文案覆盖）→ 调换调用顺序
+- [x] 修复 **D4：连续换台只切一台**（Media3 异步弹起控制器吞键）→ `controllerAutoShow = false` + 自定义"用户呼出"标记
+- [x] 修复 **D5：网络故障显示成「HTTP 2001」**（`2000..2999` 兜底区间把 IO 错误码当 HTTP 状态码）→ 删除该兜底
+- [x] 验证：切台循环、3 秒提示自动隐藏、控制器焦点隔离、Back 两段式、OK 手动重连、错误分类提示
+- [x] 稳定性：连续进出播放页，`dumpsys` 中 PlayerActivity 实例数归零，无内存堆积
+- [x] 回归：`lintDebug testDebugUnitTest assembleDebug` 全绿（**0 Error**，124 个用例全过）
+
+### 阶段 5.5 未能验证的项
+
+- **HLS 实际出画**：设备无外网（DNS 解析超时），所有源均进入 Error 态
+- **主备源切换**：默认频道 `backupUrls` 为空，无备用源可切（重试计数 1/2、2/2 已验证）
+- **切台不重建 ExoPlayer**：代码保证复用实例，但无日志直接佐证
 
 ---
 

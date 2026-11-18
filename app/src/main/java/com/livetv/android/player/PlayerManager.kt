@@ -42,8 +42,15 @@ class PlayerManager(
         /** 切源后的等待时间（毫秒），给播放器一点缓冲再加载下一条源。 */
         const val SWITCH_SOURCE_DELAY_MS = 500L
 
-        /** Media3 中被视作 HTTP 状态码的错误码区间（兜底防线）。 */
-        val HTTP_STATUS_RANGE = 2000..2999
+        /**
+         * Media3 中唯一代表"服务端返回了错误状态码"的错误码
+         * （`PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS`）。
+         *
+         * 注意：不能把 `2000..2999` 整段当成 HTTP 状态码——该区间是 Media3 的 IO 错误段，
+         * 其中 2001 是"网络连接失败"、2002 是"连接超时"，都不是 HTTP 响应码。
+         * 阶段 5.5 真机实测发现过"网络故障被显示成 HTTP 2001"的错误提示，故收窄。
+         */
+        const val ERROR_CODE_IO_BAD_HTTP_STATUS = 2004
 
         /** 遍历 cause 链的最大深度，防止异常成环时死循环。 */
         const val MAX_CAUSE_DEPTH = 10
@@ -265,26 +272,19 @@ class PlayerManager(
     /**
      * 把 Media3 异常翻译成纯策略层的错误分类。
      *
-     * 状态码提取优先级：
-     * 1. **遍历 cause 链**找 `HttpDataSource.InvalidResponseCodeException`——这才是真正的 HTTP 响应码；
-     * 2. 兜底：`PlaybackException.errorCode` 落在 Media3 的"响应码类"区间时也当作 HTTP 状态码。
+     * 状态码只从 **cause 链**里取 `HttpDataSource.InvalidResponseCodeException.responseCode`——
+     * 那才是真正的 HTTP 响应码。
+     *
+     * 不使用 `PlaybackException.errorCode` 反推状态码：该错误码属于 Media3 自己的 IO 语义
+     * （2001 网络连接失败、2002 连接超时、2004 坏 HTTP 状态…），把它当 HTTP 状态码展示会
+     * 产生"HTTP 2001"这类误导性文案。
      */
     private fun mapException(error: PlaybackException): PlaybackError {
-        // 1) 优先从 cause 链里取真实响应码
         val responseCode = findInvalidResponseCode(error)
         if (responseCode != null) {
             return PlaybackErrorMapper.map(responseCode, PlaybackErrorMapper.CauseKind.HTTP_STATUS)
         }
-
-        // 2) 兜底：Media3 自身的错误码区间
-        val fallbackCode = error.errorCode.takeIf { it in HTTP_STATUS_RANGE }
-
-        val kind = classifyCause(error.cause)
-        return if (fallbackCode != null) {
-            PlaybackErrorMapper.map(fallbackCode, PlaybackErrorMapper.CauseKind.HTTP_STATUS)
-        } else {
-            PlaybackErrorMapper.map(null, kind)
-        }
+        return PlaybackErrorMapper.map(null, classifyCause(error))
     }
 
     /**
@@ -306,13 +306,34 @@ class PlayerManager(
         return null
     }
 
-    /** 按 cause 的具体类型归类失败原因。 */
-    private fun classifyCause(cause: Throwable?): PlaybackErrorMapper.CauseKind = when (cause) {
-        is java.net.SocketTimeoutException -> PlaybackErrorMapper.CauseKind.TIMEOUT
-        is java.net.UnknownHostException -> PlaybackErrorMapper.CauseKind.NETWORK
-        is java.net.ConnectException -> PlaybackErrorMapper.CauseKind.NETWORK
-        is java.io.IOException -> PlaybackErrorMapper.CauseKind.NETWORK
-        else -> PlaybackErrorMapper.CauseKind.UNKNOWN
+    /**
+     * 沿 cause 链判断失败原因。
+     *
+     * 逐层遍历而不是只看第一层：`HttpDataSourceException` 会包着真正的
+     * `UnknownHostException` / `SocketTimeoutException`，只看第一层会一律归为网络错误。
+     */
+    private fun classifyCause(error: PlaybackException): PlaybackErrorMapper.CauseKind {
+        var cause: Throwable? = error.cause
+        var depth = 0
+        var sawIoException = false
+        while (cause != null && depth < MAX_CAUSE_DEPTH) {
+            when (cause) {
+                is java.net.SocketTimeoutException -> return PlaybackErrorMapper.CauseKind.TIMEOUT
+                is java.net.UnknownHostException -> return PlaybackErrorMapper.CauseKind.NETWORK
+                is java.net.ConnectException -> return PlaybackErrorMapper.CauseKind.NETWORK
+                is java.io.IOException -> sawIoException = true
+            }
+            cause = cause.cause
+            depth++
+        }
+        // 兜底：链上出现过 IOException 但没匹配到更具体类型时仍算网络问题
+        if (sawIoException) return PlaybackErrorMapper.CauseKind.NETWORK
+        // Media3 明确判定为"坏 HTTP 状态"但链上却没有响应码 -> 源解析/未知
+        return if (error.errorCode == ERROR_CODE_IO_BAD_HTTP_STATUS) {
+            PlaybackErrorMapper.CauseKind.SOURCE_PARSING
+        } else {
+            PlaybackErrorMapper.CauseKind.UNKNOWN
+        }
     }
 
     /** 派发事件并更新状态。 */

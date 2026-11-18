@@ -59,10 +59,26 @@ class PlayerActivity : AppCompatActivity() {
      */
     private var switchHintJob: Job? = null
 
+    /**
+     * 控制器是否由**用户**呼出（按 OK 键）。
+     *
+     * Media3 会在切换媒体源后自行弹出控制器（即使 `controllerAutoShow = false`，且弹出是异步的，
+     * 我们随后的 `hideController()` 挡不住）。若以"控制器可见"作为切台的闸门，
+     * 真机上连续换台从第二下起就会失效（阶段 5.5 真机实测）。
+     *
+     * 因此切台只受这个标记控制：用户主动呼出控制器时，方向键归控制器；
+     * 其余情况（包括 Media3 自行弹出）方向键一律用于切台。
+     */
+    private var isControllerOpenedByUser = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onCreate(savedInstanceState)
         binding = ActivityPlayerBinding.inflate(layoutInflater)
+        // 关闭控制器的"自动显示"：Media3 在播放状态变化（切台/重连）时会自动弹出控制器，
+        // 而控制器一显示就会吞掉方向键，导致电视上连续换台只切一台（阶段 5.5 真机实测发现）。
+        // 控制器改为只在用户按确认键时显式呼出。
+        binding.playerView.controllerAutoShow = false
         setContentView(binding.root)
 
         playerManager = PlayerManager(
@@ -249,36 +265,52 @@ class PlayerActivity : AppCompatActivity() {
      * - 确认键：错误态手动重置，否则呼出/隐藏控制器；
      * - 返回键：控制器显示时先隐藏控制器，否则正常退出。
      */
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                if (binding.playerView.isControllerFullyVisible) return super.onKeyDown(keyCode, event)
-                switchChannel(direction = -1)
-                return true
-            }
-
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (binding.playerView.isControllerFullyVisible) return super.onKeyDown(keyCode, event)
-                switchChannel(direction = 1)
-                return true
-            }
-
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                val state = playerManager.playbackState
-                if (state is PlaybackState.Error) {
-                    playerManager.manualReset()
+    /**
+     * 遥控器按键拦截（**必须在这里，而不是 `onKeyDown`**）。
+     *
+     * Media3 的 `PlayerView.dispatchKeyEvent` 会先于 Activity 的 `onKeyDown` 拿到事件，
+     * 并在"收到方向键且控制器未完全可见"时调用 `maybeShowController()` 后**吞掉事件**。
+     * 若只在 `onKeyDown` 里处理，真机上上下键切台与 Error 态 OK 重试都会完全失效
+     * （阶段 5.5 真机实测发现）。
+     *
+     * 因此在这里、于视图树分发之前拦截：控制器隐藏时的方向键与确认键由我们接管；
+     * 控制器可见时一律交还 `PlayerView`，让焦点在控制器内部正常移动。
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && !isControllerOpenedByUser) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    switchChannel(direction = -1)
                     return true
                 }
-                if (binding.playerView.isControllerFullyVisible) {
-                    binding.playerView.hideController()
-                } else {
-                    binding.playerView.showController()
-                }
-                return true
-            }
 
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    switchChannel(direction = 1)
+                    return true
+                }
+
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    if (playerManager.playbackState is PlaybackState.Error) {
+                        // 致命错误后手动重置：回主源、计数归零、立即重连
+                        playerManager.manualReset()
+                    } else {
+                        isControllerOpenedByUser = true
+                        binding.playerView.showController()
+                    }
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        when (keyCode) {
+            // 方向键与确认键已在 dispatchKeyEvent 中抢先处理（见上面的说明），这里只剩 BACK。
             KeyEvent.KEYCODE_BACK -> {
-                if (binding.playerView.isControllerFullyVisible) {
+                // 控制器开着（无论是用户呼出还是 Media3 自行弹出）时，BACK 只负责收起它。
+                if (isControllerOpenedByUser || binding.playerView.isControllerFullyVisible) {
+                    isControllerOpenedByUser = false
                     binding.playerView.hideController()
                     return true
                 }
@@ -298,10 +330,14 @@ class PlayerActivity : AppCompatActivity() {
             binding.statusText.text = getString(R.string.player_no_channel)
             return
         }
-        binding.playerView.hideController()
         binding.channelName.text = channel.name
-        showChannelSwitchedHint(channel)
         playerManager.switchChannel(channel)
+        // 必须放在 switchChannel 之后：它会同步派发 Loading 并覆盖 statusText，
+        // 先显示会立刻被"加载中…"盖掉，导致切台提示一帧都看不到（阶段 5.5 真机实测发现）。
+        showChannelSwitchedHint(channel)
+        // 收起控制器放最后：Media3 在切换媒体源后会重新显示控制器，而控制器一显示
+        // 就会吞掉方向键，导致连续换台从第二下起失效（阶段 5.5 真机实测发现）。
+        binding.playerView.hideController()
     }
 
     @Suppress("DEPRECATION")

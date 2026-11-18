@@ -3,7 +3,7 @@
 > 作用域：整个仓库。本文件是**路由**，不是规则仓库——只放每次都要用的高频规则。
 > 细节按需读 `docs/` 分片；改代码前必须先读源码。
 
-## 0. 项目事实基线（截至阶段五）
+## 0. 项目事实基线（截至阶段 5.5）
 
 Android TV 直播客户端原型。Kotlin + Leanback 1.0.0 + Media3 1.4.1（ExoPlayer/HLS），
 单 `app` 模块，无 DI 框架、无多模块拆分。**当前只有 2 个 Activity、1 个 Fragment、1 个 Presenter**。
@@ -12,7 +12,11 @@ Android TV 直播客户端原型。Kotlin + Leanback 1.0.0 + Media3 1.4.1（ExoP
 **全局仓库由 `LiveTvApplication` 持有（带内存缓存），UI 层不得自行拼装数据源。**
 播放器逻辑在 `player/` 包：纯策略层（状态机 / 重试 / 切台导航，**不依赖 android.\* / media3.\***）
 + `PlayerManager` 桥接层。
+**播放页的按键拦截在 `PlayerActivity.dispatchKeyEvent`（不是 `onKeyDown`）**——Media3 会抢先吞掉方向键。
 任何"已支持/已实现"的描述都必须以源码为准，不得把路线图内容写成现状。
+
+> **真机回归要求**：改动 `PlayerActivity` 的按键处理、控制器可见性或状态文案顺序后，
+> 纯 JVM 单测在结构上无法发现问题（阶段 5.5 的 D1–D4 全是这类），必须做一次真机实测。
 
 ## 0.1 分层红线（新增文件前必读）
 

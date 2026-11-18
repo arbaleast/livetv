@@ -65,18 +65,30 @@
 
 ## 4. 播放页交互规范
 
-### 4.1 阶段三实现的按键映射
+### 4.1 播放页按键映射（阶段 5.5 真机校准）
 
-播放页 `PlayerActivity` 在 `onKeyDown` 中显式处理以下按键（实现见 `PlayerActivity.onKeyDown`）：
+> **实现位置是 `PlayerActivity.dispatchKeyEvent`，不是 `onKeyDown`。**
+> Media3 的 `PlayerView.dispatchKeyEvent` 会先于 `Activity.onKeyDown` 拿到事件，
+> 并在"收到方向键且控制器未完全可见"时调用 `maybeShowController()` 后**吞掉事件**。
+> 只在 `onKeyDown` 里处理会导致真机上切台与 OK 重试完全失效（阶段 5.5 实测发现 D1/D2）。
+> 因此按键拦截前移到 `dispatchKeyEvent`，在视图树分发之前完成。
 
-| 按键 | KeyEvent | 控制器**隐藏**时 | 控制器**显示**时 | 返回值 |
-|---|---|---|---|---|
-| 上 | `KEYCODE_DPAD_UP` | **切上一台**（循环：首 → 末），画面短暂显示频道名 | 交还 `PlayerView` 处理焦点，**不切台** | 隐藏时 `true`；显示时交回 `super` |
-| 下 | `KEYCODE_DPAD_DOWN` | **切下一台**（循环：末 → 首），画面短暂显示频道名 | 交还 `PlayerView` 处理焦点，**不切台** | 同上 |
-| 确认 | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | **Error 态**：手动重置（回主源、计数归零、立即重连当前频道）；正常态：呼出控制器 | 隐藏控制器 | 恒 `true` |
-| 返回 | `KEYCODE_BACK` | 正常关闭 Activity（退出播放页） | **仅隐藏控制器**，不退出 Activity | 隐藏时 `true` |
+| 按键 | KeyEvent | 控制器**未由用户呼出**时 | 控制器**已由用户呼出**时 |
+|---|---|---|---|
+| 上 | `KEYCODE_DPAD_UP` | **切上一台**（循环：首 → 末），显示"已切换到：xxx" | 交还 `PlayerView`，焦点在控制器内移动 |
+| 下 | `KEYCODE_DPAD_DOWN` | **切下一台**（循环：末 → 首），显示"已切换到：xxx" | 同上 |
+| 确认 | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | **Error 态**：手动重置（回主源、计数归零、立即重连）；正常态：呼出控制器并记为"用户呼出" | 交还控制器（按钮操作） |
+| 返回 | `KEYCODE_BACK` | 关闭 Activity（退出播放页） | **仅隐藏控制器**并清除"用户呼出"标记 |
 
 其它按键（左右、MENU 等）一律交回系统默认处理。
+
+**控制器可见性的判定规则（重要）**：
+
+- 不查 `PlayerView.isControllerFullyVisible`：它在隐藏动画期间仍返回 `true`。
+- 也不以"控制器可见"作为切台闸门：Media3 在切换媒体源后会**异步**弹起控制器，
+  而控制器一显示就会吞掉方向键，导致连续换台从第二下起失效（实测 D4）。
+- 实际规则：`controllerAutoShow = false`（控制器不再自动弹出），
+  切台只看"用户是否主动呼出过控制器"这个标记；Media3 自行弹出不影响切台。
 
 ### 4.2 切台的连带行为
 
