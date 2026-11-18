@@ -10,6 +10,7 @@ import androidx.media3.common.util.UnstableApi
 import com.livetv.android.R
 import com.livetv.android.data.repository.DefaultChannelRepository
 import com.livetv.android.data.source.LocalAssetChannelSource
+import com.livetv.android.data.source.LocalM3uChannelSource
 import com.livetv.android.databinding.ActivityPlayerBinding
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.repository.ChannelRepository
@@ -109,8 +110,12 @@ class PlayerActivity : AppCompatActivity() {
      * 定位不到时退回用 Extra 里的名称/地址构造临时单频道，保证旧调用 100% 兼容。
      */
     private fun resolveInitialChannel() {
-        val repository: ChannelRepository =
-            DefaultChannelRepository(LocalAssetChannelSource(applicationContext.assets))
+        val repository: ChannelRepository = DefaultChannelRepository(
+            listOf(
+                LocalAssetChannelSource(applicationContext.assets),
+                LocalM3uChannelSource(applicationContext.assets),
+            ),
+        )
         val categories = repository.getCategories()
         val flat = ChannelNavigator.flatten(categories)
 

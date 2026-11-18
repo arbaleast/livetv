@@ -24,8 +24,9 @@
 |---|---|
 | Leanback 浏览页：标题、品牌色、Header 栏、Back 逐层返回 | `MainBrowseFragment.setupUi()` |
 | 频道分类与卡片（新闻、体育两行），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
-| 频道数据来自 APK 内 `assets/channels.json`（6 个 CCTV HLS 源），**UI 层不再硬编码** | `LocalAssetChannelSource`、`assets/channels.json` |
+| 频道数据来自 APK 内 `assets/channels.json`（6 个 CCTV HLS 源）**与** `assets/sample.m3u`（M3U 源），仓库层**按分类名合并**同名分类 | `LocalAssetChannelSource`、`LocalM3uChannelSource`、`DefaultChannelRepository` |
 | JSON 解析与安全校验（http/https 白名单、必填校验、disabled 与空分类过滤） | `ChannelJsonParser`、`ChannelJsonParserTest` |
+| M3U 解析：`#EXTINF` 属性提取（`tvg-id` → `epgId`、`tvg-logo` → `logo`、`group-title` → 分类名），支持单/双/无引号、属性乱序、坏条目跳过 | `M3uPlaylistParser`、`M3uPlaylistParserTest` |
 | 轻量分层：`domain/`（模型 + 仓库接口）与 `data/`（DTO / 解析器 / 数据源 / 仓库实现） | `app/src/main/java/com/livetv/android/domain/`、`data/` |
 | 播放器分层：`player/` 纯策略层（状态机 / 错误分类 / 重试策略 / 频道导航）+ `PlayerManager` 桥接层 | `app/src/main/java/com/livetv/android/player/` |
 | 播放状态机：Idle / Loading / Buffering / Playing / Paused / Error（含致命错误） | `PlaybackState`、`PlaybackReducer`、`PlaybackReducerTest` |
@@ -42,13 +43,15 @@
 
 ### 明确**没有**的能力（避免误判）
 
-- 频道源的导入 / 管理 / 用户自定义（配置只能改 `assets/channels.json` 后重新打包）
-- M3U 导入、网络拉取频道列表、持久化存储
+- 频道源的**用户导入 / 管理 / 自定义**（配置只能改 `assets/` 后重新打包）
+- **网络下载** M3U / 频道列表（无网络层，只有本地 assets 源）
+- 频道源的增删改查与持久化存储
 - EPG 节目单、搜索、收藏、播放历史、设置页、Menu 菜单
 - 多码率 / 清晰度切换、倍速、播放进度记忆
-- 账号体系、网络层、仪器测试（`androidTest`）与 UI 自动化
+- 账号体系、仪器测试（`androidTest`）与 UI 自动化
 - **浏览页**的加载中 / 空态 / 错误态反馈（播放页已有状态提示；浏览页取不到内容时页面直接为空）
 - 播放器控制器按钮里的"上一台/下一台"（切台只支持遥控器上下键）
+- M3U 的 `#EXTGRP` 分组、URL 参数（`?token=`）透传、`#EXTVLCOPT` 选项支持
 
 ---
 
@@ -145,14 +148,41 @@
 
 ---
 
+## 阶段四（本次交付）：M3U 直播源解析与多数据源合并
+
+目标：扩展数据层，支持解析标准 M3U 播放列表，并把 JSON 源与 M3U 源按分类名合并。
+
+- [x] `data/parser/M3uPlaylistParser.kt`：**纯 Kotlin** M3U 解析器
+      （`#EXTINF` 属性提取 `tvg-id`/`tvg-logo`/`group-title`，URL 协议校验，坏条目跳过，
+      任何输入都不抛异常）
+- [x] `data/source/LocalM3uChannelSource.kt`：读取 `assets/sample.m3u` 并调用解析器
+- [x] `assets/sample.m3u`：2 个分类 / 4 个频道的示例播放列表
+- [x] `DefaultChannelRepository` 升级为**多数据源**：按分类名合并同名分类（先到先得 id）、
+      同名分类内去重、单源异常只跳过该源
+- [x] `MainBrowseFragment` / `PlayerActivity` 改为同时挂载 JSON 源与 M3U 源
+- [x] 纯 JVM 单测 **27 个新增用例**（M3U 解析 17 / 仓库合并 5 / 示例 M3U 文件 3 + 仓库原有 2），
+      用例总数 79 → **104**
+- [x] 先红后绿两次红检（关闭属性提取 → 6 个失败；关闭分类合并 → 2 个失败）
+- [x] 回归：`lintDebug testDebugUnitTest assembleDebug` 全绿（**0 Error**，104 个用例全过）
+- [x] 同步更新 `docs/ARCHITECTURE.md`（多数据源支持、M3U 解析规则、合并策略）
+
+### 阶段四未做（留给后续阶段）
+
+- 用户导入 M3U / 网络拉取 M3U（**本阶段刻意不做**：不引入网络层与导入 UI）
+- 频道源的增删改查与持久化
+- M3U 的 `#EXTGRP` 分组、URL 参数透传、`#EXTVLCOPT` 选项
+- 频道图标在 Presenter 中的绑定（`Channel.logo` 已有值，但卡片仍只显示文字）
+
+---
+
 ## P1：核心架构与数据系统
 
 目标：让"频道从哪来"可配置、可解析、可测试。
 
 | # | 能力 | 交付要点 |
 |---|---|---|
-| P1-1 | `ChannelRepository` 接口 + 内存实现 | **阶段二已完成基础版**（接口 + assets 实现）；后续补多源聚合 |
-| P1-2 | 源解析器（m3u / m3u8 / 简单 XML） | JSON 解析器阶段二已完成；m3u 系列按同样"纯函数 + L1 单测"模式补齐 |
+| P1-1 | `ChannelRepository` 接口 + 内存实现 | **阶段二已完成接口，阶段四已完成多源聚合**（JSON + M3U 按分类名合并）；网络源待做 |
+| P1-2 | 源解析器（m3u / m3u8 / 简单 XML） | **阶段四已完成 M3U 基础版**（`M3uPlaylistParser`，纯函数 + L1 单测）；`#EXTGRP` / URL 参数透传待补 |
 | P1-3 | 源管理与本地持久化 | 频道源增删改查；持久化方案**待定**（轻量方案优先，不预设 Room/数据库框架） |
 | P1-4 | 状态流转（Loading / Content / Empty / Error） | **播放页阶段三已完成**（`PlaybackState` + `PlaybackReducer`）；浏览页仍需 sealed class + StateFlow |
 | P1-5 | 网络层与错误分类 | **阶段三已完成播放错误分类**（Network / HttpStatus / SourceParsing / Timeout / Unknown）；浏览页的网络层仍待做 |

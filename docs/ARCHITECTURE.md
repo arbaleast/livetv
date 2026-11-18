@@ -34,12 +34,14 @@
 ```
 app/src/main/java/com/livetv/android/
 ├── MainActivity.kt                       # 宿主 Activity
-├── data/                                 # ← 阶段二新增：数据获取与解析
+├── data/                                 # ← 阶段二新增：数据获取与解析（阶段四扩展 M3U）
 │   ├── model/ChannelConfigDto.kt        # JSON 映射 DTO（version / categories / channels）
 │   ├── parser/ChannelJsonParser.kt      # 纯文本 JSON → DTO/领域模型 的解析与校验
+│   ├── parser/M3uPlaylistParser.kt      # ← 阶段四新增：纯文本 M3U → 领域模型 的解析与校验
 │   ├── source/ChannelDataSource.kt       # 数据源接口
 │   ├── source/LocalAssetChannelSource.kt # 读 assets/channels.json 并调用 Parser
-│   └── repository/DefaultChannelRepository.kt
+│   ├── source/LocalM3uChannelSource.kt  # ← 阶段四新增：读 assets/sample.m3u 并调用 Parser
+│   └── repository/DefaultChannelRepository.kt   # ← 阶段四升级：多数据源合并
 ├── domain/                               # ← 阶段二新增：领域层
 │   ├── model/Channel.kt                  # 领域模型（由阶段一 model/Channel.kt 升级迁移）
 │   ├── model/ChannelCategory.kt          # 分类领域模型
@@ -70,8 +72,10 @@ app/src/main/java/com/livetv/android/
 | `ChannelRepository`（domain） | 仓库接口：`getCategories(): List<ChannelCategory>`，**契约是不抛异常** |
 | `ChannelDataSource`（data） | 数据源接口：`loadCategories(): List<ChannelCategory>` |
 | `LocalAssetChannelSource`（data） | 读 `assets/channels.json` → 交给 `ChannelJsonParser` |
-| `DefaultChannelRepository`（data） | 仓库实现：调用数据源并兜底异常 |
+| `LocalM3uChannelSource`（data） | **阶段四**：读 `assets/sample.m3u` → 交给 `M3uPlaylistParser` |
+| `DefaultChannelRepository`（data） | **阶段四**：聚合多个数据源，**按分类名合并同名分类**，单源异常只跳过该源 |
 | `ChannelJsonParser`（data） | 纯函数解析 + 校验（URL 协议白名单、必填字段、disabled/空分类过滤） |
+| `M3uPlaylistParser`（data，纯） | 纯函数解析 M3U：`#EXTINF` 属性提取（`tvg-id` / `tvg-logo` / `group-title`）、URL 校验、坏条目跳过 |
 | `ChannelConfigDto` 等（data） | JSON 原始形状的 DTO，只做映射不做业务校验 |
 | `PlaybackState`（player，纯） | 状态：`Idle` / `Loading` / `Buffering` / `Playing` / `Paused` / `Error(error, fatal)` |
 | `PlaybackEvent`（player，纯） | 事件：`Prepare` / `Buffering` / `Ready` / `Playing` / `Paused` / `Failed` / `Fatal` / `ManualReset` / `Released` |
@@ -95,17 +99,28 @@ MainActivity.onCreate
 MainBrowseFragment.onCreate
   ├─ setupUi()      title / headersState=HEADERS_ENABLED / isHeadersTransitionOnBackEnabled=true / brandColor
   ├─ loadRows()
-  │     channelRepository = DefaultChannelRepository(LocalAssetChannelSource(requireContext().assets))
+  │     channelRepository = DefaultChannelRepository([
+  │         LocalAssetChannelSource(requireContext().assets),   // JSON 源
+  │         LocalM3uChannelSource(requireContext().assets),     // M3U 源（阶段四）
+  │     ])
   │     channelRepository.getCategories()               ← 领域接口
-  │       └─ DefaultChannelRepository.getCategories()   ← try/catch 兜底，异常 → emptyList()
-  │           └─ LocalAssetChannelSource.loadCategories()
-  │               ├─ assets.open("channels.json").use { readBytes().toString(UTF_8) }   ← 失败 → emptyList()
-  │               └─ ChannelJsonParser.parse(json)     ← 纯函数，失败 → emptyList()
-  │                     ├─ parseToDto(json)             ← JSONObject 解析，失败 → null
-  │                     ├─ 过滤 enabled=false 的频道
-  │                     ├─ 校验 streamUrl 为 http/https，剔除非法频道
-  │                     ├─ 清洗 backupUrls（仅保留 http/https）
-  │                     └─ 丢弃过滤后为空的分类
+  │       └─ DefaultChannelRepository.getCategories()   ← 逐源 try/catch，单源失败只跳过该源
+  │           ├─ LocalAssetChannelSource.loadCategories()
+  │           │     ├─ assets.open("channels.json").use { readBytes().toString(UTF_8) }   ← 失败 → emptyList()
+  │           │     └─ ChannelJsonParser.parse(json)     ← 纯函数，失败 → emptyList()
+  │           │           ├─ parseToDto(json)             ← JSONObject 解析，失败 → null
+  │           │           ├─ 过滤 enabled=false 的频道
+  │           │           ├─ 校验 streamUrl 为 http/https，剔除非法频道
+  │           │           ├─ 清洗 backupUrls（仅保留 http/https）
+  │           │           └─ 丢弃过滤后为空的分类
+  │           ├─ LocalM3uChannelSource.loadCategories()      ← 阶段四
+  │           │     ├─ assets.open("sample.m3u").use { readBytes().toString(UTF_8) }      ← 失败 → emptyList()
+  │           │     └─ M3uPlaylistParser.parse(m3u)          ← 纯函数，失败 → emptyList()
+  │           │           ├─ 扫描 #EXTINF 行，提取属性与显示名
+  │           │           ├─ 向下取第一个合法 http/https 行作为 URL
+  │           │           ├─ 按 group-title 分组（缺失 → "未分类"）
+  │           │           └─ 丢弃非法 URL / 空名称的频道
+  │           └─ 合并：按分类名归并同名分类（先到先得 id），同名分类内不重复频道
   │     for (category in categories):
   │       rowsAdapter.add(ListRow(HeaderItem(category.name),
   │                              ArrayObjectAdapter(ChannelCardPresenter()) + category.channels))
@@ -196,8 +211,10 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
   且延迟回调执行前会校验"频道没变"，避免旧任务误伤新频道。
 
 **要点**：仍然**没有网络请求、没有持久化、没有状态管理层**。
-频道内容来自 APK 内的 `assets/channels.json`（6 个 CCTV HLS 源，阶段一硬编码值无损迁移）。
-`backupUrls` / `headers` / `logo` / `epgId` 字段已在模型中预留，但**尚无消费方**。
+频道内容来自 APK 内的 `assets/channels.json`（6 个 CCTV HLS 源，阶段一硬编码值无损迁移）
+与 `assets/sample.m3u`（阶段四新增的 M3U 示例源，4 个频道 / 2 个分类），两者在仓库层按分类名合并。
+`backupUrls` / `headers` / `logo` / `epgId` 字段中，**`logo` 与 `epgId` 已由 M3U 解析器填充**
+（`tvg-logo` / `tvg-id`），但 Presenter 仍未绑定图标；`backupUrls` / `headers` 的消费方是阶段三的播放器层。
 
 ### 4. `assets/channels.json` Schema
 
@@ -243,6 +260,40 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
 | `backupUrls` 含非法项 | 仅保留合法的 http/https 项 |
 | 分类内频道被全部过滤 | 丢弃该分类（最终列表不含空分类） |
 
+### 4.1 `assets/sample.m3u` 与 M3U 解析规则（阶段四）
+
+示例文件（`app/src/main/assets/sample.m3u`，2 个分类 / 4 个频道）：
+
+```m3u
+#EXTM3U
+#EXTINF:-1 tvg-id="cctv1" tvg-logo="https://example.com/logo/cctv1.png" group-title="新闻",CCTV-1 综合
+https://example.com/live/cctv1.m3u8
+```
+
+`M3uPlaylistParser` 的提取策略：
+
+| 环节 | 规则 |
+|---|---|
+| 入口 | 逐行扫描（`lineSequence()`），空行直接跳过 |
+| 条目起点 | 仅 `#EXTINF` 开头的行开启一个"待定条目"；新的 `#EXTINF` 会**作废**上一个还没等到 URL 的条目 |
+| 属性区 | `#EXTINF` 去掉前缀后按**第一个逗号**切分：逗号前是属性区（并去掉 `:-1` 时长前缀），逗号后是显示名 |
+| 显示名 | 逗号后的原文 `trim()`；允许包含逗号（只按第一个逗号切分）；为空则丢弃该频道 |
+| 属性提取 | 正则 `([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"\|'([^']*)'\|([^\s"']+))`，**双引号 / 单引号 / 无引号三种写法都支持**，属性顺序任意、之间可有多个空白 |
+| 属性映射 | `tvg-id` → `Channel.epgId`（同时作为 `Channel.id`，缺失时用频道名兜底）；`tvg-logo` → `Channel.logo`；`group-title` → 分类名（缺失 → `未分类`） |
+| URL | 该 `#EXTINF` 之后**向下第一个**非空、非注释行；中间夹杂 `#EXTVLCOPT` 等注释行不影响配对 |
+| URL 校验 | 复用 `ChannelJsonParser.isValidStreamUrl`：只接受 `http://` / `https://`（忽略大小写）；非法则丢弃该频道 |
+| 异常安全 | 任何输入（含空串、乱码、引号不闭合）都**不抛异常**，最多丢弃坏条目 |
+
+多数据源合并（`DefaultChannelRepository`）：
+
+| 规则 | 说明 |
+|---|---|
+| 归并键 | 分类 `name`（JSON 的 `name` 与 M3U 的 `group-title` 同名即合并） |
+| 分类 id | 合并后沿用**第一个**提供该分类的数据源的 id |
+| 顺序 | 按数据源构造顺序、源内保持原有顺序 |
+| 去重 | 同名分类内 `id` + `streamUrl` 完全相同的频道只保留先出现的那个 |
+| 容错 | 单个数据源抛异常只跳过该源，其余源照常合并 |
+
 ### 5. 资源与 Manifest
 
 | 项 | 事实 |
@@ -254,7 +305,7 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
 | 颜色 | `primary`/`accent`/`brand_primary`(#1565C0)/`search_highlight` |
 | 字符串 | `app_name`/`browse_title`/`channel_selected` 在用；**`row_news`/`row_sports` 自阶段二起不再被引用**（行标题改由 JSON 的分类 `name` 提供）；阶段三新增 `player_loading`/`player_buffering`/`player_retrying`/`player_switching_source`/`player_error_*`/`player_error_hint`/`player_switched_to`/`player_no_channel` |
 | 布局 | `activity_main.xml` = 单个 FrameLayout；`activity_player.xml` = FrameLayout + `PlayerView` + `channel_name` + `status_text`（阶段三新增：加载/缓冲/重试提示）+ `error_text`（阶段三起改由 `strings.xml` 提供） |
-| assets | `channels.json`（默认频道配置，随 APK 打包） |
+| assets | `channels.json`（默认频道配置，随 APK 打包）+ `sample.m3u`（阶段四新增：M3U 示例源） |
 | 图标 | `mipmap-anydpi-v26/ic_launcher.xml`（自适应图标）+ `drawable/ic_launcher_foreground.xml` + `drawable/app_banner.xml`（layer-list 纯色） |
 
 ---
@@ -266,17 +317,18 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二/三扩充** | `app/src/test` 现有 10 个测试类 / **77 个用例**（阶段二 22 个 + 阶段三新增 55 个） | 解析、过滤、重试、切台、状态流转已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二/三/四扩充** | `app/src/test` 现有 13 个测试类 / **104 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27） | 解析、过滤、重试、切台、状态流转已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |
 | 7 | **播放页主题与主界面不统一** | Manifest 中 `PlayerActivity` 用 `@style/Theme.AppCompat`，主界面用 `Theme.LiveTv` | 风格割裂 |
 | 8 | ~~无 CI、无格式约束~~ **阶段一已修复** | `.github/workflows/android-ci.yml` + `.editorconfig` | 改动有自动校验 |
-| 9 | **卡片无图像** | `Channel.logo` 字段已预留但 `ChannelCardPresenter.onBindViewHolder` 只设 `titleText`/`contentText` | 视觉上只有文字卡片 |
+| 9 | **卡片无图像** | `Channel.logo` 字段已由 M3U 解析器填充（`tvg-logo`），但 `ChannelCardPresenter.onBindViewHolder` 只设 `titleText`/`contentText` | 视觉上只有文字卡片 |
 | 10 | ~~无错误重试/无源切换~~ **阶段三已修复** | `RetryPolicy` + `PlayerManager` 实现每源 2 次重试（1500/3000ms 退避）与主备源自动切换 | 直播源抖动可自动恢复 |
 | 11 | **release 未混淆且无自定义 ProGuard 规则** | `app/build.gradle.kts` + 空 `app/proguard-rules.pro` | 体积与安全基线低 |
 | 12 | **`MainActivity` 使用 `FragmentActivity`** | 继承 `androidx.fragment.app.FragmentActivity` | 无法使用 AppCompat 主题能力 |
-| 13 | **数据同步仍靠重新打包 assets** | `LocalAssetChannelSource` 固定读 `assets/channels.json` | 换源需要改包或后续引入导入/网络源 |
+| 13 | **数据同步仍靠重新打包 assets** | `LocalAssetChannelSource` 固定读 `assets/channels.json`、`LocalM3uChannelSource` 固定读 `assets/sample.m3u` | 换源需要改包；用户导入 / 网络源仍未做 |
+| 19 | **M3U 解析覆盖有限** | `M3uPlaylistParser` 只解析 `#EXTINF` 的 `tvg-id` / `tvg-logo` / `group-title`；不支持 `#EXTGRP`、`#EXTVLCOPT` 参数、直播地址参数（`?token=`）透传 | 复杂直播源需手工预处理 |
 | 14 | **未使用的字符串资源** | `R.string.row_news` / `R.string.row_sports` 已无引用（Lint `UnusedResources`）；行标题改由 JSON 分类 `name` 提供 | 资源项成为残留，**保留未删**（避免扩大改动面），后续随 UI 文案整理一并清理 |
 | 15 | **浏览页仍无加载/空态反馈** | `MainBrowseFragment.loadRows()` 在 `onCreate` 同步取数，取不到内容时页面为空且无提示 | 用户无法区分"无频道"与"加载失败"（播放页已有状态提示） |
 | 16 | **播放页未接 `PlayerView` 控制器按钮** | 切台只通过遥控器方向键；控制器里的"上一台/下一台"按钮未接入 `ChannelNavigator` | 触屏/控制器操作无法切台 |
@@ -287,19 +339,21 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
 
 ## 第三部分：演进方向（**尚未实现**）
 
-阶段二已落地 `data/` 与 `domain/` 的骨架，阶段三已落地 `player/` 的纯策略层 + 桥接层。
+阶段二已落地 `data/` 与 `domain/` 的骨架，阶段三已落地 `player/` 的纯策略层 + 桥接层，
+阶段四已落地 M3U 解析与多数据源合并。
 后续在此骨架上扩展，**不引入 Hilt/Dagger，不拆模块**。
 
 | # | 方向 | 落点 | 备注 |
 |---|---|---|---|
-| 1 | 多数据源聚合 | `DefaultChannelRepository` | 聚合 assets / 网络 / 用户导入的 M3U，UI 层无需改动 |
-| 2 | M3U/M3U8 解析器 | `data/parser/` 新增 `M3uParser` | 与 `ChannelJsonParser` 同为纯函数，可直接复用 L1 单测 |
+| 1 | ~~多数据源聚合~~ **阶段四已完成基础版** | `DefaultChannelRepository` | 已聚合 assets(JSON) + assets(M3U)；网络源 / 用户导入待做 |
+| 2 | ~~M3U/M3U8 解析器~~ **阶段四已完成基础版** | `data/parser/M3uPlaylistParser.kt` | 已支持 `#EXTINF` + `tvg-*` 属性；`#EXTGRP` / URL 参数透传待补 |
 | 3 | ~~主备源切换（Failover）~~ **阶段三已完成** | `player/RetryPolicy` + `player/PlayerManager` | 消费 `Channel.backupUrls`；主源重试耗尽后按顺序切备用源 |
 | 4 | ~~自定义 HTTP 请求头~~ **阶段三已完成接线** | `Channel.headers` → `DefaultHttpDataSource.Factory.setDefaultRequestProperties` | 请求头走 DataSource 层，不走 `setMediaItem` |
-| 5 | 频道图标 | `Channel.logo` + `ChannelCardPresenter` | 字段已预留，需引入图片加载 |
+| 5 | 频道图标 | `Channel.logo` + `ChannelCardPresenter` | 字段已由 M3U 解析器填充（`tvg-logo`），仍需在 Presenter 绑定图片 |
 | 6 | 浏览页空态 / 加载态 | `MainBrowseFragment` + `domain/` 状态类 | 解决技术债 #15；播放页的状态流转阶段三已完成 |
 | 7 | 持久化 | `data/` 引入轻量存储 | 方案待定，**不预设 Room** |
-| 8 | EPG | `Channel.epgId` | 字段已预留，格式与时区处理见 ROADMAP P2 |
+| 8 | EPG | `Channel.epgId` | 字段已由 M3U 解析器填充（`tvg-id`），格式与时区处理见 ROADMAP P2 |
 | 9 | 播放器控制器按钮接切台 | `PlayerView` 控制器 + `ChannelNavigator` | 解决技术债 #16 |
 | 10 | ~~切台提示自动消失~~ **阶段 3.5 已完成** | `PlayerActivity` 的 `statusText` 定时隐藏（`lifecycleScope` + `delay(3000)`） | 已解决技术债 #18 |
 | 11 | 播放进度记忆 | `PlayerManager` 保存/恢复 `currentPosition` | 阶段一切台后重播的行为仍待评估 |
+| 12 | 用户导入 / 网络 M3U 源 | `data/source/` 新增 `NetworkM3uChannelSource` + 设置页 | 阶段四**刻意未做**（不引入网络层与导入 UI） |

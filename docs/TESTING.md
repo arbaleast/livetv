@@ -7,7 +7,7 @@
 
 | 层级 | 运行环境 | 覆盖对象 | 现状 |
 |---|---|---|---|
-| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航 | **已建立**：10 个测试类 / **79 个用例**（`app/src/test/`） |
+| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航 | **已建立**：13 个测试类 / **104 个用例**（`app/src/test/`） |
 | L2 仪器测试 | 模拟器/真机，`connectedDebugAndroidTest` | View 渲染、Leanback 焦点、Activity 生命周期 | **未建立**：无 `androidTest` 源集、无 `androidx.test` 依赖 |
 | L3 真机验收 | 真实 Android TV 设备 | 遥控器手感、直播流实际解码、长期稳定性 | **手动**：无自动化 |
 
@@ -21,8 +21,10 @@
 | `player/PlaybackErrorMapperTest` | 9 | HTTP 状态码（含 code=0 边界）、超时、网络、源解析、未知原因 |
 | `player/PlayerLayerPurityTest` | 3 | **架构约束**：纯策略层不得引用 `android.*` / `androidx.media3.*`（源码扫描） |
 | `data/parser/ChannelJsonParserTest` | 11 | 标准解析、缺省字段容错、禁用/空分类过滤、URL 协议拦截、异常数据恢复 |
+| `data/parser/M3uPlaylistParserTest` | 17 | `#EXTINF` 属性提取与映射、单/双/无引号、属性乱序、无分组兜底、非法 URL、引号不闭合、坏条目跳过 |
+| `data/repository/DefaultChannelRepositoryTest` | 8 | 单源透传、空结果、异常吞噬、**多源同名分类合并**、不同名分类分离、频道去重、单源失败不影响其它源 |
+| `data/LocalM3uAssetTest` | 3 | 直接读 `src/main/assets/sample.m3u`，校验 2 分类 / 4 频道及 `tvg-*` 映射 |
 | `domain/model/ChannelTest` | 5 | 字段默认值、值语义相等、`copy` 语义 |
-| `data/repository/DefaultChannelRepositoryTest` | 3 | 数据源透传、空结果兜底、异常吞噬 |
 | `data/repository/ChannelRepositoryResilienceTest` | 4 | assets 缺失 / IO 异常时仓库返回空列表且不抛异常 |
 | `data/LocalAssetsChannelsTest` | 3 | 直接读 `src/main/assets/channels.json`，校验随包默认配置合法且 6 个频道无损 |
 
@@ -41,8 +43,8 @@
 
 | 目标 | 示例 |
 |---|---|
-| 数据解析 | `m3u` / `m3u8` / JSON 文本 → `List<Channel>`（纯函数，输入输出可断言） |
-| Repository | 给定假数据源，断言返回的频道列表顺序、字段映射、空结果处理 |
+| 数据解析 | `m3u` / `m3u8` / JSON 文本 → `List<ChannelCategory>`（纯函数，输入输出可断言） |
+| Repository | 给定假数据源，断言返回的频道列表顺序、字段映射、空结果处理、**多源合并** |
 | 状态流转 | `PlaybackReducer.reduce(state, event)` 的合法路径与非法转换 |
 | 重试 / Failover | `RetryPolicy.onFailure(state, error)` 返回 `Retry(delay)` / `SwitchSource(index)` / `Fatal` |
 | 频道导航 | `ChannelNavigator` 的定位、循环切台、空列表行为 |
@@ -130,8 +132,8 @@ testImplementation("org.json:json:20231013")
 ## 7. 现状与下一步
 
 - 阶段一建立 L1 链路；阶段二补齐**数据层**的 L1 覆盖；阶段三补齐**播放器层**的 L1 覆盖
-  （重试策略 / 状态归约 / 错误映射 / 频道导航 + 纯度约束）；阶段 3.5 追加 2 个错误映射边界用例，
-  合计 **79 个用例**。
+  （重试策略 / 状态归约 / 错误映射 / 频道导航 + 纯度约束）；阶段 3.5 追加 2 个错误映射边界用例；
+  阶段四补齐 **M3U 解析与多源合并**的 L1 覆盖，合计 **104 个用例**。
 - 仍未建立 L2（`androidTest` 源集与 `androidx.test` 依赖均不存在）。
 - 后续随浏览页状态流转（P1-4）、M3U 解析器（P1-2）、多码率（P1-8）落地，
   继续按"L1 优先"补齐对应纯 JVM 用例（详见 `docs/ROADMAP.md`）。

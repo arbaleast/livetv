@@ -16,14 +16,20 @@ import androidx.leanback.widget.RowPresenter
 import com.livetv.android.R
 import com.livetv.android.data.repository.DefaultChannelRepository
 import com.livetv.android.data.source.LocalAssetChannelSource
+import com.livetv.android.data.source.LocalM3uChannelSource
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.repository.ChannelRepository
 
 class MainBrowseFragment : BrowseSupportFragment() {
 
-    /** 频道数据仓库；默认从 assets/channels.json 读取。 */
+    /** 频道数据仓库；默认合并 assets/channels.json（JSON 源）与 assets/sample.m3u（M3U 源）。 */
     private val channelRepository: ChannelRepository by lazy {
-        DefaultChannelRepository(LocalAssetChannelSource(requireContext().assets))
+        DefaultChannelRepository(
+            listOf(
+                LocalAssetChannelSource(requireContext().assets),
+                LocalM3uChannelSource(requireContext().assets),
+            ),
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
