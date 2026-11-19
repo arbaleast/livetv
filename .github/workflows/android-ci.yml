@@ -58,6 +58,58 @@ jobs:
       - name: Unit tests (JVM)
         run: ./gradlew testDebugUnitTest --console=plain --no-daemon
 
+      # Gradle 成功时不打印用例数，这里从 XML 汇总，避免“测试静默跳过”仍显示绿。
+      # 只用 POSIX sh + awk，不依赖 python3 等额外运行时。
+      - name: Summarize JVM unit test results
+        if: always()
+        shell: sh
+        run: |
+          set -eu
+          RESULTS_DIR="app/build/test-results/testDebugUnitTest"
+
+          if [ ! -d "$RESULTS_DIR" ] || [ -z "$(ls "$RESULTS_DIR"/TEST-*.xml 2>/dev/null)" ]; then
+            echo "::error::No JVM unit test result XML found in $RESULTS_DIR"
+            exit 1
+          fi
+
+          SUMMARY=$(awk '
+            function attr(name,    pat, s) {
+              pat = "[[:space:]]" name "=\"[0-9]+\""
+              if (match($0, pat)) {
+                s = substr($0, RSTART, RLENGTH)
+                gsub(/[^0-9]/, "", s)
+                return s + 0
+              }
+              return 0
+            }
+            /<testsuite[[:space:]]/ {
+              suites++
+              tests += attr("tests")
+              failures += attr("failures")
+              errors += attr("errors")
+              skipped += attr("skipped")
+            }
+            END {
+              if (suites <= 0 || tests <= 0) exit 3
+              passed = tests - failures - errors - skipped
+              printf "%d suites, %d tests (%d passed, %d failed, %d errors, %d skipped)\n", suites, tests, passed, failures, errors, skipped
+            }
+          ' "$RESULTS_DIR"/TEST-*.xml) || {
+            echo "::error::Failed to parse JVM unit test results: no <testsuite> entries or zero tests"
+            exit 1
+          }
+
+          echo "JVM Unit Test Summary: $SUMMARY"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "### JVM Unit Test Summary"
+              echo
+              echo '```'
+              echo "$SUMMARY"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --console=plain --no-daemon
 

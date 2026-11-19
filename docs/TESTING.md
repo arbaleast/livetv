@@ -42,6 +42,21 @@
 报告位置：`app/build/reports/tests/testDebugUnitTest/index.html`，
 机器可读结果：`app/build/test-results/testDebugUnitTest/*.xml`。
 
+### 2.1 云端 CI
+
+`.github/workflows/android-ci.yml` 在每次 push / PR 上依次跑
+`compileDebugKotlin` → `lintDebug` → `testDebugUnitTest` → `assembleDebug`。
+
+- **Maven 源分流**：`settings.gradle.kts` 读 `CI` 环境变量。GitHub Actions 自带 `CI=true`，
+  此时只声明官方源（`gradlePluginPortal` / `google()` / `mavenCentral()`），不声明阿里云镜像，
+  避免 runner 海外节点访问国内镜像返回 `502 Bad Gateway` 导致依赖解析失败；本地构建仍保留
+  阿里云镜像优先。
+- **单测计数**：Gradle 成功时不打印用例数，因此 `Unit tests (JVM)` 之后有一步
+  `Summarize JVM unit test results`（`if: always()`），用 POSIX `sh` + `awk` 汇总
+  `app/build/test-results/testDebugUnitTest/TEST-*.xml` 的 tests/failures/errors/skipped，
+  打印 `JVM Unit Test Summary: N suites, M tests (...)`、追加到 `$GITHUB_STEP_SUMMARY`，
+  并在没找到 XML 或用例数为 0 时以非零退出码失败，防止测试被静默跳过。
+
 ## 3. 什么该写成 L1 测试
 
 | 目标 | 示例 |
