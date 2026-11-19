@@ -41,6 +41,9 @@ object MobileChannelList {
      */
     const val BADGE_ACCENT_COUNT = 6
 
+    /** 频道名里提取不出任何有效字符时的徽章兜底。 */
+    const val FALLBACK_BADGE = "TV"
+
     /** 形如 `CCTV-13`、`CCTV1` 的"字母+数字"前缀，用于生成 `C1` / `C13` 这类徽章。 */
     private val ALPHANUMERIC_PREFIX = Regex("^[A-Za-z]+[-]?\\d+")
 
@@ -108,11 +111,11 @@ object MobileChannelList {
      * - `综合新闻` → `综合`
      * - `湖南卫视` → `湖南`
      * - `ESPN HD` → `ES`
-     * - 空串 → 空串（调用方负责隐藏徽章）
+     * - 取不出任何有效字符 → `TV`（兜底，避免卡片上出现空方块）
      */
     fun extractChannelBadge(name: String): String {
         val trimmed = name.trim()
-        if (trimmed.isEmpty()) return ""
+        if (trimmed.isEmpty()) return FALLBACK_BADGE
 
         ALPHANUMERIC_PREFIX.find(trimmed)?.let { match ->
             val token = match.value
@@ -128,7 +131,7 @@ object MobileChannelList {
         val latin = trimmed.filter { it.isLetter() }
         if (latin.isNotEmpty()) return latin.take(2).uppercase(Locale.US)
 
-        return ""
+        return FALLBACK_BADGE
     }
 
     /**

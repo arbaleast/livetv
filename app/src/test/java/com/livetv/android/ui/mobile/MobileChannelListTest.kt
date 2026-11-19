@@ -145,10 +145,12 @@ class MobileChannelListTest {
     }
 
     @Test
-    fun `badge is empty for blank or symbol only names`() {
-        assertEquals("", MobileChannelList.extractChannelBadge(""))
-        assertEquals("", MobileChannelList.extractChannelBadge("   "))
-        assertEquals("", MobileChannelList.extractChannelBadge("★"))
+    fun `badge falls back to TV when nothing can be extracted`() {
+        // 空名与纯符号名都取不出有效字符，必须兜底成 TV，避免卡片上出现空方块
+        assertEquals("TV", MobileChannelList.extractChannelBadge(""))
+        assertEquals("TV", MobileChannelList.extractChannelBadge("   "))
+        assertEquals("TV", MobileChannelList.extractChannelBadge("★"))
+        assertEquals(MobileChannelList.FALLBACK_BADGE, MobileChannelList.extractChannelBadge("—"))
     }
 
     // ---------------- 分类筛选 ----------------
