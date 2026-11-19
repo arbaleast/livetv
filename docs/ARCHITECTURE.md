@@ -59,12 +59,18 @@ app/src/main/java/com/livetv/android/
 └── ui/
     ├── MainBrowseFragment.kt             # Leanback 浏览页（通过 Repository 取数）
     ├── ChannelCardPresenter.kt           # 频道卡片 Presenter
-    └── PlayerActivity.kt                 # 播放页（UI + 遥控器按键，不含播放器逻辑）
+    ├── PlayerActivity.kt                 # 播放页（UI + 遥控器按键，不含播放器逻辑）
+    └── mobile/                           # ← 阶段六新增：手机/平板触控端
+        ├── MobileChannelList.kt          # 纯 Kotlin：行序列组装 + 网格列数计算
+        ├── MobileChannelAdapter.kt       # RecyclerView.Adapter（分类标题 + 频道卡片两种 item）
+        └── MobileMainActivity.kt         # 手机端主界面（RecyclerView + GridLayoutManager）
+└── util/
+    └── DeviceUtils.kt                    # ← 阶段六新增：TV / 触控设备形态判定
 ```
 
 | 类 | 职责 |
 |---|---|
-| `MainActivity` | 宿主 Activity，`setContentView(R.layout.activity_main)`，在 `savedInstanceState == null` 时提交 `MainBrowseFragment` |
+| `MainActivity` | **阶段六**：设备形态**分流入口**——`DeviceUtils.isTvDevice(this)` 为真则装载 Leanback `MainBrowseFragment`（并强制横屏），否则启动 `MobileMainActivity` 后 `finish()` |
 | `LiveTvApplication`（阶段五） | 全局 `ChannelRepository` 持有者（`by lazy` 装配 JSON + M3U 两个数据源）；提供 `refreshChannels()` 强制重算 |
 | `MainBrowseFragment` | 浏览页：标题/品牌色，**通过 `ChannelRepository` 取分类列表**并组装 `ListRow`，处理卡片点击跳转播放 |
 | `ChannelCardPresenter` | 渲染 `ImageCardView` 卡片（标题 + 描述） |
@@ -87,6 +93,10 @@ app/src/main/java/com/livetv/android/
 | `RetryPolicy`（player，纯） | 重试与主备源状态机：候选源生成、`RetryState`、三种 `RetryOutcome` |
 | `ChannelNavigator`（player，纯） | 扁平频道列表的定位（id → url 回退）与循环切台 |
 | `PlayerManager`（player，桥接） | ExoPlayer 生命周期与复用、DataSource 请求头/超时、重试调度、Media3 事件翻译 |
+| `DeviceUtils`（util） | **阶段六**：TV 形态判定。`isTvDevice(context)` 为 Android 门面；`isTvDevice(uiModeType, hasLeanbackFeature)` 为**纯函数**（可直接 JVM 单测） |
+| `MobileChannelList`（ui/mobile，纯） | **阶段六**：纯函数——`buildRows(categories)` 把分类展开成"标题 + 卡片"行序列（跳过空分类），`gridSpanCount(screenWidthDp)` 决定网格列数 |
+| `MobileChannelAdapter`（ui/mobile） | **阶段六**：`RecyclerView.Adapter`，两种 item（`CategoryHeader` 跨整行 / `ChannelCard` 占一格），点击回调交给 Activity |
+| `MobileMainActivity`（ui/mobile） | **阶段六**：手机/平板主界面——`RecyclerView` + `GridLayoutManager`，从 `LiveTvApplication.channelRepository` 取数，点击卡片带三个 Extra 启动**共用**的 `PlayerActivity` |
 
 > **纯策略层约束**：`player` 包中除 `PlayerManager.kt` 外的文件**禁止**引用 `android.*` 与
 > `androidx.media3.*`，由 `PlayerLayerPurityTest` 做源码扫描固化（3 个用例）。
@@ -306,14 +316,15 @@ https://example.com/live/cctv1.m3u8
 
 | 项 | 事实 |
 |---|---|
-| `uses-feature` | `android.software.leanback` (required=true)、`android.hardware.touchscreen` (required=false) |
+| `uses-feature` | **阶段六**：`android.software.leanback` **required=false**（改为双端通用）、`android.hardware.touchscreen` (required=false) |
 | 权限 | 仅 `android.permission.INTERNET` |
-| Activity | `MainActivity` exported=true + `LEANBACK_LAUNCHER` + landscape；`PlayerActivity` exported=false + landscape + `Theme.AppCompat` |
+| Activity | **阶段六**：`MainActivity` exported=true + `LAUNCHER` + `LEANBACK_LAUNCHER`（单一入口，双端各出现一个图标）+ **不再锁横屏**（横屏只在 TV 分支用 `requestedOrientation` 运行时设置）；`MobileMainActivity` exported=false + `Theme.LiveTv.Mobile`；`PlayerActivity` exported=false + landscape + `Theme.AppCompat` |
 | Application | **阶段五**：`android:name=".LiveTvApplication"`（持有全局 `ChannelRepository`） |
-| 主题 | `Theme.LiveTv` parent=`Theme.Leanback`，含 `defaultBrandColor`/`defaultSearchColor` |
-| 颜色 | `primary`/`accent`/`brand_primary`(#1565C0)/`search_highlight` |
-| 字符串 | `app_name`/`browse_title`/`channel_selected` 在用；**`row_news`/`row_sports` 自阶段二起不再被引用**（行标题改由 JSON 的分类 `name` 提供）；阶段三新增 `player_loading`/`player_buffering`/`player_retrying`/`player_switching_source`/`player_error_*`/`player_error_hint`/`player_switched_to`/`player_no_channel` |
-| 布局 | `activity_main.xml` = 单个 FrameLayout；`activity_player.xml` = FrameLayout + `PlayerView` + `channel_name` + `status_text`（阶段三新增：加载/缓冲/重试提示）+ `error_text`（阶段三起改由 `strings.xml` 提供） |
+| 主题 | `Theme.LiveTv` parent=`Theme.Leanback`，含 `defaultBrandColor`/`defaultSearchColor`；**阶段六**新增 `Theme.LiveTv.Mobile` parent=`Theme.AppCompat.NoActionBar`（深色，不启用 Leanback 焦点体系） |
+| 颜色 | `primary`/`accent`/`brand_primary`(#1565C0)/`search_highlight`；**阶段六**新增 `mobile_background`/`mobile_card_background`/`mobile_cover_background`/`mobile_text_primary`/`mobile_text_secondary` |
+| 字符串 | `app_name`/`browse_title`/`channel_selected` 在用；**`row_news`/`row_sports` 自阶段二起不再被引用**（行标题改由 JSON 的分类 `name` 提供）；阶段三新增 `player_loading`/`player_buffering`/`player_retrying`/`player_switching_source`/`player_error_*`/`player_error_hint`/`player_switched_to`/`player_no_channel`；**阶段六**新增 `mobile_empty_channels`/`mobile_channel_cover_desc` |
+| 布局 | `activity_main.xml` = 单个 FrameLayout；`activity_player.xml` = FrameLayout + `PlayerView` + `channel_name` + `status_text`（阶段三新增：加载/缓冲/重试提示）+ `error_text`（阶段三起改由 `strings.xml` 提供）；**阶段六**新增 `activity_mobile_main.xml`/`item_mobile_channel.xml`/`item_mobile_category_header.xml` |
+| drawable | **阶段六**新增 `ic_channel_placeholder.xml`（本地矢量封面占位）、`bg_mobile_channel_card.xml`（圆角卡片底） |
 | assets | `channels.json`（默认频道配置，随 APK 打包）+ `sample.m3u`（阶段四新增：M3U 示例源） |
 | 图标 | `mipmap-anydpi-v26/ic_launcher.xml`（自适应图标）+ `drawable/ic_launcher_foreground.xml` + `drawable/app_banner.xml`（layer-list 纯色） |
 
@@ -333,6 +344,71 @@ https://example.com/live/cctv1.m3u8
 
 ---
 
+### 7. 双端 UI 分流（阶段六新增）
+
+Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写死 313dp × 176dp）的横版卡片，
+放在手机竖屏上会排版错位。因此采用"入口分流、两套 UI、一套底层"的结构：
+
+```
+                     ┌──────────────────────────────────────────┐
+   am start          │ MainActivity（唯一 LAUNCHER / LEANBACK   │
+   ───────────────►  │ _LAUNCHER 入口）                        │
+                     └───────────────┬──────────────────────────┘
+                                     │ DeviceUtils.isTvDevice(this)
+                    ┌────────────────┴────────────────┐
+                    ▼                                 ▼
+        ┌───────────────────────┐        ┌────────────────────────────┐
+        │ TV 分支（真）          │        │ 触控分支（手机 / 平板）       │
+        │ requestedOrientation  │        │ startActivity(              │
+        │   = LANDSCAPE         │        │   MobileMainActivity)      │
+        │ setContentView(       │        │ finish()                   │
+        │   activity_main)      │        │                            │
+        │ + MainBrowseFragment  │        │ RecyclerView +              │
+        │   （Leanback 焦点体系） │        │   GridLayoutManager        │
+        └───────────┬───────────┘        └──────────────┬─────────────┘
+                    │                                   │
+                    └───────────────┬───────────────────┘
+                                    ▼
+              LiveTvApplication.channelRepository（数据）
+                                    │
+                                    ▼
+              PlayerActivity（播放页，双端完全共用）
+```
+
+**判定规则**（`DeviceUtils.isTvDevice(uiModeType, hasLeanbackFeature)`）：
+`uiModeType == Configuration.UI_MODE_TYPE_TELEVISION || hasLeanbackFeature`。
+两个信号取或：部分电视盒子不报告 television UI mode，但一定有 Leanback 特性；手机则一定没有该特性。
+常量 `UI_MODE_TYPE_TELEVISION = 4` 在 `DeviceUtils` 内**本地显式定义**，让纯函数不依赖框架常量即可 JVM 单测。
+
+**手机端网格列数**（`MobileChannelList.gridSpanCount(screenWidthDp)`，纯函数）：
+
+| 有效宽度 | 列数 |
+|---|---|
+| `>= 840dp` | 4 |
+| `>= 600dp` | 3 |
+| 其余 | 2 |
+
+下限取 2：单列在手机上卡片过宽、滚动过长。分类标题用 `SpanSizeLookup` 跨满整行，频道卡片各占一格。
+
+**宽度换算（px → dp）**：`MobileMainActivity.screenWidthDp()` 用 `MobileChannelList.pxToDp(metrics.widthPixels, metrics.density)`
+（纯函数，可单测）。**不能用** `TypedValue.applyDimension(COMPLEX_UNIT_DIP, px, metrics)`——那个 API 的方向是 dp → px，
+拿它处理 px 会再乘一次 density，把有效宽度放大（例如 2780px @3.5x 会被算成 9730dp，直接跳到 4 列）。
+正确换算是除法：2780px ÷ 3.5 = 794dp → 3 列；1264px ÷ 3.5 = 361dp → 2 列。
+
+**两端共用与隔离**：
+
+| 共享 | 隔离 |
+|---|---|
+| `LiveTvApplication.channelRepository`（数据） | 浏览页 UI（Leanback `ListRow` vs `RecyclerView` 网格） |
+| `PlayerActivity` + `PlayerManager`（播放、重试、Failover） | 主题（`Theme.Leanback` vs `Theme.AppCompat`） |
+| `Channel` / `ChannelCategory` 领域模型 | 卡片呈现（`ImageCardView` vs 本地矢量占位封面） |
+| 三个 Intent Extra（`EXTRA_CHANNEL_ID` / `EXTRA_CHANNEL_NAME` / `EXTRA_STREAM_URL`） | 屏幕方向（TV 强制横屏 / 手机跟随系统） |
+
+> **阶段六未做**：手机端不加载远程频道 Logo（`Channel.logo` 已有字段但无消费方，卡片用本地矢量占位图）；
+> 引入图片加载库（Glide/Coil 等）被明确排除，避免为占位图引入重型依赖。
+
+---
+
 ## 第二部分：现有技术债（带证据）
 
 | # | 技术债 | 证据 | 影响 |
@@ -340,7 +416,7 @@ https://example.com/live/cctv1.m3u8
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二/三/四/五扩充** | `app/src/test` 现有 15 个测试类 / **124 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20） | 解析、过滤、重试、切台、状态流转、缓存、请求头已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二/三/四/五/六扩充** | `app/src/test` 现有 15 个测试类 / **141 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |
@@ -358,6 +434,8 @@ https://example.com/live/cctv1.m3u8
 | 16 | **播放页未接 `PlayerView` 控制器按钮** | 切台只通过遥控器方向键；控制器里的"上一台/下一台"按钮未接入 `ChannelNavigator` | 触屏/控制器操作无法切台 |
 | 17 | ~~HTTP 状态码识别依赖 Media3 错误码区间~~ **阶段 3.5 修复，阶段 5.5 修正** | `findInvalidResponseCode()` 遍历 cause 链取 `InvalidResponseCodeException.responseCode`。阶段 3.5 曾保留 `HTTP_STATUS_RANGE = 2000..2999` 作为兜底，**该兜底是错的**：2000-2008 是 Media3 的 IO 错误段（2001=网络连接失败、2002=连接超时），真机上把网络故障显示成了"HTTP 2001"。阶段 5.5 已删除该区间，只信 cause 链里的真实响应码 | 错误文案不再误导；`classifyCause()` 同时改为遍历 cause 链，能识别被 `HttpDataSourceException` 包住的 `UnknownHostException`/`SocketTimeoutException` |
 | 18 | ~~切台提示不自动消失~~ **阶段 3.5 已修复** | `PlayerActivity.showChannelSwitchedHint()` 用 `lifecycleScope.launch { delay(3000) }` 自动隐藏 `statusText`；显示新提示前 `cancel()` 旧 Job，`onDestroy()` 再兜底取消 | 短时提示不再长期遮挡画面 |
+| 21 | **手机端卡片不加载频道 Logo** | `Channel.logo` 已有字段（阶段五由 M3U `tvg-logo` 填充），但 `MobileChannelAdapter` 只绑名称与描述，封面用本地矢量占位图 | 引入图片加载库被阶段六明确排除；远程图加载列为后续方向 |
+| 22 | **手机端浏览页仍无加载/空态之外的错误反馈** | 与技术债 15 同源：手机端 `MobileMainActivity.loadChannels()` 同步取数，空结果展示 `mobile_empty_channels` | 手机端已有空态文案，缺"加载失败"与"重试"区分（与 TV 端同一债务） |
 
 ---
 
@@ -382,3 +460,5 @@ https://example.com/live/cctv1.m3u8
 | 11 | 播放进度记忆 | `PlayerManager` 保存/恢复 `currentPosition` | 阶段一切台后重播的行为仍待评估 |
 | 12 | 用户导入 / 网络 M3U 源 | `data/source/` 新增 `NetworkM3uChannelSource` + 设置页 | 阶段四**刻意未做**（不引入网络层与导入 UI）；阶段五补齐了请求头链路，导入 UI 仍未做 |
 | 13 | ~~数据源在 UI 层重复装配~~ **阶段五已完成** | `LiveTvApplication` 持有全局仓库（带缓存），UI 层只取用 | 解决技术债 #20 |
+| 14 | ~~双端 UI（手机 / 平板触控）~~ **阶段六已完成基础版** | `util/DeviceUtils` + `ui/mobile/*`（`MobileMainActivity` + `RecyclerView` 网格） | 入口按设备形态分流；播放页两端共用。手机端卡片 Logo 未接（技术债 #21） |
+| 15 | 远程频道 Logo 加载 | `ui/mobile` + `ui/ChannelCardPresenter` 绑定 `Channel.logo` | 技术债 #21；需先决定是否引入图片加载库（阶段六刻意未引入） |

@@ -19,4 +19,8 @@
     <string name="player_error_hint">按确认键重试 · 按上下键切换频道</string>
     <string name="player_switched_to">已切换到：%1$s</string>
     <string name="player_no_channel">没有可播放的频道</string>
+
+    <!-- 手机端（MobileMainActivity） -->
+    <string name="mobile_empty_channels">暂无可播放的频道</string>
+    <string name="mobile_channel_cover_desc">频道封面</string>
 </resources>

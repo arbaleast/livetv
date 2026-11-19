@@ -4,4 +4,11 @@
     <color name="accent">#FF9800</color>
     <color name="brand_primary">#1565C0</color>
     <color name="search_highlight">#0D47A1</color>
+
+    <!-- 手机端（MobileMainActivity）暗色调 -->
+    <color name="mobile_background">#0E1116</color>
+    <color name="mobile_card_background">#1B2129</color>
+    <color name="mobile_cover_background">#232B35</color>
+    <color name="mobile_text_primary">#FFFFFF</color>
+    <color name="mobile_text_secondary">#9AA7B4</color>
 </resources>

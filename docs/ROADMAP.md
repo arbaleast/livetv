@@ -13,9 +13,9 @@
 | 可构建的 Android TV 应用（单 `app` 模块，AGP 8.5.2 / Kotlin 1.9.24 / Gradle 8.7 / JDK 17） | `build.gradle.kts`、`gradle/wrapper/gradle-wrapper.properties` |
 | 依赖走阿里云镜像 + `gradlePluginPortal` + `mavenCentral` | `settings.gradle.kts` |
 | ViewBinding | `app/build.gradle.kts` `buildFeatures { viewBinding = true }` |
-| TV 声明齐全：`leanback` required、`touchscreen` required=false、`banner`、`LEANBACK_LAUNCHER` | `app/src/main/AndroidManifest.xml` |
+| TV 声明齐全：`leanback` required=**false**（阶段六改为双端通用）、`touchscreen` required=false、`banner`、`LAUNCHER` + `LEANBACK_LAUNCHER` 双入口 | `app/src/main/AndroidManifest.xml` |
 | GitHub Actions CI：`push`/`pull_request` 触发，跑编译 + Lint + 单元测试 + 打包 Debug APK | `.github/workflows/android-ci.yml` |
-| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，4 个测试类 / 22 个用例） | `app/src/test/java/com/livetv/android/` |
+| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**15 个测试类 / 141 个用例**） | `app/src/test/java/com/livetv/android/` |
 | 格式与忽略规则（`.editorconfig`、`.gitignore` 排除构建产物/密钥/`.tmp/`） | 仓库根目录 |
 
 ### 功能
@@ -42,6 +42,8 @@
 | 播放失败在页面显示错误文案 | `PlayerActivity` 的 `Player.Listener.onPlayerError` |
 | 播放页屏幕常亮 | `PlayerActivity.onCreate` 的 `FLAG_KEEP_SCREEN_ON` |
 | 领域模型已预留主备源 / 请求头 / 图标 / EPG 字段 | `domain/model/Channel.kt` |
+| **双端 UI 分流**：`MainActivity` 按设备形态分流——TV 走 Leanback `MainBrowseFragment`，手机/平板走 `MobileMainActivity`（`RecyclerView` + `GridLayoutManager` 网格，分类标题跨整行） | `util/DeviceUtils`、`ui/mobile/` |
+| 两端共用同一份数据与同一个播放页（`LiveTvApplication.channelRepository` + `PlayerActivity`） | `LiveTvApplication`、`ui/mobile/MobileMainActivity.kt` |
 
 ### 明确**没有**的能力（避免误判）
 
@@ -54,6 +56,7 @@
 - **浏览页**的加载中 / 空态 / 错误态反馈（播放页已有状态提示；浏览页取不到内容时页面直接为空）
 - 播放器控制器按钮里的"上一台/下一台"（切台只支持遥控器上下键）
 - M3U 的 `#EXTGRP` 分组、URL 参数（`?token=`）透传
+- **手机端卡片不加载远程频道 Logo**（`Channel.logo` 有字段但无消费方，卡片用本地矢量占位图；未引入图片加载库）
 
 ---
 
@@ -227,6 +230,33 @@
 - **HLS 实际出画**：设备无外网（DNS 解析超时），所有源均进入 Error 态
 - **主备源切换**：默认频道 `backupUrls` 为空，无备用源可切（重试计数 1/2、2/2 已验证）
 - **切台不重建 ExoPlayer**：代码保证复用实例，但无日志直接佐证
+
+---
+
+## 阶段六（本次交付）：双端 UI 智能分流（TV 端 Leanback + 手机端 RecyclerView 触控）
+
+目标：同一份 APK 在 Android TV 与手机/平板上都能用，**TV 端遥控器体验 100% 不变**。
+
+- [x] `util/DeviceUtils`：TV 判定 = `UI_MODE_TYPE_TELEVISION` **或** `FEATURE_LEANBACK`；提供**纯函数重载** `isTvDevice(uiModeType, hasLeanbackFeature)` 供 JVM 单测
+- [x] `ui/mobile/MobileChannelList`（纯 Kotlin）：`buildRows(categories)` 展开成"分类标题 + 频道卡片"行序列（跳过空分类），`gridSpanCount(screenWidthDp)` 决定列数（>=840dp→4，>=600dp→3，其余→2），`pxToDp(px, density)` 负责 px→dp 换算（**除以** density，不能用 `TypedValue.applyDimension`，那是 dp→px）
+- [x] `ui/mobile/MobileChannelAdapter`：`RecyclerView.Adapter`，分类标题用 `SpanSizeLookup` 跨满整行，频道卡片各占一格
+- [x] `ui/mobile/MobileMainActivity`：`RecyclerView` + `GridLayoutManager`；从 `LiveTvApplication.channelRepository` 取数；空结果显示 `mobile_empty_channels`
+- [x] 点击卡片带 `EXTRA_CHANNEL_ID` / `EXTRA_CHANNEL_NAME` / `EXTRA_STREAM_URL` 启动**共用**的 `PlayerActivity`；播放页逻辑**一行未改**
+- [x] `MainActivity` 分流：TV 分支强制横屏并装载原 `MainBrowseFragment`；手机分支启动 `MobileMainActivity` 后 `finish()`
+- [x] Manifest：`leanback` required 改 **false**；`MainActivity` 同时带 `LAUNCHER` + `LEANBACK_LAUNCHER`（单一入口双端各一个图标）；移除 manifest 级 landscape（避免手机启动旋转）；新增 `MobileMainActivity`（exported=false，`Theme.LiveTv.Mobile`）
+- [x] 新增资源：`activity_mobile_main.xml` / `item_mobile_channel.xml` / `item_mobile_category_header.xml` / `ic_channel_placeholder.xml` / `bg_mobile_channel_card.xml` / `Theme.LiveTv.Mobile` / 移动端颜色与字符串
+- [x] 先红后绿：临时改坏 Leanback 判定分支与 >=840dp 列数 → **2 个用例失败**（`137 tests completed, 2 failed`）；还原后全绿
+- [x] 先红后绿（宽度换算）：临时把 `pxToDp` 改成乘法 → **3 个用例失败**（`141 tests completed, 3 failed`）；还原后全绿
+- [x] 回归：`lintDebug testDebugUnitTest assembleDebug` 全绿（**0 Error**，**141 个用例**）
+- [x] 真机验证（OnePlus PKG110 / Android 16）：`am start` 后 `topResumedActivity=com.livetv.android/.ui.mobile.MobileMainActivity`（手机走触控分支）；页面渲染出「电视节目」标题、分类「新闻（5）」、整行分类标题 + 网格卡片
+- [x] **宽度换算修正后的真机复核**：竖屏 1264px @3.5x → 361dp → **2 列**（卡片 x=98 / 688）；横屏 2780px @3.5x → 794dp → **3 列**（卡片 x=238 / 1090 / 1942）。修正前因 `TypedValue.applyDimension` 反向换算，两种方向都被误判为 4 列
+
+### 阶段六未做（留给后续阶段）
+
+- **手机端卡片不加载远程频道 Logo**（技术债 #21）：`Channel.logo` 有字段但无消费方，封面用本地矢量占位图；**刻意未引入图片加载库**（Glide/Coil）
+- 触摸手势增强（长按、滑动切台、缩略图预览）——当前手机端只有"点击进入播放页"
+- 手机端播放页的触控增强（触摸进度条已在 Media3 `PlayerView` 内置，触摸切台未接）
+- 真实 Android TV 设备上的回归（阶段六 TV 分支**只做了代码级保证**，未在 TV 硬件上实测）
 
 ---
 

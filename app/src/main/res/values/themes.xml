@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- TV 端：Leanback 主题（大屏 + 遥控器焦点） -->
     <style name="Theme.LiveTv" parent="Theme.Leanback">
         <item name="defaultBrandColor">@color/brand_primary</item>
         <item name="defaultSearchColor">@color/search_highlight</item>
+    </style>
+
+    <!-- 手机/平板端：普通 AppCompat 暗色主题（触控交互，不使用 Leanback 焦点体系） -->
+    <style name="Theme.LiveTv.Mobile" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@color/mobile_background</item>
+        <item name="android:colorBackground">@color/mobile_background</item>
+        <item name="colorAccent">@color/accent</item>
+        <item name="colorPrimary">@color/primary</item>
     </style>
 </resources>

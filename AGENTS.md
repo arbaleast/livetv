@@ -5,13 +5,15 @@
 
 ## 0. 项目地基（动手前必知）
 
-Android TV 直播客户端原型，**单 `app` 模块、无 DI 框架、不拆多模块**。两条最容易踩的隐性约定：
+Android TV 直播客户端原型，**单 `app` 模块、无 DI 框架、不拆多模块**。最容易踩的隐性约定：
 
 - 频道数据只来自 `assets/`（`channels.json` + `sample.m3u`），在仓库层**按分类名合并**，全局由 `LiveTvApplication` 的缓存仓库提供 → `docs/ARCHITECTURE.md` §2–§3
 - 播放页按键拦截在 `PlayerActivity.dispatchKeyEvent`（**不是** `onKeyDown`）——Media3 会抢先吞掉方向键 → `docs/TV-INTERACTION.md` §4.1
+- 入口按设备形态分流：`MainActivity` 判定 TV 后走 Leanback、触控设备走 `ui/mobile/`；**播放页两端共用** → `docs/ARCHITECTURE.md` §7
 
 > **真机回归要求**：改动播放页的按键处理、控制器可见性或状态文案顺序后，纯 JVM 单测在结构上
 > 无法发现问题（阶段 5.5 的 D1–D4 全是这类），必须做一次真机实测。
+> 改 `MainActivity` 分流或 `ui/mobile/` 布局后，也要真机验证（阶段六只验证了手机分支）。
 
 ## 1. 分层红线（新增文件前必读）
 
@@ -22,6 +24,8 @@ Android TV 直播客户端原型，**单 `app` 模块、无 DI 框架、不拆�
 | `data/` | `domain/` + 纯 Kotlin | 直接依赖 UI 层 |
 | `domain/` | 纯 Kotlin | 依赖 `data/` 或 `android.*` |
 | `ui/` | `domain/` + 必要的 `data/` 实现类 | 硬编码业务数据；自行拼装 `ChannelDataSource` |
+| `util/` | 纯 Kotlin（判定逻辑）+ 框架门面 | 在 `util/` 里塞业务逻辑 |
+| `ui/mobile/`（除 `MobileChannelList.kt`） | `domain/` + Android View | **改动 `PlayerActivity` / `PlayerManager`**；引入图片加载库等重型依赖 |
 
 ## 2. 核心行为准则（强制）
 
@@ -57,6 +61,7 @@ Android TV 直播客户端原型，**单 `app` 模块、无 DI 框架、不拆�
 | 你要做的事 | 先读 | 触发时机 |
 |---|---|---|
 | 改 UI / 焦点 / 遥控器交互 | `docs/TV-INTERACTION.md` | 动 `ui/` 或任何按键处理之前 |
+| 改手机端（触控）UI 或设备分流 | `docs/ARCHITECTURE.md` §7 | 动 `ui/mobile/`、`util/DeviceUtils`、`MainActivity` 之前 |
 | 改架构、加数据层 / 解析器 / 仓库 | `docs/ARCHITECTURE.md` | 新增包或改数据流之前 |
 | 改播放器状态机 / 重试 / 切源 | `docs/ARCHITECTURE.md` §3.1–3.2 + `player/` 纯策略层源码 | 动 `player/` 之前 |
 | 写测试、评估改动风险 | `docs/TESTING.md` | 写第一个用例之前 |
