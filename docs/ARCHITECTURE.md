@@ -408,7 +408,7 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | 切台状态流（`ChannelNavigator` + `PlayerManager.switchChannel`） | 播放页操作方式（TV 遥控器 D-Pad / 手机触控浮层 + 抽屉） |
 
 **手机端卡片（阶段七重做）**：不再是 16:9 大封面，而是紧凑信息卡——
-36dp 圆角徽章（分类强调色 + 1～3 字简标，如 `CCTV-1 综合` → `C1`）、右上角两位序号、
+36dp 圆角徽章（分类强调色 + 1～3 字简标，如 `CCTV-1 综合` → `C1`；取不出有效字符时兜底 `TV`）、右上角两位序号、
 频道名（单行省略）、副标题（描述 → 流地址文件名主干 → 频道 id 三级兜底，保证行高一致）。
 徽章配色由 `MobileChannelList.categoryAccentIndex(categoryName)` 稳定映射，同一分类永远同色。
 
