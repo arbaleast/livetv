@@ -1,14 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- TV 端（Leanback）保留的原有品牌色 -->
     <color name="primary">#1565C0</color>
     <color name="accent">#FF9800</color>
     <color name="brand_primary">#1565C0</color>
     <color name="search_highlight">#0D47A1</color>
 
-    <!-- 手机端（MobileMainActivity）暗色调 -->
-    <color name="mobile_background">#0E1116</color>
-    <color name="mobile_card_background">#1B2129</color>
-    <color name="mobile_cover_background">#232B35</color>
-    <color name="mobile_text_primary">#FFFFFF</color>
-    <color name="mobile_text_secondary">#9AA7B4</color>
+    <!-- 手机端 / 播放页触控浮层的暗色调色板 -->
+    <color name="mobile_background">#0B0E14</color>
+    <color name="mobile_card_background">#151A23</color>
+    <color name="mobile_card_pressed">#1E2533</color>
+    <color name="mobile_card_stroke">#232B3A</color>
+    <color name="mobile_text_primary">#F3F6FA</color>
+    <color name="mobile_text_secondary">#8B95A7</color>
+    <color name="mobile_text_tertiary">#5E687A</color>
+    <color name="mobile_accent">#3B82F6</color>
+    <color name="mobile_pill_background">#151A23</color>
+    <color name="mobile_drawer_background">#E6111620</color>
+    <color name="mobile_drawer_edge">#26FFFFFF</color>
+    <color name="mobile_drawer_scrim">#99000000</color>
+
+    <!-- 分类徽章的低饱和强调色（按分类稳定选取） -->
+    <color name="mobile_badge_accent_1">#3B82F6</color>
+    <color name="mobile_badge_accent_2">#0EA5E9</color>
+    <color name="mobile_badge_accent_3">#8B5CF6</color>
+    <color name="mobile_badge_accent_4">#10B981</color>
+    <color name="mobile_badge_accent_5">#D97706</color>
+    <color name="mobile_badge_accent_6">#F472B6</color>
+
+    <array name="mobile_badge_accents">
+        <item>@color/mobile_badge_accent_1</item>
+        <item>@color/mobile_badge_accent_2</item>
+        <item>@color/mobile_badge_accent_3</item>
+        <item>@color/mobile_badge_accent_4</item>
+        <item>@color/mobile_badge_accent_5</item>
+        <item>@color/mobile_badge_accent_6</item>
+    </array>
 </resources>

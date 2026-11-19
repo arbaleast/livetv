@@ -1,21 +1,27 @@
 package com.livetv.android.ui
 
 import android.os.Bundle
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
+import androidx.recyclerview.widget.LinearLayoutManager
 import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
 import com.livetv.android.databinding.ActivityPlayerBinding
 import com.livetv.android.domain.model.Channel
+import com.livetv.android.domain.model.ChannelCategory
 import com.livetv.android.domain.repository.ChannelRepository
 import com.livetv.android.player.ChannelNavigator
 import com.livetv.android.player.PlaybackError
 import com.livetv.android.player.PlaybackState
 import com.livetv.android.player.PlayerManager
+import com.livetv.android.ui.mobile.ChannelDrawerAdapter
+import com.livetv.android.ui.mobile.ChannelDrawerModel
+import com.livetv.android.util.DeviceUtils
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,6 +47,9 @@ class PlayerActivity : AppCompatActivity() {
 
         /** 切台提示自动隐藏的延迟（毫秒）。 */
         const val SWITCH_HINT_AUTO_HIDE_DELAY_MS = 3_000L
+
+        /** 触控浮层自动隐藏的延迟（毫秒）。 */
+        const val TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS = 5_000L
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -50,6 +59,22 @@ class PlayerActivity : AppCompatActivity() {
 
     /** 当前播放的频道。 */
     private var currentChannel: Channel? = null
+
+    /**
+     * 是否是触控设备（手机 / 平板）。
+     *
+     * TV 设备上触控浮层与抽屉整体不显示，遥控器行为与阶段 5.5 完全一致。
+     */
+    private var isTouchDevice = false
+
+    /** 仓库里的全部分类，供"频道列表"抽屉使用。 */
+    private var categories: List<ChannelCategory> = emptyList()
+
+    /** 触控浮层的自动隐藏回调（用 `postDelayed` 调度，`onDestroy` 中移除）。 */
+    private val hideOverlayRunnable = Runnable { hideTouchOverlay() }
+
+    /** "频道列表"抽屉是否处于打开状态。 */
+    private var isDrawerOpen = false
 
     /**
      * 切台提示的自动隐藏任务。
@@ -90,6 +115,9 @@ class PlayerActivity : AppCompatActivity() {
             it.onSwitchingSource = { showSwitchingSourceHint() }
         }
 
+        isTouchDevice = !DeviceUtils.isTvDevice(this)
+        setupTouchUi()
+
         resolveInitialChannel()
     }
 
@@ -112,6 +140,8 @@ class PlayerActivity : AppCompatActivity() {
         // 主动取消切台提示的倒计时任务（lifecycleScope 也会兜底取消）
         switchHintJob?.cancel()
         switchHintJob = null
+        // 移除触控浮层的自动隐藏回调，避免持有 Activity 引用
+        binding.root.removeCallbacks(hideOverlayRunnable)
         super.onDestroy()
     }
 
@@ -126,7 +156,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun resolveInitialChannel() {
         val repository: ChannelRepository =
             (application as LiveTvApplication).channelRepository
-        val categories = repository.getCategories()
+        categories = repository.getCategories()
         val flat = ChannelNavigator.flatten(categories)
 
         val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID)
@@ -162,6 +192,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun renderChannel(channel: Channel) {
         currentChannel = channel
         binding.channelName.text = channel.name
+        updateOverlayChannelInfo()
     }
 
     /**
@@ -200,7 +231,16 @@ class PlayerActivity : AppCompatActivity() {
                 binding.statusText.visibility = View.GONE
                 binding.errorText.visibility = View.VISIBLE
                 binding.errorText.text = buildErrorText(state.error)
+                // 触控端：错误态必须保持浮层可见，"重试"按钮才点得到
+                if (isTouchDevice) showTouchOverlay()
             }
+        }
+
+        // 触控端"重试"按钮只在错误态有意义，离开错误态要立刻收起，
+        // 否则切台后会残留一个点了没反应的按钮。
+        if (isTouchDevice) {
+            binding.overlayRetry.visibility =
+                if (state is PlaybackState.Error) View.VISIBLE else View.GONE
         }
     }
 
@@ -254,7 +294,11 @@ class PlayerActivity : AppCompatActivity() {
             PlaybackError.Timeout -> getString(R.string.player_error_timeout)
             is PlaybackError.Unknown -> getString(R.string.player_error_unknown)
         }
-        return "$description\n${getString(R.string.player_error_hint)}"
+        // 触控端没有遥控器，操作指引必须换成"点按"的说法
+        val hint = getString(
+            if (isTouchDevice) R.string.player_error_hint_touch else R.string.player_error_hint,
+        )
+        return "$description\n$hint"
     }
 
     // ---------------- 遥控器按键 ----------------
@@ -308,6 +352,11 @@ class PlayerActivity : AppCompatActivity() {
         when (keyCode) {
             // 方向键与确认键已在 dispatchKeyEvent 中抢先处理（见上面的说明），这里只剩 BACK。
             KeyEvent.KEYCODE_BACK -> {
+                // 抽屉开着时，BACK 只负责收起抽屉，不退出播放页。
+                if (isTouchDevice && isDrawerOpen) {
+                    closeDrawer()
+                    return true
+                }
                 // 控制器开着（无论是用户呼出还是 Media3 自行弹出）时，BACK 只负责收起它。
                 if (isControllerOpenedByUser || binding.playerView.isControllerFullyVisible) {
                     isControllerOpenedByUser = false
@@ -330,6 +379,15 @@ class PlayerActivity : AppCompatActivity() {
             binding.statusText.text = getString(R.string.player_no_channel)
             return
         }
+        switchToChannel(channel)
+    }
+
+    /**
+     * 切到指定频道。
+     *
+     * **遥控器上下键与触控按钮共用这一条路径**，保证两端的状态流完全一致。
+     */
+    private fun switchToChannel(channel: Channel) {
         binding.channelName.text = channel.name
         playerManager.switchChannel(channel)
         // 必须放在 switchChannel 之后：它会同步派发 Loading 并覆盖 statusText，
@@ -338,6 +396,7 @@ class PlayerActivity : AppCompatActivity() {
         // 收起控制器放最后：Media3 在切换媒体源后会重新显示控制器，而控制器一显示
         // 就会吞掉方向键，导致连续换台从第二下起失效（阶段 5.5 真机实测发现）。
         binding.playerView.hideController()
+        updateOverlayChannelInfo()
     }
 
     @Suppress("DEPRECATION")
@@ -349,5 +408,110 @@ class PlayerActivity : AppCompatActivity() {
                 or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+    }
+
+    // ---------------- 触控浮层与频道抽屉（仅触控设备） ----------------
+
+    /**
+     * 初始化触控端 UI。
+     *
+     * **TV 设备直接返回**：所有触控视图在 XML 里默认 `gone`，遥控器路径完全不受影响。
+     */
+    private fun setupTouchUi() {
+        if (!isTouchDevice) return
+
+        // 触控端的左上角频道名由浮层顶栏代替，避免与浮层重叠
+        binding.channelName.visibility = View.GONE
+        binding.viewTapCatcher.visibility = View.VISIBLE
+        binding.viewTapCatcher.setOnClickListener { toggleTouchOverlay() }
+
+        binding.touchOverlayContainer.visibility = View.VISIBLE
+
+        binding.overlayBack.setOnClickListener { finish() }
+        binding.overlayChannelList.setOnClickListener { openDrawer() }
+        // 上一台 / 下一台与遥控器上下键共用同一条切台路径
+        binding.overlayPrev.setOnClickListener { switchChannel(direction = -1) }
+        binding.overlayNext.setOnClickListener { switchChannel(direction = 1) }
+        binding.overlayRetry.setOnClickListener {
+            playerManager.manualReset()
+            showTouchOverlay()
+        }
+        binding.drawerScrim.setOnClickListener { closeDrawer() }
+
+        updateOverlayChannelInfo()
+    }
+
+    private fun toggleTouchOverlay() {
+        if (binding.touchOverlayContainer.visibility == View.VISIBLE) {
+            binding.root.removeCallbacks(hideOverlayRunnable)
+            binding.touchOverlayContainer.visibility = View.GONE
+        } else {
+            showTouchOverlay()
+        }
+    }
+
+    /**
+     * 显示触控浮层。
+     *
+     * 5 秒无操作后自动隐藏；错误态保持常驻，否则"重试"按钮会随之消失。
+     */
+    private fun showTouchOverlay() {
+        if (!isTouchDevice) return
+        binding.touchOverlayContainer.visibility = View.VISIBLE
+        binding.overlayRetry.visibility =
+            if (playerManager.playbackState is PlaybackState.Error) View.VISIBLE else View.GONE
+        binding.root.removeCallbacks(hideOverlayRunnable)
+        binding.root.postDelayed(hideOverlayRunnable, TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS)
+    }
+
+    private fun hideTouchOverlay() {
+        if (!isTouchDevice) return
+        // 错误态下保持浮层可见，"重试"按钮才点得到
+        if (playerManager.playbackState is PlaybackState.Error) return
+        binding.touchOverlayContainer.visibility = View.GONE
+    }
+
+    /** 顶栏显示"频道名 · 位置/总数"。 */
+    private fun updateOverlayChannelInfo() {
+        if (!isTouchDevice) return
+        val channel = currentChannel ?: return
+        if (!::navigator.isInitialized) return
+        val total = navigator.channels.size
+        val position = navigator.currentIndex + 1
+        binding.overlayChannelInfo.text = if (total > 0) {
+            getString(R.string.player_position_format, channel.name, position, total)
+        } else {
+            channel.name
+        }
+    }
+
+    /**
+     * 打开"频道列表"抽屉：按分类列出全部频道，并滚动定位到当前频道。
+     */
+    private fun openDrawer() {
+        if (!isTouchDevice) return
+        val rows = ChannelDrawerModel.buildRows(categories, currentChannel?.id)
+        // 列表为空时显示空态文案，避免出现"打开抽屉一片黑"
+        binding.drawerEmpty.visibility = if (rows.isEmpty()) View.VISIBLE else View.GONE
+        binding.drawerList.visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
+        binding.drawerList.layoutManager = LinearLayoutManager(this)
+        binding.drawerList.adapter = ChannelDrawerAdapter(rows) { channel ->
+            // 先定位，让后续"上一台/下一台"从选中的频道继续
+            navigator.locate(channel.id, channel.streamUrl)
+            switchToChannel(channel)
+            closeDrawer()
+        }
+        binding.drawerScrim.visibility = View.VISIBLE
+        binding.channelDrawer.visibility = View.VISIBLE
+        isDrawerOpen = true
+
+        val index = ChannelDrawerModel.currentRowIndex(rows)
+        if (index >= 0) binding.drawerList.scrollToPosition(index)
+    }
+
+    private fun closeDrawer() {
+        binding.drawerScrim.visibility = View.GONE
+        binding.channelDrawer.visibility = View.GONE
+        isDrawerOpen = false
     }
 }

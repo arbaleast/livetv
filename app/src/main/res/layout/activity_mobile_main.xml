@@ -4,18 +4,66 @@
     android:layout_height="match_parent"
     android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/mobile_title"
+    <!-- 顶部紧凑栏：品牌 + 标题 + 总频道数 -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
         android:paddingStart="16dp"
-        android:paddingTop="20dp"
-        android:paddingEnd="16dp"
-        android:paddingBottom="8dp"
-        android:text="@string/browse_title"
-        android:textColor="@color/mobile_text_primary"
-        android:textSize="22sp"
-        android:textStyle="bold" />
+        android:paddingTop="14dp"
+        android:paddingEnd="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="@color/mobile_text_primary"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/mobile_subtitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="@string/browse_title"
+            android:textColor="@color/mobile_text_tertiary"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/mobile_total_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_mobile_pill_count"
+            android:paddingStart="10dp"
+            android:paddingTop="3dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="3dp"
+            android:textColor="@color/mobile_text_secondary"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- 横向可滚动的分类胶囊：全部 + 各个分类 -->
+    <HorizontalScrollView
+        android:id="@+id/category_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="10dp"
+        android:paddingBottom="2dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/category_pill_bar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp" />
+    </HorizontalScrollView>
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -27,20 +75,20 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:clipToPadding="false"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="16dp"
-            android:scrollbars="vertical" />
+            android:paddingStart="11dp"
+            android:paddingEnd="11dp"
+            android:paddingBottom="24dp"
+            android:scrollbars="none" />
 
         <TextView
             android:id="@+id/empty_view"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            android:padding="24dp"
+            android:gravity="center"
             android:text="@string/mobile_empty_channels"
-            android:textColor="@color/mobile_text_secondary"
-            android:textSize="16sp"
+            android:textColor="@color/mobile_text_tertiary"
+            android:textSize="14sp"
             android:visibility="gone" />
     </FrameLayout>
 </LinearLayout>

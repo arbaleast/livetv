@@ -111,6 +111,37 @@
 | 加载/缓冲提示 | Loading / Buffering / 自动重试 / 切备用线时显示提示，Playing 时隐藏 | 已实现（阶段三新增 `statusText`，文案见 `strings.xml` 的 `player_*`） |
 | 错误提示 | 按错误分类给出说明 + "按确认键重试 · 按上下键切换频道"指引 | 已实现（阶段三改为按 `PlaybackError` 分类，文案全部走 `strings.xml`） |
 | 菜单 | Menu 键呼出播放设置（码率/线路） | **未实现** |
+| 触控浮层 | 仅触控设备启用；TV 端所有触控视图 `GONE`，不参与焦点 | 已实现（阶段七）：`PlayerActivity.setupTouchUi()` |
+| 触控切台 | 底部"上一台/下一台"复用 `switchChannel(direction)`，与遥控器同一条状态流 | 已实现（阶段七） |
+| 触控抽屉 | 右侧 280dp 分类抽屉，当前频道标"播放中"并自动滚动定位 | 已实现（阶段七）：`openDrawer()` + `ChannelDrawerModel` |
+
+### 4.4 触控端（手机 / 平板）播放交互
+
+**入口隔离**：`isTouchDevice = !DeviceUtils.isTvDevice(this)`。所有触控视图（`view_tap_catcher` /
+`touch_overlay_container` / `drawer_scrim` / `channel_drawer`）在布局里默认 `GONE`，
+只有 `isTouchDevice` 为真时才被置为可见。因此 **TV 端的焦点树与按键路径完全不含这些视图**，
+阶段 5.5 的 D-Pad 行为（上下切台、OK 重试/呼出控制器、Back 两段式）不受影响。
+
+| 操作 | 行为 |
+|---|---|
+| 轻触画面 | 切换浮层显隐 |
+| 浮层顶栏「返回」 | `finish()` 退出播放页 |
+| 浮层顶栏「频道列表」 | 打开右侧抽屉（遮罩可点关闭） |
+| 底部「上一台」/「下一台」 | `switchChannel(direction = -1 / 1)` → `switchToChannel(channel)`，与遥控器共用 |
+| 底部「重试」 | 仅错误态可见，调用 `playerManager.manualReset()` |
+| 抽屉条目 | `navigator.locate(id, url)` 后 `switchToChannel(channel)`，随即收起抽屉 |
+| 系统 Back | 抽屉打开 → 只关抽屉；控制器打开 → 只关控制器；否则退出 |
+
+**自动隐藏**：显示后 `TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS = 5000` 自动收起；
+**错误态不自动隐藏**——否则"重试"按钮会在用户点之前消失。
+调度用 `binding.root.postDelayed(hideOverlayRunnable, …)`，`onDestroy()` 里
+`binding.root.removeCallbacks(hideOverlayRunnable)`，不持有 Activity、不泄漏。
+
+**状态同步**：`renderState()` 每次都会同步 `overlayRetry` 的可见性——
+离开错误态必须立刻收起"重试"，否则切台后会残留一个点了没反应的按钮（阶段七真机实测发现）。
+
+**文案分端**：触控端错误提示是 `点按「重试」重新连接 · 用下方按钮切换频道`（`player_error_hint_touch`），
+TV 端仍是 `按确认键重试 · 按上下键切换频道`（`player_error_hint`）。
 
 ## 5. 无障碍与文案
 
@@ -127,3 +158,5 @@
 3. Presenter 的 `onUnbindViewHolder` 是否清理了所有引用？
 4. 是否误用了触摸专用控件（默认 Leanback 不保证）？
 5. 是否新增了硬编码文案（应进 `strings.xml`）？
+6. 新增触控视图是否在 XML 里默认 `GONE`，并只在 `isTouchDevice` 时显示？（否则 TV 焦点会被抢）
+7. 新的延时/动画是否在 `onDestroy` 里移除了回调？

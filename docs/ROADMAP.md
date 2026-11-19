@@ -15,7 +15,7 @@
 | ViewBinding | `app/build.gradle.kts` `buildFeatures { viewBinding = true }` |
 | TV 声明齐全：`leanback` required=**false**（阶段六改为双端通用）、`touchscreen` required=false、`banner`、`LAUNCHER` + `LEANBACK_LAUNCHER` 双入口 | `app/src/main/AndroidManifest.xml` |
 | GitHub Actions CI：`push`/`pull_request` 触发，跑编译 + Lint + 单元测试 + 打包 Debug APK | `.github/workflows/android-ci.yml` |
-| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**15 个测试类 / 141 个用例**） | `app/src/test/java/com/livetv/android/` |
+| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**16 个测试类 / 161 个用例**） | `app/src/test/java/com/livetv/android/` |
 | 格式与忽略规则（`.editorconfig`、`.gitignore` 排除构建产物/密钥/`.tmp/`） | 仓库根目录 |
 
 ### 功能
@@ -23,7 +23,7 @@
 | 能力 | 证据 |
 |---|---|
 | Leanback 浏览页：标题、品牌色、Header 栏、Back 逐层返回 | `MainBrowseFragment.setupUi()` |
-| 频道分类与卡片（新闻、体育两行），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
+| 频道分类与卡片：分类行由仓库数据动态生成（当前 assets 为 新闻 / 体育 / 卫视 三类），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
 | 频道数据来自 APK 内 `assets/channels.json`（JSON 源）**与** `assets/sample.m3u`（M3U 源），仓库层**按分类名合并**同名分类 | `LocalAssetChannelSource`、`LocalM3uChannelSource`、`DefaultChannelRepository` |
 | 全局仓库单例 + 内存缓存（UI 层零重复装配） | `LiveTvApplication`、`DefaultChannelRepository` 的 `enableCache`/`refresh()`/`invalidateCache()` |
 | JSON 解析与安全校验（http/https 白名单、必填校验、disabled 与空分类过滤） | `ChannelJsonParser`、`ChannelJsonParserTest` |
@@ -43,6 +43,10 @@
 | 播放页屏幕常亮 | `PlayerActivity.onCreate` 的 `FLAG_KEEP_SCREEN_ON` |
 | 领域模型已预留主备源 / 请求头 / 图标 / EPG 字段 | `domain/model/Channel.kt` |
 | **双端 UI 分流**：`MainActivity` 按设备形态分流——TV 走 Leanback `MainBrowseFragment`，手机/平板走 `MobileMainActivity`（`RecyclerView` + `GridLayoutManager` 网格，分类标题跨整行） | `util/DeviceUtils`、`ui/mobile/` |
+| 手机端分类胶囊筛选（全部 / 按分类，选中蓝底白字）+ 总频道数胶囊（阶段七） | `MobileMainActivity.setupCategoryPills()`、`MobileChannelList.filterRows()` |
+| 手机端徽章信息卡：分类强调色徽章、两位序号、副标题三级兜底（阶段七） | `MobileChannelAdapter`、`MobileChannelList.extractChannelBadge/formatChannelSubtitle` |
+| 手机端播放页触控浮层：返回 / 上一台 / 下一台 / 重试，5 秒自动隐藏（错误态常驻）（阶段七） | `PlayerActivity.setupTouchUi()/showTouchOverlay()` |
+| 手机端频道抽屉：按分类列出全部频道、当前频道标"播放中"并自动滚动定位，点选即切台（阶段七） | `PlayerActivity.openDrawer()`、`ChannelDrawerModel`、`ChannelDrawerAdapter` |
 | 两端共用同一份数据与同一个播放页（`LiveTvApplication.channelRepository` + `PlayerActivity`） | `LiveTvApplication`、`ui/mobile/MobileMainActivity.kt` |
 
 ### 明确**没有**的能力（避免误判）
@@ -233,7 +237,7 @@
 
 ---
 
-## 阶段六（本次交付）：双端 UI 智能分流（TV 端 Leanback + 手机端 RecyclerView 触控）
+## 阶段六（已交付）：双端 UI 智能分流（TV 端 Leanback + 手机端 RecyclerView 触控）
 
 目标：同一份 APK 在 Android TV 与手机/平板上都能用，**TV 端遥控器体验 100% 不变**。
 
@@ -257,6 +261,57 @@
 - 触摸手势增强（长按、滑动切台、缩略图预览）——当前手机端只有"点击进入播放页"
 - 手机端播放页的触控增强（触摸进度条已在 Media3 `PlayerView` 内置，触摸切台未接）
 - 真实 Android TV 设备上的回归（阶段六 TV 分支**只做了代码级保证**，未在 TV 硬件上实测）
+
+---
+
+## 阶段七（本次交付）：手机端 UI 视觉重做 + 播放页触控切台与选台抽屉
+
+目标：把阶段六"能看"的手机端做成"好读"，并给播放页补上触控端应有的操作路径；
+**TV 遥控器路径一行未改**。
+
+### 手机浏览页
+
+- [x] 色板重做（`colors.xml`）：画布 `#0B0E14`、卡片 `#151A23`、按压 `#1E2533`、描边 `#232B3A`、
+  主/次/弱三级文字 `#F3F6FA`/`#8B95A7`/`#5E687A`、强调冷蓝 `#3B82F6`
+- [x] 删除巨型黄色 16:9 占位图（`ic_channel_placeholder.xml` 已删）；改为徽章 + 文字的紧凑信息卡
+- [x] 卡片：14dp 圆角（四角完整，无子图溢出）+ 1dp 描边 + ripple 按压态；36dp 圆角方形徽章（分类色 16% 底、55% 边框、原色文字）；
+      右上两位序号（`01`…）；频道名 15sp 加粗单行省略；副标题 12sp 单行，**描述 → 流地址文件名主干 → 频道 id** 三级兜底
+- [x] 顶部：`Live TV` / `电视节目` / `共 N 个频道` 胶囊
+- [x] 分类胶囊栏：`全部` + 各分类（含数量），选中为蓝底白字（`View.isSelected` + selector），可横向滚动
+- [x] 分类标题：3dp 蓝色竖条 + 分类名 + `N 台` 计数胶囊
+- [x] 纯 Kotlin 下沉：`extractChannelBadge` / `categoryAccentIndex` / `filterRows` / `formatChannelIndex` / `formatChannelSubtitle`
+- [x] 徽章配色修正：FNV 散列下 `新闻` 与 `体育` 实测撞同一色，改为"位置上加权的码点和"，三个随包分类稳定分到 0 / 3 / 5
+
+### 播放页触控浮层与抽屉（仅触控设备）
+
+- [x] `PlayerActivity` 按 `!DeviceUtils.isTvDevice(this)` 启用触控 UI；所有触控视图 XML 默认 `GONE`，TV 端不参与焦点/点击
+- [x] 顶栏：返回（`finish()`）、`频道名 · 位置/总数`、频道列表（打开抽屉）
+- [x] 底栏：上一台 / 重试（仅错误态可见）/ 下一台；上一台/下一台复用 `switchChannel(direction)` → `switchToChannel(channel)`，与遥控器同一条状态流
+- [x] 轻触画面切换浮层显隐；5 秒无操作自动隐藏；**错误态不自动隐藏**（否则"重试"点不到）；
+      `postDelayed` 的 runnable 在 `onDestroy` 里移除，不持有 Activity
+- [x] 错误提示分端：触控端 `点按「重试」重新连接 · 用下方按钮切换频道`；TV 端仍是 `按确认键重试 · 按上下键切换频道`
+- [x] 抽屉：右侧 280dp 暗面板 + 遮罩，`ChannelDrawerModel` 按分类分组、当前频道标"播放中"并自动滚动定位；
+      点条目先 `navigator.locate(channel.id, channel.streamUrl)` 再 `switchToChannel(channel)`，切完自动收起
+- [x] BACK 三段式：抽屉打开 → 只关抽屉；控制器打开 → 只关控制器；否则才退出
+- [x] 修掉"离开错误态后重试按钮残留"：`renderState` 每次同步 `overlayRetry` 可见性
+
+### 测试与真机
+
+- [x] 新增 20 个纯 JVM 用例（`MobileChannelListTest` 扩 14 + 新增 `ChannelDrawerModelTest` 7），累计 **161 个用例 / 16 个测试类**
+- [x] 先红后绿：把 `filterRows` 改成忽略筛选 → `160 tests completed, 1 failed`；
+      把徽章 CJK 分支从 2 字改成 1 字 → `160 tests completed, 1 failed`；两次均已还原
+- [x] 回归：`./gradlew lintDebug testDebugUnitTest assembleDebug --console=plain --no-daemon` 全绿（**0 Error**，**161 个用例**）
+- [x] 真机（OnePlus PKG110 / Android 16 / 1264×2780 @3.5x）四场景实测：
+  1. 竖屏首页"全部"——2 列网格，分类标题蓝条 + `5 台`/`3 台`，卡片徽章按分类分色（新闻蓝 / 体育绿）
+  2. 竖屏/横屏分类筛选——点"体育 3"后只剩 3 张卡片、无冗余分类标题、序号从 `01` 重新开始
+  3. 播放页触控浮层——`体育赛事 · 6/10` + 返回/频道列表/上一台/重试/下一台；轻触画面可收起与再显示
+  4. 抽屉选台——打开抽屉定位到"播放中"的当前频道，点"湖南卫视"立即切到 `湖南卫视 · 9/10` 并自动收起
+
+### 阶段七未做
+
+- 触摸手势（长按预览、左右滑动切台）；抽屉内搜索
+- 手机端加载远程 Logo（技术债 #21 仍在）
+- 真实 Android TV 硬件回归：TV 分支仅代码级保证 + 触控视图 `GONE` 隔离
 
 ---
 

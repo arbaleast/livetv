@@ -31,13 +31,13 @@ class MobileChannelListTest {
             MobileRow.CategoryHeader(categoryId = "news", categoryName = "新闻", channelCount = 2),
             rows[0],
         )
-        assertEquals(MobileRow.ChannelCard(channel("n1")), rows[1])
-        assertEquals(MobileRow.ChannelCard(channel("n2")), rows[2])
+        assertEquals(MobileRow.ChannelCard(channel("n1"), "news", "新闻"), rows[1])
+        assertEquals(MobileRow.ChannelCard(channel("n2"), "news", "新闻"), rows[2])
         assertEquals(
             MobileRow.CategoryHeader(categoryId = "sports", categoryName = "体育", channelCount = 1),
             rows[3],
         )
-        assertEquals(MobileRow.ChannelCard(channel("s1")), rows[4])
+        assertEquals(MobileRow.ChannelCard(channel("s1"), "sports", "体育"), rows[4])
     }
 
     @Test
@@ -120,5 +120,124 @@ class MobileChannelListTest {
         // 2780px @ 3.5x = 794dp -> 横屏三列（不是四列）
         val widthDp = MobileChannelList.pxToDp(2780, 3.5f)
         assertEquals(3, MobileChannelList.gridSpanCount(widthDp))
+    }
+
+    // ---------------- 徽章简标 ----------------
+
+    @Test
+    fun `badge uses first letter and digits for alphanumeric channel names`() {
+        assertEquals("C1", MobileChannelList.extractChannelBadge("CCTV-1 综合"))
+        assertEquals("C13", MobileChannelList.extractChannelBadge("CCTV-13 新闻"))
+        assertEquals("C1", MobileChannelList.extractChannelBadge("CCTV1"))
+        assertEquals("C5", MobileChannelList.extractChannelBadge("  CCTV-5  "))
+    }
+
+    @Test
+    fun `badge uses first two chinese characters when there is no alphanumeric prefix`() {
+        assertEquals("综合", MobileChannelList.extractChannelBadge("综合新闻"))
+        assertEquals("湖南", MobileChannelList.extractChannelBadge("湖南卫视"))
+    }
+
+    @Test
+    fun `badge uses first two latin letters for western channel names`() {
+        assertEquals("ES", MobileChannelList.extractChannelBadge("ESPN HD"))
+        assertEquals("SK", MobileChannelList.extractChannelBadge("Sky Sports"))
+    }
+
+    @Test
+    fun `badge is empty for blank or symbol only names`() {
+        assertEquals("", MobileChannelList.extractChannelBadge(""))
+        assertEquals("", MobileChannelList.extractChannelBadge("   "))
+        assertEquals("", MobileChannelList.extractChannelBadge("★"))
+    }
+
+    // ---------------- 分类筛选 ----------------
+
+    @Test
+    fun `filtering by null keeps the grouped view with category headers`() {
+        val categories = listOf(
+            category("news", "新闻", listOf(channel("n1"), channel("n2"))),
+            category("sports", "体育", listOf(channel("s1"))),
+        )
+        val rows = MobileChannelList.filterRows(categories, null)
+
+        assertEquals(5, rows.size)
+        assertTrue(rows[0] is MobileRow.CategoryHeader)
+        assertEquals(
+            MobileRow.CategoryHeader(categoryId = "news", categoryName = "新闻", channelCount = 2),
+            rows[0],
+        )
+    }
+
+    @Test
+    fun `filtering by a category returns only its cards without a redundant header`() {
+        val categories = listOf(
+            category("news", "新闻", listOf(channel("n1"), channel("n2"))),
+            category("sports", "体育", listOf(channel("s1"))),
+        )
+        val rows = MobileChannelList.filterRows(categories, "sports")
+
+        assertEquals(1, rows.size)
+        assertEquals(MobileRow.ChannelCard(channel("s1"), "sports", "体育"), rows[0])
+        assertTrue(rows.none { it is MobileRow.CategoryHeader })
+    }
+
+    @Test
+    fun `filtering by an unknown category returns nothing instead of falling back`() {
+        val categories = listOf(category("news", "新闻", listOf(channel("n1"))))
+
+        assertEquals(emptyList<MobileRow>(), MobileChannelList.filterRows(categories, "missing"))
+    }
+
+    // ---------------- 副标题兜底 ----------------
+
+    @Test
+    fun `subtitle prefers the description`() {
+        assertEquals("描述n1", MobileChannelList.formatChannelSubtitle(channel("n1")))
+    }
+
+    @Test
+    fun `subtitle falls back to the stream url stem when description is blank`() {
+        val blank = Channel(id = "cctv1", name = "CCTV-1 综合", description = "  ", streamUrl = "https://example.com/live/cctv1.m3u8")
+        assertEquals("cctv1", MobileChannelList.formatChannelSubtitle(blank))
+    }
+
+    @Test
+    fun `subtitle falls back to the channel id when there is neither description nor url`() {
+        val bare = Channel(id = "x1", name = "频道", description = "", streamUrl = "")
+        assertEquals("x1", MobileChannelList.formatChannelSubtitle(bare))
+    }
+
+    // ---------------- 序号与强调色 ----------------
+
+    @Test
+    fun `channel index is zero padded`() {
+        assertEquals("01", MobileChannelList.formatChannelIndex(1))
+        assertEquals("09", MobileChannelList.formatChannelIndex(9))
+        assertEquals("10", MobileChannelList.formatChannelIndex(10))
+        assertEquals("00", MobileChannelList.formatChannelIndex(0))
+        assertEquals("00", MobileChannelList.formatChannelIndex(-5))
+    }
+
+    @Test
+    fun `category accent index is stable and inside the palette range`() {
+        val first = MobileChannelList.categoryAccentIndex("新闻")
+        val second = MobileChannelList.categoryAccentIndex("新闻")
+        assertEquals(first, second)
+        assertTrue(first in 0 until MobileChannelList.BADGE_ACCENT_COUNT)
+        assertTrue(MobileChannelList.categoryAccentIndex("卫视") in 0 until MobileChannelList.BADGE_ACCENT_COUNT)
+        assertEquals(0, MobileChannelList.categoryAccentIndex(""))
+    }
+
+    @Test
+    fun `the shipped categories get distinct accent colors`() {
+        // 三个随包分类必须落到不同色号，否则徽章会全都一个颜色
+        val news = MobileChannelList.categoryAccentIndex("新闻")
+        val sports = MobileChannelList.categoryAccentIndex("体育")
+        val satellite = MobileChannelList.categoryAccentIndex("卫视")
+
+        assertEquals(0, news)
+        assertEquals(3, sports)
+        assertEquals(5, satellite)
     }
 }

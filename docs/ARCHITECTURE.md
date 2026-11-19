@@ -96,7 +96,9 @@ app/src/main/java/com/livetv/android/
 | `DeviceUtils`（util） | **阶段六**：TV 形态判定。`isTvDevice(context)` 为 Android 门面；`isTvDevice(uiModeType, hasLeanbackFeature)` 为**纯函数**（可直接 JVM 单测） |
 | `MobileChannelList`（ui/mobile，纯） | **阶段六**：纯函数——`buildRows(categories)` 把分类展开成"标题 + 卡片"行序列（跳过空分类），`gridSpanCount(screenWidthDp)` 决定网格列数 |
 | `MobileChannelAdapter`（ui/mobile） | **阶段六**：`RecyclerView.Adapter`，两种 item（`CategoryHeader` 跨整行 / `ChannelCard` 占一格），点击回调交给 Activity |
-| `MobileMainActivity`（ui/mobile） | **阶段六**：手机/平板主界面——`RecyclerView` + `GridLayoutManager`，从 `LiveTvApplication.channelRepository` 取数，点击卡片带三个 Extra 启动**共用**的 `PlayerActivity` |
+| `MobileMainActivity`（ui/mobile） | **阶段六**：手机/平板主界面——`RecyclerView` + `GridLayoutManager`，从 `LiveTvApplication.channelRepository` 取数，点击卡片带三个 Extra 启动**共用**的 `PlayerActivity`。**阶段七**：加分类胶囊筛选（全部 / 按分类）与总频道数 |
+| `ChannelDrawerModel`（ui/mobile，纯） | **阶段七**：播放页"频道列表"抽屉的行序列——`buildRows(categories, currentChannelId)` 分组并标记当前频道，`currentRowIndex` / `currentChannelIndex` 供自动滚动定位 |
+| `ChannelDrawerAdapter`（ui/mobile） | **阶段七**：抽屉的 `RecyclerView.Adapter`（分类标题 / 频道条目，当前频道显示"播放中"） |
 
 > **纯策略层约束**：`player` 包中除 `PlayerManager.kt` 外的文件**禁止**引用 `android.*` 与
 > `androidx.media3.*`，由 `PlayerLayerPurityTest` 做源码扫描固化（3 个用例）。
@@ -403,9 +405,25 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | `PlayerActivity` + `PlayerManager`（播放、重试、Failover） | 主题（`Theme.Leanback` vs `Theme.AppCompat`） |
 | `Channel` / `ChannelCategory` 领域模型 | 卡片呈现（`ImageCardView` vs 本地矢量占位封面） |
 | 三个 Intent Extra（`EXTRA_CHANNEL_ID` / `EXTRA_CHANNEL_NAME` / `EXTRA_STREAM_URL`） | 屏幕方向（TV 强制横屏 / 手机跟随系统） |
+| 切台状态流（`ChannelNavigator` + `PlayerManager.switchChannel`） | 播放页操作方式（TV 遥控器 D-Pad / 手机触控浮层 + 抽屉） |
 
-> **阶段六未做**：手机端不加载远程频道 Logo（`Channel.logo` 已有字段但无消费方，卡片用本地矢量占位图）；
+**手机端卡片（阶段七重做）**：不再是 16:9 大封面，而是紧凑信息卡——
+36dp 圆角徽章（分类强调色 + 1～3 字简标，如 `CCTV-1 综合` → `C1`）、右上角两位序号、
+频道名（单行省略）、副标题（描述 → 流地址文件名主干 → 频道 id 三级兜底，保证行高一致）。
+徽章配色由 `MobileChannelList.categoryAccentIndex(categoryName)` 稳定映射，同一分类永远同色。
+
+**播放页触控浮层（阶段七）**：`isTouchDevice = !DeviceUtils.isTvDevice(this)` 才启用，
+所有触控视图在 XML 里默认 `GONE`，TV 端完全不会创建焦点或拦截点击：
+顶栏「返回 / 频道名 · 位置/总数 / 频道列表」、底栏「上一台 / 重试（仅错误态）/ 下一台」。
+轻触画面切换浮层显隐，5 秒无操作自动隐藏（错误态不自动隐藏，"重试"必须点得到）；
+`postDelayed` 的 runnable 在 `onDestroy` 里 `removeCallbacks`，不会持有 Activity。
+抽屉是右侧 280dp 面板 + 遮罩：按分类列出全部频道、当前频道标"播放中"并自动滚动定位；
+点条目先 `navigator.locate()` 再走与遥控器完全相同的 `switchToChannel(channel)`，
+因此抽屉选台之后"上一台/下一台"的连续性也正确；BACK 优先关抽屉，再关控制器，最后才退出。
+
+> **阶段六七未做**：手机端不加载远程频道 Logo（`Channel.logo` 已有字段但无消费方，卡片用徽章代替封面图）；
 > 引入图片加载库（Glide/Coil 等）被明确排除，避免为占位图引入重型依赖。
+> TV 分支**只做了代码级保证与触控视图隔离**，未在真实 Android TV 硬件上回归。
 
 ---
 
@@ -416,7 +434,7 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二/三/四/五/六扩充** | `app/src/test` 现有 15 个测试类 / **141 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段七持续扩充** | `app/src/test` 现有 16 个测试类 / **161 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 20） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |
@@ -434,7 +452,9 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | 16 | **播放页未接 `PlayerView` 控制器按钮** | 切台只通过遥控器方向键；控制器里的"上一台/下一台"按钮未接入 `ChannelNavigator` | 触屏/控制器操作无法切台 |
 | 17 | ~~HTTP 状态码识别依赖 Media3 错误码区间~~ **阶段 3.5 修复，阶段 5.5 修正** | `findInvalidResponseCode()` 遍历 cause 链取 `InvalidResponseCodeException.responseCode`。阶段 3.5 曾保留 `HTTP_STATUS_RANGE = 2000..2999` 作为兜底，**该兜底是错的**：2000-2008 是 Media3 的 IO 错误段（2001=网络连接失败、2002=连接超时），真机上把网络故障显示成了"HTTP 2001"。阶段 5.5 已删除该区间，只信 cause 链里的真实响应码 | 错误文案不再误导；`classifyCause()` 同时改为遍历 cause 链，能识别被 `HttpDataSourceException` 包住的 `UnknownHostException`/`SocketTimeoutException` |
 | 18 | ~~切台提示不自动消失~~ **阶段 3.5 已修复** | `PlayerActivity.showChannelSwitchedHint()` 用 `lifecycleScope.launch { delay(3000) }` 自动隐藏 `statusText`；显示新提示前 `cancel()` 旧 Job，`onDestroy()` 再兜底取消 | 短时提示不再长期遮挡画面 |
-| 21 | **手机端卡片不加载频道 Logo** | `Channel.logo` 已有字段（阶段五由 M3U `tvg-logo` 填充），但 `MobileChannelAdapter` 只绑名称与描述，封面用本地矢量占位图 | 引入图片加载库被阶段六明确排除；远程图加载列为后续方向 |
+| 21 | **手机端卡片不加载频道 Logo** | `Channel.logo` 已有字段（阶段五由 M3U `tvg-logo` 填充），但 `MobileChannelAdapter` 只绑名称与副标题；阶段七起卡片不再有封面位，改为分类色徽章 | 引入图片加载库被阶段六明确排除；远程图加载列为后续方向 |
+| 23 | **触控浮层没有"正在播放"之外的进度信息** | `PlayerActivity` 触控浮层只显示频道名与位置，进度条仍用 Media3 `PlayerView` 内置控制器（需主动呼出） | 手机端未做常驻进度条与拖动切台 |
+| 24 | **播放页 BACK 行为分三档但无统一返回栈** | `dispatchKeyEvent`/`onKeyDown`：抽屉 → 控制器 → 退出；抽屉状态用 Activity 字段 `isDrawerOpen` 而非 `OnBackPressedDispatcher` | 后续接入 `onBackPressedDispatcher` 时应整体改写这三个分支 |
 | 22 | **手机端浏览页仍无加载/空态之外的错误反馈** | 与技术债 15 同源：手机端 `MobileMainActivity.loadChannels()` 同步取数，空结果展示 `mobile_empty_channels` | 手机端已有空态文案，缺"加载失败"与"重试"区分（与 TV 端同一债务） |
 
 ---

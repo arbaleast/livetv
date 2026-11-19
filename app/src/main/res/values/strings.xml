@@ -17,10 +17,25 @@
     <string name="player_error_timeout">连接超时</string>
     <string name="player_error_unknown">播放失败</string>
     <string name="player_error_hint">按确认键重试 · 按上下键切换频道</string>
+    <string name="player_error_hint_touch">点按「重试」重新连接 · 用下方按钮切换频道</string>
     <string name="player_switched_to">已切换到：%1$s</string>
     <string name="player_no_channel">没有可播放的频道</string>
 
     <!-- 手机端（MobileMainActivity） -->
     <string name="mobile_empty_channels">暂无可播放的频道</string>
-    <string name="mobile_channel_cover_desc">频道封面</string>
+    <string name="mobile_total_channels">共 %1$d 个频道</string>
+    <string name="mobile_all_categories">全部</string>
+    <string name="mobile_category_count">%1$d 台</string>
+    <string name="mobile_badge_desc">频道徽章</string>
+
+    <!-- 播放页触控浮层 / 频道抽屉 -->
+    <string name="player_touch_prev">上一台</string>
+    <string name="player_touch_next">下一台</string>
+    <string name="player_touch_list">频道列表</string>
+    <string name="player_touch_back">返回</string>
+    <string name="player_touch_retry">重试</string>
+    <string name="player_drawer_title">全部频道</string>
+    <string name="player_drawer_empty">没有可播放的频道</string>
+    <string name="player_drawer_playing">播放中</string>
+    <string name="player_position_format">%1$s · %2$d/%3$d</string>
 </resources>

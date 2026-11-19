@@ -10,7 +10,11 @@
     <style name="Theme.LiveTv.Mobile" parent="Theme.AppCompat.NoActionBar">
         <item name="android:windowBackground">@color/mobile_background</item>
         <item name="android:colorBackground">@color/mobile_background</item>
-        <item name="colorAccent">@color/accent</item>
-        <item name="colorPrimary">@color/primary</item>
+        <item name="android:statusBarColor">@color/mobile_background</item>
+        <item name="android:navigationBarColor">@color/mobile_background</item>
+        <item name="android:textColorPrimary">@color/mobile_text_primary</item>
+        <item name="colorAccent">@color/mobile_accent</item>
+        <item name="colorPrimary">@color/mobile_background</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>
