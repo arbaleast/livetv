@@ -43,6 +43,13 @@ class PlayerManager(
         const val SWITCH_SOURCE_DELAY_MS = 500L
 
         /**
+         * 快速失败（401 / 403 / 429）后切备用源的等待时间（毫秒）。
+         *
+         * 这类错误重试也不会变好，因此不再走 1500ms / 3000ms 退避，直接换源。
+         */
+        const val FAST_FAIL_SWITCH_DELAY_MS = 0L
+
+        /**
          * Media3 中唯一代表"服务端返回了错误状态码"的错误码
          * （`PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS`）。
          *
@@ -220,6 +227,10 @@ class PlayerManager(
      */
     private fun handlePlaybackError(error: PlaybackException) {
         val mapped = mapException(error)
+        if (RetryPolicy.isFastFail(mapped)) {
+            handleFastFail(mapped)
+            return
+        }
         val outcome = RetryPolicy.onFailure(retryState, mapped)
         when (outcome) {
             is RetryPolicy.RetryOutcome.Retry -> {
@@ -239,6 +250,27 @@ class PlayerManager(
             RetryPolicy.RetryOutcome.Fatal -> {
                 dispatch(PlaybackEvent.Fatal(mapped))
             }
+        }
+    }
+
+    /**
+     * 快速失败：HTTP 401 / 403 / 429。
+     *
+     * 这类结论重试也不会变好（鉴权失败、防盗链拦截、风控限流），因此：
+     * - 取消当前源所有待执行的退避重试；
+     * - 还有备用源 → **立即**切到下一条源（不再等 1500ms / 3000ms）；
+     * - 没有备用源 → `Fatal`，进入 `PlaybackState.Error(fatal = true)` 等用户手动重置。
+     */
+    private fun handleFastFail(mapped: PlaybackError) {
+        retryHandler.removeCallbacksAndMessages(null)
+        when (val outcome = RetryPolicy.onFailure(retryState, mapped)) {
+            is RetryPolicy.RetryOutcome.SwitchSource -> {
+                retryState = retryState.copy(sourceIndex = outcome.index, retryCount = 0)
+                onSwitchingSource?.invoke(outcome.index)
+                scheduleReload(FAST_FAIL_SWITCH_DELAY_MS)
+            }
+
+            else -> dispatch(PlaybackEvent.Fatal(mapped))
         }
     }
 

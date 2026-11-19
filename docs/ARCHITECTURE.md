@@ -33,7 +33,7 @@
 
 ```
 app/src/main/java/com/livetv/android/
-├── LiveTvApplication.kt                  # ← 阶段五新增：全局 ChannelRepository 单例（带内存缓存）
+├── LiveTvApplication.kt                  # ← 阶段八升级：全局订阅仓库 + 订阅协调器
 ├── MainActivity.kt                       # 宿主 Activity
 ├── data/                                 # ← 阶段二新增：数据获取与解析（阶段四扩展 M3U）
 │   ├── model/ChannelConfigDto.kt        # JSON 映射 DTO（version / categories / channels）
@@ -42,11 +42,18 @@ app/src/main/java/com/livetv/android/
 │   ├── source/ChannelDataSource.kt       # 数据源接口
 │   ├── source/LocalAssetChannelSource.kt # 读 assets/channels.json 并调用 Parser
 │   ├── source/LocalM3uChannelSource.kt  # ← 阶段四新增：读 assets/sample.m3u 并调用 Parser
+│   ├── remote/RemoteM3uFetcher.kt       # ← 阶段八新增：HttpURLConnection 远程 M3U 拉取
+│   ├── subscription/SubscriptionStore.kt        # ← 阶段八新增：订阅持久化接口（纯 Kotlin）
+│   ├── subscription/FileSubscriptionStore.kt    # ← 阶段八新增：SharedPreferences + filesDir 实现
+│   ├── SubscriptionCoordinator.kt       # ← 阶段八新增：后台拉取 + 主线程回传
 │   └── repository/DefaultChannelRepository.kt   # ← 阶段四升级：多数据源合并（阶段五加缓存）
+│   └── repository/SubscriptionChannelRepository.kt # ← 阶段八新增：远程→缓存→内置 三级兜底
 ├── domain/                               # ← 阶段二新增：领域层
 │   ├── model/Channel.kt                  # 领域模型（由阶段一 model/Channel.kt 升级迁移）
 │   ├── model/ChannelCategory.kt          # 分类领域模型
-│   └── repository/ChannelRepository.kt   # 仓库接口
+│   ├── model/RefreshResult.kt            # ← 阶段八新增：刷新结果（成功/缓存兜底/内置兜底）
+│   ├── repository/ChannelRepository.kt   # 仓库接口
+│   └── repository/SubscriptionRepository.kt # ← 阶段八新增：订阅仓库接口（继承 ChannelRepository）
 ├── player/                               # ← 阶段三新增：播放器层
 │   ├── PlaybackState.kt                  # 纯 Kotlin：状态密封接口（纯策略层）
 │   ├── PlaybackEvent.kt                  # 纯 Kotlin：事件密封接口（纯策略层）
@@ -71,7 +78,7 @@ app/src/main/java/com/livetv/android/
 | 类 | 职责 |
 |---|---|
 | `MainActivity` | **阶段六**：设备形态**分流入口**——`DeviceUtils.isTvDevice(this)` 为真则装载 Leanback `MainBrowseFragment`（并强制横屏），否则启动 `MobileMainActivity` 后 `finish()` |
-| `LiveTvApplication`（阶段五） | 全局 `ChannelRepository` 持有者（`by lazy` 装配 JSON + M3U 两个数据源）；提供 `refreshChannels()` 强制重算 |
+| `LiveTvApplication`（阶段八） | 全局**订阅**仓库持有者：`by lazy` 装配 `SubscriptionChannelRepository`（内置 JSON + M3U 源、`RemoteM3uFetcher`、`FileSubscriptionStore`）；`channelRepository` 指向它供两端共用；另持有 `subscriptionCoordinator` |
 | `MainBrowseFragment` | 浏览页：标题/品牌色，**通过 `ChannelRepository` 取分类列表**并组装 `ListRow`，处理卡片点击跳转播放 |
 | `ChannelCardPresenter` | 渲染 `ImageCardView` 卡片（标题 + 描述） |
 | `PlayerActivity` | 播放页：加载频道、渲染状态与提示、**遥控器按键映射**；不含 ExoPlayer 逻辑 |
@@ -99,6 +106,13 @@ app/src/main/java/com/livetv/android/
 | `MobileMainActivity`（ui/mobile） | **阶段六**：手机/平板主界面——`RecyclerView` + `GridLayoutManager`，从 `LiveTvApplication.channelRepository` 取数，点击卡片带三个 Extra 启动**共用**的 `PlayerActivity`。**阶段七**：加分类胶囊筛选（全部 / 按分类）与总频道数 |
 | `ChannelDrawerModel`（ui/mobile，纯） | **阶段七**：播放页"频道列表"抽屉的行序列——`buildRows(categories, currentChannelId)` 分组并标记当前频道，`currentRowIndex` / `currentChannelIndex` 供自动滚动定位 |
 | `ChannelDrawerAdapter`（ui/mobile） | **阶段七**：抽屉的 `RecyclerView.Adapter`（分类标题 / 频道条目，当前频道显示"播放中"） |
+| `RemoteM3uFetcher`（data） | **阶段八**：远程 M3U 拉取——仅 `http`/`https`，连接 5000 ms / 读取 8000 ms / 响应上限 2 MB，仅 HTTP 200 成功，UTF-8 解码；失败归一为 `HttpError` / `NetworkError` / `InvalidUrl` / `SizeExceeded` |
+| `SubscriptionStore`（data，纯接口） | **阶段八**：订阅持久化接口——`getUrl()` / `saveUrl()` / `readPlaylist()` / `writePlaylist()` / `clearPlaylist()`；测试用内存 fake |
+| `FileSubscriptionStore`（data） | **阶段八**：URL 存 `SharedPreferences`，播放列表存 `filesDir/remote_playlist.m3u`，临时文件 + rename 原子写 |
+| `SubscriptionCoordinator`（data） | **阶段八**：单线程 `ExecutorService` 串行拉取 + 主线程 `Handler` 回传；不引入 Coroutines |
+| `SubscriptionChannelRepository`（data） | **阶段八**：远程订阅 → 本地有效缓存 → 内置 assets 三级兜底；`@Volatile` 快照 + 写操作加锁；换 URL 作废旧缓存 |
+| `SubscriptionRepository`（domain） | **阶段八**：在 `ChannelRepository` 之上追加 `refreshSubscription()` / `updateSubscriptionUrl()` / `findChannelById()` / `getSubscriptionUrl()` |
+| `RefreshResult`（domain） | **阶段八**：刷新结果——`BuiltinOnly` / `RemoteLoaded` / `FallbackToCache` / `FallbackToBuiltin`，`channelCount` 一律是**频道总数** |
 
 > **纯策略层约束**：`player` 包中除 `PlayerManager.kt` 外的文件**禁止**引用 `android.*` 与
 > `androidx.media3.*`，由 `PlayerLayerPurityTest` 做源码扫描固化（3 个用例）。
@@ -116,7 +130,9 @@ MainBrowseFragment.onCreate
   │     channelRepository = (requireActivity().application as LiveTvApplication).channelRepository
   │                            ↑ 阶段五：全局单例（带内存缓存），UI 层不再自行拼装数据源
   │     channelRepository.getCategories()               ← 领域接口
-  │       └─ DefaultChannelRepository.getCategories()   ← 逐源 try/catch，单源失败只跳过该源；命中缓存则直接返回
+  │       └─ SubscriptionChannelRepository.getCategories()   ← 阶段八：远程订阅 → 缓存 → 内置三级兜底
+  │           │     （内部仍复用 DefaultChannelRepository 聚合内置源：逐源 try/catch，
+  │           │       单源失败只跳过该源；命中缓存则直接返回）
   │           ├─ LocalAssetChannelSource.loadCategories()
   │           │     ├─ assets.open("channels.json").use { readBytes().toString(UTF_8) }   ← 失败 → emptyList()
   │           │     └─ ChannelJsonParser.parse(json)     ← 纯函数，失败 → emptyList()
@@ -425,6 +441,100 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 > 引入图片加载库（Glide/Coil 等）被明确排除，避免为占位图引入重型依赖。
 > TV 分支**只做了代码级保证与触控视图隔离**，未在真实 Android TV 硬件上回归。
 
+### 8. 远程 M3U 订阅与三级兜底（阶段八新增）
+
+仓库的数据来源从"只有内置 assets"扩展为**远程订阅 → 本地有效缓存 → 内置 assets** 三级兜底。
+TV 端与手机端共用同一个 `SubscriptionChannelRepository`，两端都能看到远程频道。
+
+```
+LiveTvApplication（Application）
+ ├─ subscriptionRepository: SubscriptionRepository (by lazy)
+ │    └─ SubscriptionChannelRepository(
+ │         builtinSources = [LocalAssetChannelSource(assets), LocalM3uChannelSource(assets)],
+ │         fetcher = RemoteM3uFetcher(),          ← HttpURLConnection，纯 JDK
+ │         store   = FileSubscriptionStore(this))  ← SharedPreferences + filesDir
+ ├─ channelRepository: ChannelRepository = subscriptionRepository   ← 两端共用
+ └─ subscriptionCoordinator: SubscriptionCoordinator                ← 后台拉取 + 主线程回传
+```
+
+**拉取层 `RemoteM3uFetcher`（纯 Kotlin，无第三方依赖）**：
+
+| 约束 | 值 | 位置 |
+|---|---|---|
+| 允许协议 | 仅 `http` / `https`（忽略大小写） | `RemoteM3uFetcher.fetch()` |
+| 连接超时 | 5000 ms | `CONNECT_TIMEOUT_MS` |
+| 读取超时 | 8000 ms | `READ_TIMEOUT_MS` |
+| 响应体上限 | 2 MB，超出即 `SizeExceeded` | `MAX_RESPONSE_BYTES` |
+| 成功条件 | 仅 HTTP 200，按 UTF-8 解码 | `FetchResult.Success(content)` |
+
+失败被归一为 `HttpError(code)` / `NetworkError(reason)` / `InvalidUrl(reason)` / `SizeExceeded`，
+非法协议（`file://`、`ftp://`、空串）在**建立连接之前**就被拒绝。
+
+**持久化 `FileSubscriptionStore`**：订阅 URL 存 `SharedPreferences("livetv_subscription")`，
+播放列表原文存 `context.filesDir/remote_playlist.m3u`，写入走"临时文件 + rename"保证原子性。
+
+**兜底语义（`SubscriptionChannelRepository.refreshSubscription()`）**：
+
+| 情况 | 结果 | 副作用 |
+|---|---|---|
+| 未配置订阅 URL | `RefreshResult.BuiltinOnly(n)` | 切回内置 assets |
+| 拉取成功且解析出 ≥1 个频道 | `RefreshResult.RemoteLoaded(n)` | 落盘缓存 + 替换快照 |
+| 拉取失败 / 解析为空，但有可解析缓存 | `RefreshResult.FallbackToCache(n, reason)` | 用缓存覆盖快照，**不清空**现有列表 |
+| 拉取失败 / 解析为空，且无缓存 | `RefreshResult.FallbackToBuiltin(n, reason)` | 回退内置 assets |
+
+`n` 一律是**频道总数**（各分类频道数之和），不是分类数。
+HTTP 200 但内容为空/无有效频道时按失败处理——**绝不因为一次坏响应把用户已有列表清空**。
+更换订阅 URL 会立即作废旧缓存（URL 路径大小写敏感，比较时不做大小写折叠）。
+
+**异步**：`SubscriptionCoordinator` 用单线程 `ExecutorService` 串行执行拉取，
+结果经主线程 `Handler` 回传，避免两个刷新交错改快照；不引入 Coroutines。
+
+### 9. Debug 明文放行隔离（阶段八新增）
+
+`targetSdk = 34` 下 Android 默认禁止明文 HTTP。为了让 Debug 包能连本机教学沙箱，
+放行**只做在 Debug 源集**：
+
+| 源集 | 文件 | 内容 |
+|---|---|---|
+| `app/src/debug/` | `AndroidManifest.xml` | `<application android:networkSecurityConfig="@xml/network_security_config" />` |
+| `app/src/debug/res/xml/` | `network_security_config.xml` | `base-config cleartextTrafficPermitted="false"`，`domain-config` 仅放行 `127.0.0.1` 与 `localhost`（`includeSubdomains="false"`） |
+| `app/src/main/` | — | **没有任何** `usesCleartextTraffic` / `networkSecurityConfig` / `cleartextTrafficPermitted` |
+
+Release 构建不包含 `app/src/debug/`，因此正式包既不放行明文，也不会出现 `127.0.0.1` 例外。
+手机端「订阅源」对话框里的「填入本地 SecLab」入口也只在
+`(applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0` 时出现。
+
+> **Lint 注意**：manifest 合并以优先级更高的 Debug 文件为基准文档，Lint 的
+> `MissingLeanbackLauncher` / `MissingLeanbackSupport` / `ImpliedTouchscreenHardware`
+> 三条 TV 检查会把根 `<manifest>` 元素级问题定位到 `app/src/debug/AndroidManifest.xml`。
+> 真正的 `leanback` / `touchscreen` 声明（`required="false"`）与 `LEANBACK_LAUNCHER` 入口
+> 都在 `app/src/main/AndroidManifest.xml` 且完整，因此 Debug 覆盖文件用
+> `tools:ignore="MissingLeanbackLauncher,MissingLeanbackSupport,ImpliedTouchscreenHardware"`
+> 显式忽略这三条与覆盖无关的检查；**不要**为了消错去改 main 源集里已经正确的 TV 声明。
+
+### 10. 401/403/429 快速失败（阶段八新增）
+
+`401`（未授权）、`403`（拒绝访问 / 签名过期 / 防盗链拦截）、`429`（风控限流）属于
+**重试也不会变好**的状态，因此不消耗 1500 ms / 3000 ms 的退避重试：
+
+| 状态 | 行为 |
+|---|---|
+| 401 / 403 / 429，当前源还有备用源 | 取消待执行重试 → 立即（0 ms）切下一个源，重试计数清零 |
+| 401 / 403 / 429，没有备用源 | 直接 `PlaybackEvent.Fatal` → `PlaybackState.Error(fatal = true)`，等待用户手动重置 |
+| 5xx / 网络中断 / 超时 / 源解析失败 | 维持原策略：每源最多 2 次重试，退避 1500 ms / 3000 ms，耗尽后切源，全耗尽才 `Fatal` |
+
+判定逻辑是纯函数，位于 `player/RetryPolicy.kt` 的 `isFastFailHttpStatus(code)` / `isFastFail(error)`，
+由 `PlayerManager.handleFastFail()` 消费；`PlayerManager` 里的快速失败分支**不派发 `Failed`**，
+因为 `PlaybackReducer` 一旦进入 `Error` 就会忽略后续 `Prepare` 回调。
+
+错误文案（`PlayerActivity.buildErrorText()`）：
+
+| HTTP 状态 | 文案 |
+|---|---|
+| 403 | `访问被拒绝或签名已过期（HTTP 403）` |
+| 429 | `请求过于频繁，触发风控限流（HTTP 429）` |
+| 其他（含 401、5xx） | `服务器返回错误（HTTP %d）` |
+
 ---
 
 ## 第二部分：现有技术债（带证据）
@@ -434,7 +544,7 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段七持续扩充** | `app/src/test` 现有 16 个测试类 / **161 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 20） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段八持续扩充** | `app/src/test` 现有 18 个测试类 / **192 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 20 + 阶段八 31） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉、远程拉取、订阅兜底、快速失败已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |
@@ -444,7 +554,7 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | 10 | ~~无错误重试/无源切换~~ **阶段三已修复** | `RetryPolicy` + `PlayerManager` 实现每源 2 次重试（1500/3000ms 退避）与主备源自动切换 | 直播源抖动可自动恢复 |
 | 11 | **release 未混淆且无自定义 ProGuard 规则** | `app/build.gradle.kts` + 空 `app/proguard-rules.pro` | 体积与安全基线低 |
 | 12 | **`MainActivity` 使用 `FragmentActivity`** | 继承 `androidx.fragment.app.FragmentActivity` | 无法使用 AppCompat 主题能力 |
-| 13 | **数据同步仍靠重新打包 assets** | `LocalAssetChannelSource` 固定读 `assets/channels.json`、`LocalM3uChannelSource` 固定读 `assets/sample.m3u` | 换源需要改包；用户导入 / 网络源仍未做 |
+| 13 | ~~数据同步仍靠重新打包 assets~~ **阶段八部分修复** | 阶段八新增远程 M3U 订阅（`RemoteM3uFetcher` + `SubscriptionChannelRepository`），订阅地址可在手机端运行时配置并刷新；但**本地文件导入**仍未做，且内置 assets 只能在没有订阅（或订阅失败且无缓存）时生效 | 换订阅源不再需要改包；本地文件导入仍待做 |
 | 20 | ~~数据源在 UI 层重复装配~~ **阶段五已修复** | 原 `MainBrowseFragment` 与 `PlayerActivity` 各自 `DefaultChannelRepository(LocalAssetChannelSource(...), LocalM3uChannelSource(...))`，会重复读 assets；现统一走 `LiveTvApplication.channelRepository`（全局单例 + 内存缓存） | 重复解析 assets 的冗余开销消除 |
 | 19 | ~~M3U 解析覆盖有限~~ **阶段五部分修复** | `M3uPlaylistParser` 现支持 `#EXTVLCOPT`/`#KODIPROP` 请求头与行内请求头属性、引号内逗号切分；仍不支持 `#EXTGRP` 分组、直播地址参数（`?token=`）透传 | 复杂直播源仍需手工预处理 |
 | 14 | **未使用的字符串资源** | `R.string.row_news` / `R.string.row_sports` 已无引用（Lint `UnusedResources`）；行标题改由 JSON 分类 `name` 提供 | 资源项成为残留，**保留未删**（避免扩大改动面），后续随 UI 文案整理一并清理 |
@@ -456,6 +566,9 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | 23 | **触控浮层没有"正在播放"之外的进度信息** | `PlayerActivity` 触控浮层只显示频道名与位置，进度条仍用 Media3 `PlayerView` 内置控制器（需主动呼出） | 手机端未做常驻进度条与拖动切台 |
 | 24 | **播放页 BACK 行为分三档但无统一返回栈** | `dispatchKeyEvent`/`onKeyDown`：抽屉 → 控制器 → 退出；抽屉状态用 Activity 字段 `isDrawerOpen` 而非 `OnBackPressedDispatcher` | 后续接入 `onBackPressedDispatcher` 时应整体改写这三个分支 |
 | 22 | **手机端浏览页仍无加载/空态之外的错误反馈** | 与技术债 15 同源：手机端 `MobileMainActivity.loadChannels()` 同步取数，空结果展示 `mobile_empty_channels` | 手机端已有空态文案，缺"加载失败"与"重试"区分（与 TV 端同一债务） |
+| 25 | **TV 端（Leanback 浏览页）没有订阅管理与刷新入口** | 阶段八的「刷新 / 订阅源」按钮只做在手机端 `MobileMainActivity`；TV 端 `MainBrowseFragment` 只读仓库快照 | TV 用户无法在遥控器界面切换订阅源，只能用手机端配置后共享同一份 `SharedPreferences` |
+| 26 | **远程订阅是"替换"内置频道，而不是"合并"** | `SubscriptionChannelRepository.applyRemoteContent()` 直接把快照替换为远程解析结果；内置 assets 只在"无订阅 / 订阅失败且无缓存"时生效 | 配置订阅后内置频道消失；若需要"远程 + 内置合并"需另做合并规则 |
+| 27 | **订阅地址明文存 `SharedPreferences`** | `FileSubscriptionStore` 用普通 `SharedPreferences("livetv_subscription")` 存 URL | 订阅地址本身不是密钥，但若将来接入带凭据的订阅仍需加密存储 |
 
 ---
 
@@ -467,7 +580,7 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 
 | # | 方向 | 落点 | 备注 |
 |---|---|---|---|
-| 1 | ~~多数据源聚合~~ **阶段四已完成基础版** | `DefaultChannelRepository` | 已聚合 assets(JSON) + assets(M3U)；网络源 / 用户导入待做 |
+| 1 | ~~多数据源聚合~~ **阶段四基础版 + 阶段八网络源** | `DefaultChannelRepository` / `SubscriptionChannelRepository` | 已聚合 assets(JSON) + assets(M3U)；阶段八新增远程 M3U 订阅（远程 → 缓存 → 内置 三级兜底）；**用户本地文件导入**待做 |
 | 2 | ~~M3U/M3U8 解析器~~ **阶段四已完成基础版** | `data/parser/M3uPlaylistParser.kt` | 已支持 `#EXTINF` + `tvg-*` 属性；`#EXTGRP` / URL 参数透传待补 |
 | 3 | ~~主备源切换（Failover）~~ **阶段三已完成** | `player/RetryPolicy` + `player/PlayerManager` | 消费 `Channel.backupUrls`；主源重试耗尽后按顺序切备用源 |
 | 4 | ~~自定义 HTTP 请求头~~ **阶段三已完成接线** | `Channel.headers` → `DefaultHttpDataSource.Factory.setDefaultRequestProperties` | 请求头走 DataSource 层，不走 `setMediaItem` |
@@ -478,7 +591,7 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 | 9 | 播放器控制器按钮接切台 | `PlayerView` 控制器 + `ChannelNavigator` | 解决技术债 #16 |
 | 10 | ~~切台提示自动消失~~ **阶段 3.5 已完成** | `PlayerActivity` 的 `statusText` 定时隐藏（`lifecycleScope` + `delay(3000)`） | 已解决技术债 #18 |
 | 11 | 播放进度记忆 | `PlayerManager` 保存/恢复 `currentPosition` | 阶段一切台后重播的行为仍待评估 |
-| 12 | 用户导入 / 网络 M3U 源 | `data/source/` 新增 `NetworkM3uChannelSource` + 设置页 | 阶段四**刻意未做**（不引入网络层与导入 UI）；阶段五补齐了请求头链路，导入 UI 仍未做 |
+| 12 | 用户导入 / 本地文件 M3U 源 | `data/source/` 新增文件型数据源 + 导入入口 | 阶段八已做**网络 M3U 源**（远程订阅 + 本地缓存兜底）；**本地文件导入 UI** 仍未做 |
 | 13 | ~~数据源在 UI 层重复装配~~ **阶段五已完成** | `LiveTvApplication` 持有全局仓库（带缓存），UI 层只取用 | 解决技术债 #20 |
 | 14 | ~~双端 UI（手机 / 平板触控）~~ **阶段六已完成基础版** | `util/DeviceUtils` + `ui/mobile/*`（`MobileMainActivity` + `RecyclerView` 网格） | 入口按设备形态分流；播放页两端共用。手机端卡片 Logo 未接（技术债 #21） |
 | 15 | 远程频道 Logo 加载 | `ui/mobile` + `ui/ChannelCardPresenter` 绑定 `Channel.logo` | 技术债 #21；需先决定是否引入图片加载库（阶段六刻意未引入） |

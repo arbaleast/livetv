@@ -13,6 +13,8 @@
     <string name="player_switching_source">主线路不可用，正在切换备用线路…</string>
     <string name="player_error_network">网络连接失败</string>
     <string name="player_error_http">服务器返回错误（HTTP %1$d）</string>
+    <string name="player_error_http_forbidden">访问被拒绝或签名已过期（HTTP %1$d）</string>
+    <string name="player_error_http_rate_limited">请求过于频繁，触发风控限流（HTTP %1$d）</string>
     <string name="player_error_source">直播源无法解析</string>
     <string name="player_error_timeout">连接超时</string>
     <string name="player_error_unknown">播放失败</string>
@@ -27,6 +29,23 @@
     <string name="mobile_all_categories">全部</string>
     <string name="mobile_category_count">%1$d 台</string>
     <string name="mobile_badge_desc">频道徽章</string>
+
+    <!-- 手机端订阅源（远程 M3U） -->
+    <string name="mobile_action_refresh">刷新</string>
+    <string name="mobile_action_subscription">订阅源</string>
+    <string name="mobile_subscription_title">订阅源</string>
+    <string name="mobile_subscription_hint">M3U 播放列表地址</string>
+    <string name="mobile_subscription_save">保存并刷新</string>
+    <string name="mobile_subscription_reset">恢复内置源</string>
+    <string name="mobile_subscription_cancel">取消</string>
+    <string name="mobile_subscription_fill_local">填入本地 SecLab</string>
+    <string name="mobile_subscription_current">当前：%1$s</string>
+    <string name="mobile_subscription_none">未配置订阅源，当前使用内置频道</string>
+    <string name="mobile_refresh_builtin">已切换到内置频道（%1$d 个）</string>
+    <string name="mobile_refresh_remote">订阅已更新（%1$d 个）</string>
+    <string name="mobile_refresh_cache">刷新失败，已回退到本地缓存（%1$d 个）：%2$s</string>
+    <string name="mobile_refresh_builtin_fallback">刷新失败，已回退到内置频道（%1$d 个）：%2$s</string>
+    <string name="mobile_refresh_busy">正在刷新，请稍候…</string>
 
     <!-- 播放页触控浮层 / 频道抽屉 -->
     <string name="player_touch_prev">上一台</string>

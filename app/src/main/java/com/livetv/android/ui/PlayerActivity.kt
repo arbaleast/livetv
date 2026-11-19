@@ -289,7 +289,13 @@ class PlayerActivity : AppCompatActivity() {
     private fun buildErrorText(error: PlaybackError): String {
         val description = when (error) {
             PlaybackError.Network -> getString(R.string.player_error_network)
-            is PlaybackError.HttpStatus -> getString(R.string.player_error_http, error.code)
+            is PlaybackError.HttpStatus -> when (error.code) {
+                // 防盗链 / 签名过期：给出可执行的解释，而不是笼统的"服务器错误"
+                403 -> getString(R.string.player_error_http_forbidden, error.code)
+                // 被风控限流：提示等待而不是让用户以为再试一次就能过
+                429 -> getString(R.string.player_error_http_rate_limited, error.code)
+                else -> getString(R.string.player_error_http, error.code)
+            }
             PlaybackError.SourceParsing -> getString(R.string.player_error_source)
             PlaybackError.Timeout -> getString(R.string.player_error_timeout)
             is PlaybackError.Unknown -> getString(R.string.player_error_unknown)

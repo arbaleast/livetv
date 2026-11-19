@@ -1,8 +1,7 @@
 # LiveTV
 
-面向 Android TV 的直播电视客户端原型。当前阶段（阶段一）目标是**工程基线**：把原型整理成
-适合 AI Agent 与人类开发者长期协作、可重复构建、可验证的工程；**尚未**实现频道源配置、EPG、
-搜索、收藏等业务能力。
+面向 Android TV 的直播电视客户端原型，面向 AI Agent 与人类开发者长期协作、可重复构建、可验证。
+**尚未**实现 EPG、搜索、收藏、历史与设置页等业务能力。
 
 仓库地址：<https://github.com/arbaleast/livetv>
 
@@ -17,7 +16,8 @@
 | 构建 | Android Gradle Plugin / Gradle Wrapper | 8.5.2 / 8.7 |
 | SDK | compileSdk / targetSdk / minSdk | 34 / 34 / 28 |
 
-无 DI 框架、无数据库、无网络层框架，单 `app` 模块。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+无 DI 框架、无数据库、无第三方网络/UI 框架：网络只用 JDK `HttpURLConnection`，异步只用
+`ExecutorService` + 主线程 `Handler`，单 `app` 模块。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
 ## 环境要求
 
@@ -63,25 +63,33 @@ adb shell am start -n com.livetv.android/.MainActivity
 
 ```
 app/src/main/java/com/livetv/android/
-├── LiveTvApplication.kt            # 全局 ChannelRepository 单例（带内存缓存）
-├── MainActivity.kt                 # 宿主 Activity，装载 MainBrowseFragment
+├── LiveTvApplication.kt            # 全局单例：订阅仓库 + 刷新协调器
+├── MainActivity.kt                 # 入口分流：TV 走 Leanback，触控设备走 ui/mobile
 ├── data/                           # 数据层
 │   ├── model/ChannelConfigDto.kt   # JSON 映射 DTO
 │   ├── parser/ChannelJsonParser.kt # JSON 解析与安全校验（纯函数）
 │   ├── parser/M3uPlaylistParser.kt # M3U 解析与安全校验（纯函数，含请求头提取）
 │   ├── source/                     # 数据源接口 + assets 实现（JSON / M3U）
-│   └── repository/DefaultChannelRepository.kt   # 多数据源合并（按分类名）+ 内存缓存
+│   ├── remote/RemoteM3uFetcher.kt  # 远程 M3U 拉取（JDK HttpURLConnection）
+│   ├── subscription/               # 订阅持久化（SharedPreferences + filesDir 原子写）
+│   ├── repository/                 # 多源合并仓库 + 订阅仓库（远程→缓存→内置三级兜底）
+│   └── SubscriptionCoordinator.kt   # 后台刷新协调（ExecutorService + 主线程 Handler）
 ├── domain/                         # 领域层
-│   ├── model/                      # Channel / ChannelCategory
-│   └── repository/ChannelRepository.kt
+│   ├── model/                      # Channel / ChannelCategory / RefreshResult
+│   └── repository/                 # ChannelRepository / SubscriptionRepository
+├── player/                         # 播放层（除 PlayerManager 外为纯 Kotlin 策略层）
 └── ui/
     ├── MainBrowseFragment.kt       # Leanback 浏览页（通过 Repository 取分类）
     ├── ChannelCardPresenter.kt     # 频道卡片 Presenter
-    └── PlayerActivity.kt           # Media3 播放器页（HLS）
+    ├── PlayerActivity.kt           # Media3 播放器页（HLS，TV 遥控器 + 触控双端）
+    └── mobile/                     # 手机/平板触控 UI（RecyclerView 网格）
 
 app/src/main/assets/
 ├── channels.json                   # 默认频道配置（JSON 源）
 └── sample.m3u                      # 示例 M3U 播放列表（M3U 源）
+
+app/src/debug/                      # 仅 Debug 源集：放行 127.0.0.1 / localhost 明文
+└── res/xml/network_security_config.xml
 ```
 
 ## 文档
@@ -97,12 +105,15 @@ app/src/main/assets/
 
 ## 当前状态与限制
 
-- 频道列表来自 APK 内的两个本地源：`assets/channels.json`（JSON）与 `assets/sample.m3u`（M3U），
-  仓库层按**分类名合并**同名分类，并缓存结果（改配置需要改文件后**重新打包**）。
-  暂不支持用户导入 M3U、网络拉取与频道源的自定义管理。
+- 频道有三级来源：**远程 M3U 订阅 → 本地有效缓存 → APK 内置 assets**
+  （`assets/channels.json` + `assets/sample.m3u`，按**分类名合并**同名分类）。
+  手机端顶栏提供「刷新」与「订阅源」入口，订阅 URL 与最近一次成功的播放列表会被持久化。
+  暂不支持从本地文件导入 M3U，也不支持管理多个订阅源。
 - M3U 里的 `#EXTVLCOPT` / `#KODIPROP` 请求头（`User-Agent` / `Referer` / `Origin`）
   会被解析成频道的自定义请求头，播放时随该频道一起下发。
-- 播放仅支持 HLS 直链，播放失败时在页面上显示错误文案，不重试、不换源
-  （`backupUrls` 备用源字段已在模型中预留，但尚未接线）。
-- 无 EPG、无搜索、无收藏、无播放历史、无设置页。
-- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试（当前 124 个）。
+- 播放支持 HLS 直链；失败时按**每源 2 次退避重试（1500ms / 3000ms）→ 切换备用源 → 手动重置**处理。
+  HTTP **401 / 403 / 429** 属于不可重试状态，会**跳过退避**、立即切备用源（无备用源则直接报错）。
+- Release 包**不允许明文 HTTP**；只有 Debug 包额外放行 `127.0.0.1` / `localhost`，
+  用于对接本地教学沙箱。
+- 无 EPG、无搜索、无收藏、无播放历史、无设置页；TV 端暂无订阅源管理入口。
+- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试（当前 **192 个** / 18 个测试类）。

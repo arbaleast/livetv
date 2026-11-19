@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug 源集专属 Manifest 覆盖：把 network_security_config 挂到 <application> 上。
+
+    - main 源集不包含本文件，Release 构建不会放行任何明文流量；
+    - 配置内容见 app/src/debug/res/xml/network_security_config.xml。
+
+    说明：manifest 合并时以优先级更高的本文件为基准文档，Lint 的 TV 相关检查
+    （MissingLeanbackLauncher / MissingLeanbackSupport / ImpliedTouchscreenHardware）
+    会把问题定位到本文件的根 <manifest> 元素上，但对应的 leanback / touchscreen
+    声明与 LEANBACK_LAUNCHER 入口都在 app/src/main/AndroidManifest.xml 中且完整，
+    因此这里显式忽略这三条与本覆盖无关的检查。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="MissingLeanbackLauncher,MissingLeanbackSupport,ImpliedTouchscreenHardware">
+
+    <application
+        android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

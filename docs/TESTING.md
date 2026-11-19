@@ -7,7 +7,7 @@
 
 | 层级 | 运行环境 | 覆盖对象 | 现状 |
 |---|---|---|---|
-| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航、设备判定、网格列数、手机端徽章/筛选/抽屉 | **已建立**：16 个测试类 / **161 个用例**（`app/src/test/`） |
+| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航、设备判定、网格列数、手机端徽章/筛选/抽屉、**远程订阅拉取与三级兜底、401/403/429 快速失败** | **已建立**：18 个测试类 / **192 个用例**（`app/src/test/`） |
 | L2 仪器测试 | 模拟器/真机，`connectedDebugAndroidTest` | View 渲染、Leanback 焦点、Activity 生命周期 | **未建立**：无 `androidTest` 源集、无 `androidx.test` 依赖 |
 | L3 真机验收 | 真实 Android TV 设备 | 遥控器手感、直播流实际解码、长期稳定性 | **手动**：无自动化 |
 
@@ -15,7 +15,7 @@
 
 | 测试类 | 用例数 | 覆盖 |
 |---|---|---|
-| `player/RetryPolicyTest` | 15 | 候选源生成与协议过滤、主源重试（1500/3000ms）、Failover 到备用源、全部耗尽、手动重置、切台重置 |
+| `player/RetryPolicyTest` | 25 | 候选源生成与协议过滤、主源重试（1500/3000ms）、Failover 到备用源、全部耗尽、手动重置、切台重置、**401/403/429 快速失败（不重试当前源、立即切源、无备用源即 Fatal）、500/503 仍走退避** |
 | `player/PlaybackReducerTest` | 15 | 合法状态路径、非法转换保持原状态、Error 态忽略后续回调、致命错误、Released |
 | `player/ChannelNavigatorTest` | 11 | id/streamUrl 定位（含同 URL 取第一个）、上下切台、首尾循环、单频道、空列表、分类扁平化 |
 | `player/PlaybackErrorMapperTest` | 9 | HTTP 状态码（含 code=0 边界）、超时、网络、源解析、未知原因 |
@@ -28,6 +28,8 @@
 | `domain/model/ChannelTest` | 5 | 字段默认值、值语义相等、`copy` 语义 |
 | `data/repository/ChannelRepositoryResilienceTest` | 4 | assets 缺失 / IO 异常时仓库返回空列表且不抛异常 |
 | `data/LocalAssetsChannelsTest` | 3 | 直接读 `src/main/assets/channels.json`，校验随包默认配置合法且 6 个频道无损 |
+| `data/remote/RemoteM3uFetcherTest` | 10 | **完全离线**（本地 `ServerSocket` 起 `127.0.0.1` 随机端口）：200 原文与 UTF-8 解码、403/404/500 → `HttpError`、`file://`/`ftp://`/空串 → `InvalidUrl` 且不发请求、响应超 2MB → `SizeExceeded`、连接被拒 → `NetworkError` |
+| `data/repository/ChannelRepositorySubscriptionTest` | 11 | 远端成功写缓存并 `RemoteLoaded`、失败有缓存 → `FallbackToCache` 且保留旧列表、失败无缓存 → `FallbackToBuiltin`、**HTTP 200 空内容不清空已有列表与缓存**、清 URL → `BuiltinOnly`、初始化优先有效缓存、换 URL 使旧缓存失效、`findChannelById`、URL trim |
 
 ## 2. 命令
 
@@ -162,12 +164,21 @@ testImplementation("org.json:json:20231013")
 - 阶段一建立 L1 链路；阶段二补齐**数据层**的 L1 覆盖；阶段三补齐**播放器层**的 L1 覆盖
   （重试策略 / 状态归约 / 错误映射 / 频道导航 + 纯度约束）；阶段 3.5 追加 2 个错误映射边界用例；
   阶段四补齐 **M3U 解析与多源合并**的 L1 覆盖；阶段五补齐 **M3U 请求头与仓库缓存**的 L1 覆盖；
-  阶段 5.5 完成**真机实测**（见 §6），阶段六新增设备判定与网格列数用例，阶段七新增手机卡片徽章、分类筛选、副标题兜底、抽屉模型用例，合计 **161 个用例**。
+  阶段 5.5 完成**真机实测**（见 §6），阶段六新增设备判定与网格列数用例，阶段七新增手机卡片徽章、分类筛选、副标题兜底、抽屉模型用例，
+  阶段八新增**远程订阅拉取、三级兜底与 401/403/429 快速失败**用例，合计 **192 个用例 / 18 个测试类**。
 
   阶段六新增：`DeviceUtilsTest`（6 例，TV 判定两种信号）、`MobileChannelListTest`（11 例，行序列组装、2/3/4 列阈值、**px→dp 换算**）。
-  阶段七新增：`MobileChannelListTest` 扩到 25 例（徽章简标、分类筛选、副标题三级兜底、序号补零、分类配色稳定性），
+  阶段七新增：`MobileChannelListTest` 扩到 24 例（徽章简标、分类筛选、副标题三级兜底、序号补零、分类配色稳定性），
   以及 `ChannelDrawerModelTest`（7 例，抽屉分组、空分类跳过、当前频道标记与行/频道下标）。
+  阶段八新增：`RemoteM3uFetcherTest`（10 例）、`ChannelRepositorySubscriptionTest`（11 例）、
+  `RetryPolicyTest` 快筛 10 例（该类共 25 例）。
   px→dp 换算的实测值：1264px @3.5x = 361dp（竖屏 2 列）、2780px @3.5x = 794dp（横屏 3 列）。
+
+  **阶段八的网络测试完全离线**：AGP 单测编译不暴露 `jdk.httpserver`
+  （`com.sun.net.httpserver.HttpServer` 会报 `Unresolved reference: sun`），
+  因此改用 `java.net.ServerSocket` 自建本地 `127.0.0.1` 随机端口服务，不访问公网。
+  先红后绿证据：清空 `FAST_FAIL_HTTP_STATUSES` → `192 tests completed, 7 failed`；
+  把缓存读取强制为 `null` → `192 tests completed, 2 failed`；两次破坏均已还原。
 - **L1 单测无法覆盖的层次已被真机暴露**：D1/D2/D3/D4 都属于 Activity 与 Media3 之间的事件/时序问题，
   纯 JVM 用例在结构上不可能发现。后续再改 `PlayerActivity` 的按键或状态渲染时，必须做真机回归。
   阶段七同理：触控浮层与抽屉的真实布局、`isControllerOpenedByUser` 与抽屉的 BACK 优先级、

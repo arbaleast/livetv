@@ -28,6 +28,25 @@ object RetryPolicy {
     val BACKOFF_DELAYS_MS = listOf(1500L, 3000L)
 
     /**
+     * 不可重试的 HTTP 状态码集合。
+     *
+     * 这类状态代表"鉴权 / 授权 / 限流"这类**重试也不会变好**的结论：
+     * - `401` 未授权：缺少凭据或凭据过期；
+     * - `403` 拒绝访问 / 签名过期 / 防盗链拦截；
+     * - `429` 被风控限流。
+     *
+     * 命中时不再消耗 1500ms / 3000ms 的退避重试，直接切备用源或进入 `Fatal`。
+     */
+    val FAST_FAIL_HTTP_STATUSES = setOf(401, 403, 429)
+
+    /** 该 HTTP 状态码是否属于"不可重试、需立即失败"的一类。 */
+    fun isFastFailHttpStatus(code: Int): Boolean = code in FAST_FAIL_HTTP_STATUSES
+
+    /** 该错误是否属于"不可重试、需立即失败"的一类。 */
+    fun isFastFail(error: PlaybackError): Boolean =
+        error is PlaybackError.HttpStatus && isFastFailHttpStatus(error.code)
+
+    /**
      * 生成有序候选源列表：主源在前，其后是合法的备用源。
      *
      * 过滤规则与阶段二 `ChannelJsonParser` 一致：仅保留 `http://` / `https://`（忽略大小写）。
@@ -81,13 +100,22 @@ object RetryPolicy {
     /**
      * 播放失败时的处理。
      *
-     * @param error 失败原因分类（当前所有错误类型的重试策略一致，保留参数便于将来按类型差异化）。
+     * @param error 失败原因分类。`401 / 403 / 429` 走**快速失败**：不消耗退避重试，
+     *   直接切下一条候选源；没有下一条源则 `Fatal`。其余错误（超时、网络中断、5xx 等）
+     *   仍按每源最多 2 次、1500ms / 3000ms 退避重试。
      * @return [RetryOutcome.Retry]（当前源还能重试）、
-     *   [RetryOutcome.SwitchSource]（当前源重试耗尽但还有下一条源）、
+     *   [RetryOutcome.SwitchSource]（当前源重试耗尽或快速失败，但还有下一条源）、
      *   或 [RetryOutcome.Fatal]（所有源耗尽）。
      */
-    @Suppress("UNUSED_PARAMETER")
     fun onFailure(state: RetryState, error: PlaybackError): RetryOutcome {
+        if (isFastFail(error)) {
+            // 鉴权 / 防盗链 / 限流：重试没有意义，直接换源或终结。
+            return if (state.hasNextSource) {
+                RetryOutcome.SwitchSource(state.sourceIndex + 1)
+            } else {
+                RetryOutcome.Fatal
+            }
+        }
         val nextRetryCount = state.retryCount + 1
         if (nextRetryCount <= MAX_RETRIES_PER_SOURCE) {
             val delay = BACKOFF_DELAYS_MS.getOrElse(nextRetryCount - 1) { BACKOFF_DELAYS_MS.last() }

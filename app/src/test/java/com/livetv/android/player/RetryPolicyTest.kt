@@ -182,4 +182,102 @@ class RetryPolicyTest {
         assertTrue(RetryPolicy.RetryState(sourceIndex = 0, candidateCount = 2).hasNextSource)
         assertTrue(!RetryPolicy.RetryState(sourceIndex = 1, candidateCount = 2).hasNextSource)
     }
+
+    // ---------- 快速失败（401 / 403 / 429） ----------
+
+    @Test
+    fun `fast fail statuses are exactly 401 403 and 429`() {
+        assertTrue(RetryPolicy.isFastFailHttpStatus(401))
+        assertTrue(RetryPolicy.isFastFailHttpStatus(403))
+        assertTrue(RetryPolicy.isFastFailHttpStatus(429))
+        assertTrue(!RetryPolicy.isFastFailHttpStatus(400))
+        assertTrue(!RetryPolicy.isFastFailHttpStatus(404))
+        assertTrue(!RetryPolicy.isFastFailHttpStatus(500))
+        assertTrue(!RetryPolicy.isFastFailHttpStatus(503))
+    }
+
+    @Test
+    fun `http 401 does not retry the current source`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 0, candidateCount = 2)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(401))
+
+        assertEquals(RetryPolicy.RetryOutcome.SwitchSource(1), outcome)
+    }
+
+    @Test
+    fun `http 403 does not retry the current source`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 0, candidateCount = 2)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(403))
+
+        assertEquals(RetryPolicy.RetryOutcome.SwitchSource(1), outcome)
+    }
+
+    @Test
+    fun `http 429 does not retry the current source`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 0, candidateCount = 2)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(429))
+
+        assertEquals(RetryPolicy.RetryOutcome.SwitchSource(1), outcome)
+    }
+
+    @Test
+    fun `fast fail switches to the backup even when retries are already exhausted`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 2, candidateCount = 2)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(403))
+
+        assertEquals(RetryPolicy.RetryOutcome.SwitchSource(1), outcome)
+    }
+
+    @Test
+    fun `fast fail without a backup source becomes fatal immediately`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 0, candidateCount = 1)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(429))
+
+        assertEquals(RetryPolicy.RetryOutcome.Fatal, outcome)
+    }
+
+    @Test
+    fun `fast fail does not consume the retry budget of the next source`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 0, candidateCount = 2)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(403))
+
+        val switched = RetryPolicy.RetryState(
+            sourceIndex = (outcome as RetryPolicy.RetryOutcome.SwitchSource).index,
+            retryCount = 0,
+            candidateCount = state.candidateCount,
+        )
+        assertEquals(RetryPolicy.RetryOutcome.Retry(1500L), RetryPolicy.onFailure(switched, PlaybackError.Network))
+    }
+
+    @Test
+    fun `http 500 keeps the normal backoff retry`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 0, candidateCount = 2)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(500))
+
+        assertEquals(RetryPolicy.RetryOutcome.Retry(1500L), outcome)
+    }
+
+    @Test
+    fun `http 503 keeps the normal backoff retry`() {
+        val state = RetryPolicy.RetryState(sourceIndex = 0, retryCount = 1, candidateCount = 2)
+
+        val outcome = RetryPolicy.onFailure(state, PlaybackError.HttpStatus(503))
+
+        assertEquals(RetryPolicy.RetryOutcome.Retry(3000L), outcome)
+    }
+
+    @Test
+    fun `network and timeout are not fast fail errors`() {
+        assertTrue(!RetryPolicy.isFastFail(PlaybackError.Network))
+        assertTrue(!RetryPolicy.isFastFail(PlaybackError.Timeout))
+        assertTrue(!RetryPolicy.isFastFail(PlaybackError.SourceParsing))
+        assertTrue(RetryPolicy.isFastFail(PlaybackError.HttpStatus(403)))
+    }
 }
