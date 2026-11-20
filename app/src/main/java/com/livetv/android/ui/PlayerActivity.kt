@@ -1,13 +1,18 @@
 package com.livetv.android.ui
 
+import android.content.res.Configuration
 import android.os.Bundle
-import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.PlayerView
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
@@ -15,13 +20,16 @@ import com.livetv.android.databinding.ActivityPlayerBinding
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.model.ChannelCategory
 import com.livetv.android.domain.repository.ChannelRepository
+import com.livetv.android.domain.stream.StaticStreamResolver
 import com.livetv.android.player.ChannelNavigator
 import com.livetv.android.player.PlaybackError
 import com.livetv.android.player.PlaybackState
 import com.livetv.android.player.PlayerManager
 import com.livetv.android.ui.mobile.ChannelDrawerAdapter
 import com.livetv.android.ui.mobile.ChannelDrawerModel
+import com.livetv.android.ui.mobile.ChannelDrawerRow
 import com.livetv.android.util.DeviceUtils
+import com.livetv.android.util.PlayerOrientationPolicy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -33,7 +41,7 @@ import kotlinx.coroutines.launch
  * - 纯策略层（`PlaybackReducer` / `RetryPolicy` / `ChannelNavigator` / `PlaybackErrorMapper`）不依赖 Android；
  * - 桥接层 `PlayerManager` 负责 ExoPlayer 生命周期、请求头/超时、重试调度。
  *
- * 本 Activity 只负责：加载频道、渲染状态与提示、把遥控器按键翻译成切台/重置动作。
+ * 本 Activity 只负责：加载频道、绑定 PlayerView、渲染状态与提示、处理遥控器按键与触控浮层。
  */
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlayerActivity : AppCompatActivity() {
@@ -50,6 +58,11 @@ class PlayerActivity : AppCompatActivity() {
 
         /** 触控浮层自动隐藏的延迟（毫秒）。 */
         const val TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS = 5_000L
+
+        /** TV 端左上角频道名自动隐藏的延迟（毫秒）。 */
+        const val CHANNEL_NAME_AUTO_HIDE_DELAY_MS = 4_000L
+
+        private const val STATE_CURRENT_CHANNEL_ID = "current_channel_id"
     }
 
     private lateinit var binding: ActivityPlayerBinding
@@ -70,8 +83,18 @@ class PlayerActivity : AppCompatActivity() {
     /** 仓库里的全部分类，供"频道列表"抽屉使用。 */
     private var categories: List<ChannelCategory> = emptyList()
 
+    /** 当前抽屉展示的行数据，供旋转后重新居中定位当前频道。 */
+    private var currentDrawerRows: List<ChannelDrawerRow> = emptyList()
+
     /** 触控浮层的自动隐藏回调（用 `postDelayed` 调度，`onDestroy` 中移除）。 */
     private val hideOverlayRunnable = Runnable { hideTouchOverlay() }
+
+    /** TV 端左上角频道名自动隐藏回调（避免长期常驻遮挡画面/烧屏）。 */
+    private val hideChannelNameRunnable = Runnable {
+        if (!isTouchDevice && !isControllerOpenedByUser) {
+            binding.channelName.visibility = View.GONE
+        }
+    }
 
     /** "频道列表"抽屉是否处于打开状态。 */
     private var isDrawerOpen = false
@@ -93,32 +116,75 @@ class PlayerActivity : AppCompatActivity() {
      *
      * 因此切台只受这个标记控制：用户主动呼出控制器时，方向键归控制器；
      * 其余情况（包括 Media3 自行弹出）方向键一律用于切台。
+     * 当控制器自动超时隐藏时，通过 `ControllerVisibilityListener` 同步复位为 `false`。
      */
     private var isControllerOpenedByUser = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         super.onCreate(savedInstanceState)
+
+        isTouchDevice = !DeviceUtils.isTvDevice(this)
+        requestedOrientation = PlayerOrientationPolicy.resolveRequestedOrientation(
+            isTvDevice = !isTouchDevice,
+        )
+
         binding = ActivityPlayerBinding.inflate(layoutInflater)
         // 关闭控制器的"自动显示"：Media3 在播放状态变化（切台/重连）时会自动弹出控制器，
         // 而控制器一显示就会吞掉方向键，导致电视上连续换台只切一台（阶段 5.5 真机实测发现）。
         // 控制器改为只在用户按确认键时显式呼出。
         binding.playerView.controllerAutoShow = false
+        binding.playerView.setControllerVisibilityListener(
+            PlayerView.ControllerVisibilityListener { visibility ->
+                if (visibility != View.VISIBLE) {
+                    isControllerOpenedByUser = false
+                    scheduleChannelNameAutoHide()
+                } else if (!isTouchDevice) {
+                    showTvChannelName(autoHide = false)
+                }
+            },
+        )
         setContentView(binding.root)
+
+        applySafeAreaInsets()
 
         playerManager = PlayerManager(
             context = this,
             onStateChanged = ::renderState,
             onChannelChanged = ::renderChannel,
+            streamResolver = (application as? LiveTvApplication)?.streamResolver
+                ?: StaticStreamResolver,
         ).also {
+            it.onPlayerChanged = { exoPlayer -> binding.playerView.player = exoPlayer }
             it.onRetrying = { retryCount, maxRetries -> showRetryingHint(retryCount, maxRetries) }
             it.onSwitchingSource = { showSwitchingSourceHint() }
         }
 
-        isTouchDevice = !DeviceUtils.isTvDevice(this)
         setupTouchUi()
 
-        resolveInitialChannel()
+        resolveInitialChannel(savedInstanceState)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        currentChannel?.id?.let { outState.putString(STATE_CURRENT_CHANNEL_ID, it) }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        hideSystemUi()
+        ViewCompat.requestApplyInsets(binding.playerRoot)
+        if (isTouchDevice && isDrawerOpen) {
+            scrollDrawerToCurrentChannel()
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemUi()
+        }
     }
 
     override fun onStart() {
@@ -140,8 +206,10 @@ class PlayerActivity : AppCompatActivity() {
         // 主动取消切台提示的倒计时任务（lifecycleScope 也会兜底取消）
         switchHintJob?.cancel()
         switchHintJob = null
-        // 移除触控浮层的自动隐藏回调，避免持有 Activity 引用
+        // 移除延迟回调，避免持有 Activity 引用
         binding.root.removeCallbacks(hideOverlayRunnable)
+        binding.root.removeCallbacks(hideChannelNameRunnable)
+        binding.playerView.player = null
         super.onDestroy()
     }
 
@@ -150,23 +218,33 @@ class PlayerActivity : AppCompatActivity() {
     /**
      * 解析要播放的频道。
      *
-     * 优先用 `EXTRA_CHANNEL_ID` 在仓库中定位完整频道（含 backupUrls / headers）；
-     * 定位不到时退回用 Extra 里的名称/地址构造临时单频道，保证旧调用 100% 兼容。
+     * 进程重建时优先用 `savedInstanceState` 中的当前频道 ID，其次用 `EXTRA_CHANNEL_ID`
+     * 在仓库中定位完整频道（含 backupUrls / headers）；定位不到时退回用 Extra 构造临时单频道。
      */
-    private fun resolveInitialChannel() {
+    private fun resolveInitialChannel(savedInstanceState: Bundle?) {
         val repository: ChannelRepository =
             (application as LiveTvApplication).channelRepository
         categories = repository.getCategories()
         val flat = ChannelNavigator.flatten(categories)
 
-        val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID)
+        val channelId = PlayerOrientationPolicy.resolveChannelIdToRestore(
+            savedChannelId = savedInstanceState?.getString(STATE_CURRENT_CHANNEL_ID),
+            intentChannelId = intent.getStringExtra(EXTRA_CHANNEL_ID),
+        )
         val streamUrl = intent.getStringExtra(EXTRA_STREAM_URL)
 
         val resolved = flat.firstOrNull { it.id == channelId }
             ?: flat.firstOrNull { it.streamUrl == streamUrl }
 
         currentChannel = resolved ?: buildFallbackChannel()
-        navigator = ChannelNavigator(flat.ifEmpty { listOfNotNull(currentChannel) })
+        // 仓库里没有该频道（如动态源 `mgtv:` 频道）时，把它作为第一条插到列表最前，
+        // 否则 `ChannelNavigator` 定位不到会显示 "0/N"，上下切台也会从别的频道开始。
+        val navigatorChannels = when {
+            resolved != null -> flat
+            currentChannel != null -> listOf(currentChannel!!) + flat
+            else -> flat
+        }
+        navigator = ChannelNavigator(navigatorChannels.ifEmpty { listOfNotNull(currentChannel) })
         if (currentChannel != null) {
             navigator.locate(currentChannel?.id, currentChannel?.streamUrl)
         }
@@ -192,7 +270,26 @@ class PlayerActivity : AppCompatActivity() {
     private fun renderChannel(channel: Channel) {
         currentChannel = channel
         binding.channelName.text = channel.name
+        if (!isTouchDevice) {
+            showTvChannelName(autoHide = true)
+        }
         updateOverlayChannelInfo()
+    }
+
+    private fun showTvChannelName(autoHide: Boolean) {
+        if (isTouchDevice) return
+        binding.root.removeCallbacks(hideChannelNameRunnable)
+        if (binding.channelName.text.isNullOrBlank()) return
+        binding.channelName.visibility = View.VISIBLE
+        if (autoHide) {
+            scheduleChannelNameAutoHide()
+        }
+    }
+
+    private fun scheduleChannelNameAutoHide() {
+        if (isTouchDevice) return
+        binding.root.removeCallbacks(hideChannelNameRunnable)
+        binding.root.postDelayed(hideChannelNameRunnable, CHANNEL_NAME_AUTO_HIDE_DELAY_MS)
     }
 
     /**
@@ -201,6 +298,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun renderState(state: PlaybackState) {
         when (state) {
             PlaybackState.Idle -> {
+                switchHintJob?.cancel()
                 binding.statusText.visibility = View.GONE
                 binding.errorText.visibility = View.GONE
             }
@@ -218,16 +316,19 @@ class PlayerActivity : AppCompatActivity() {
             }
 
             PlaybackState.Playing -> {
+                switchHintJob?.cancel()
                 binding.statusText.visibility = View.GONE
                 binding.errorText.visibility = View.GONE
             }
 
             PlaybackState.Paused -> {
+                switchHintJob?.cancel()
                 binding.statusText.visibility = View.GONE
                 binding.errorText.visibility = View.GONE
             }
 
             is PlaybackState.Error -> {
+                switchHintJob?.cancel()
                 binding.statusText.visibility = View.GONE
                 binding.errorText.visibility = View.VISIBLE
                 binding.errorText.text = buildErrorText(state.error)
@@ -248,6 +349,7 @@ class PlayerActivity : AppCompatActivity() {
      * 自动重试 / 切源提示（由 `PlayerManager` 在调度重试时回调）。
      */
     private fun showRetryingHint(retryCount: Int, maxRetries: Int) {
+        switchHintJob?.cancel()
         binding.statusText.visibility = View.VISIBLE
         binding.statusText.text = getString(R.string.player_retrying, retryCount, maxRetries)
         binding.errorText.visibility = View.GONE
@@ -257,17 +359,15 @@ class PlayerActivity : AppCompatActivity() {
      * 切换备用线路提示。
      */
     private fun showSwitchingSourceHint() {
+        switchHintJob?.cancel()
         binding.statusText.visibility = View.VISIBLE
         binding.statusText.text = getString(R.string.player_switching_source)
         binding.errorText.visibility = View.GONE
     }
 
     /**
-     * 切台成功提示：短暂展示频道名，3 秒后自动隐藏。
-     *
-     * 防泄漏/防竞态（方案 A）：
-     * - 先 `cancel()` 上一个未完成的 Job，保证新的 3 秒倒计时从此刻开始；
-     * - Job 运行在 `lifecycleScope` 中，Activity 销毁时自动取消，不会持有失效的 View。
+     * 切台成功提示：短暂展示频道名，3 秒后按当前真实播放状态恢复显示，
+     * 避免新频道仍在加载/缓冲时被盲目清屏。
      */
     private fun showChannelSwitchedHint(channel: Channel) {
         binding.statusText.visibility = View.VISIBLE
@@ -278,7 +378,22 @@ class PlayerActivity : AppCompatActivity() {
         switchHintJob = lifecycleScope.launch {
             delay(SWITCH_HINT_AUTO_HIDE_DELAY_MS)
             if (!isFinishing && !isDestroyed) {
-                binding.statusText.visibility = View.GONE
+                when (playerManager.playbackState) {
+                    PlaybackState.Loading -> {
+                        binding.statusText.visibility = View.VISIBLE
+                        binding.statusText.text = getString(
+                            R.string.player_loading,
+                            currentChannel?.name.orEmpty(),
+                        )
+                    }
+
+                    PlaybackState.Buffering -> {
+                        binding.statusText.visibility = View.VISIBLE
+                        binding.statusText.text = getString(R.string.player_buffering)
+                    }
+
+                    else -> binding.statusText.visibility = View.GONE
+                }
             }
         }
     }
@@ -309,12 +424,6 @@ class PlayerActivity : AppCompatActivity() {
 
     // ---------------- 遥控器按键 ----------------
 
-    /**
-     * 按键映射（遵循 `docs/TV-INTERACTION.md`）：
-     * - 控制器隐藏时：上下键切台；控制器显示时：交还 `PlayerView` 处理焦点；
-     * - 确认键：错误态手动重置，否则呼出/隐藏控制器；
-     * - 返回键：控制器显示时先隐藏控制器，否则正常退出。
-     */
     /**
      * 遥控器按键拦截（**必须在这里，而不是 `onKeyDown`**）。
      *
@@ -396,24 +505,72 @@ class PlayerActivity : AppCompatActivity() {
     private fun switchToChannel(channel: Channel) {
         binding.channelName.text = channel.name
         playerManager.switchChannel(channel)
-        // 必须放在 switchChannel 之后：它会同步派发 Loading 并覆盖 statusText，
-        // 先显示会立刻被"加载中…"盖掉，导致切台提示一帧都看不到（阶段 5.5 真机实测发现）。
-        showChannelSwitchedHint(channel)
+        // 切台提示必须放在 switchChannel 之后：它会派发 Loading 并覆盖 statusText，
+        // 先显示会立刻被"加载中…"盖掉（阶段 5.5 真机实测发现）。
+        // 但如果这次切台已经直接进入错误态（如动态源解析失败），提示会把 errorText 抹掉，
+        // 3 秒后 statusText 也隐藏，导致黑屏无任何文案——因此错误态下跳过提示。
+        if (playerManager.playbackState !is PlaybackState.Error) {
+            showChannelSwitchedHint(channel)
+        }
         // 收起控制器放最后：Media3 在切换媒体源后会重新显示控制器，而控制器一显示
         // 就会吞掉方向键，导致连续换台从第二下起失效（阶段 5.5 真机实测发现）。
+        isControllerOpenedByUser = false
         binding.playerView.hideController()
         updateOverlayChannelInfo()
     }
 
-    @Suppress("DEPRECATION")
+    /** 现代沉浸式隐藏状态栏与导航栏（替代已废弃的 systemUiVisibility）。 */
     private fun hideSystemUi() {
-        binding.playerView.systemUiVisibility = (View.SYSTEM_UI_FLAG_LOW_PROFILE
-                or View.SYSTEM_UI_FLAG_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION)
+        val controller = WindowInsetsControllerCompat(window, binding.playerRoot)
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    }
+
+    /**
+     * 适配刘海/挖孔屏与手势导航安全区，防止横屏下顶栏、底栏与抽屉控件被挖孔或圆角裁切。
+     */
+    private fun applySafeAreaInsets() {
+        val topBaseLeft = binding.overlayTopBar.paddingLeft
+        val topBaseTop = binding.overlayTopBar.paddingTop
+        val topBaseRight = binding.overlayTopBar.paddingRight
+        val topBaseBottom = binding.overlayTopBar.paddingBottom
+
+        val bottomBaseLeft = binding.overlayBottomBar.paddingLeft
+        val bottomBaseTop = binding.overlayBottomBar.paddingTop
+        val bottomBaseRight = binding.overlayBottomBar.paddingRight
+        val bottomBaseBottom = binding.overlayBottomBar.paddingBottom
+
+        val drawerBaseLeft = binding.channelDrawer.paddingLeft
+        val drawerBaseTop = binding.channelDrawer.paddingTop
+        val drawerBaseRight = binding.channelDrawer.paddingRight
+        val drawerBaseBottom = binding.channelDrawer.paddingBottom
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.playerRoot) { _, windowInsets ->
+            val safe = windowInsets.getInsets(
+                WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.systemBars(),
+            )
+            binding.overlayTopBar.setPadding(
+                topBaseLeft + safe.left,
+                topBaseTop + safe.top,
+                topBaseRight + safe.right,
+                topBaseBottom,
+            )
+            val bottomHorizontalSafe = maxOf(safe.left, safe.right)
+            binding.overlayBottomBar.setPadding(
+                bottomBaseLeft + bottomHorizontalSafe,
+                bottomBaseTop,
+                bottomBaseRight + bottomHorizontalSafe,
+                bottomBaseBottom + safe.bottom,
+            )
+            binding.channelDrawer.setPadding(
+                drawerBaseLeft,
+                drawerBaseTop + safe.top,
+                drawerBaseRight + safe.right,
+                drawerBaseBottom + safe.bottom,
+            )
+            windowInsets
+        }
     }
 
     // ---------------- 触控浮层与频道抽屉（仅触控设备） ----------------
@@ -430,20 +587,26 @@ class PlayerActivity : AppCompatActivity() {
         binding.channelName.visibility = View.GONE
         binding.viewTapCatcher.visibility = View.VISIBLE
         binding.viewTapCatcher.setOnClickListener { toggleTouchOverlay() }
-
-        binding.touchOverlayContainer.visibility = View.VISIBLE
+        binding.drawerList.layoutManager = LinearLayoutManager(this)
 
         binding.overlayBack.setOnClickListener { finish() }
         binding.overlayChannelList.setOnClickListener { openDrawer() }
-        // 上一台 / 下一台与遥控器上下键共用同一条切台路径
-        binding.overlayPrev.setOnClickListener { switchChannel(direction = -1) }
-        binding.overlayNext.setOnClickListener { switchChannel(direction = 1) }
+        // 上一台 / 下一台与遥控器上下键共用同一条切台路径，并重置浮层自动隐藏倒计时
+        binding.overlayPrev.setOnClickListener {
+            switchChannel(direction = -1)
+            showTouchOverlay()
+        }
+        binding.overlayNext.setOnClickListener {
+            switchChannel(direction = 1)
+            showTouchOverlay()
+        }
         binding.overlayRetry.setOnClickListener {
             playerManager.manualReset()
             showTouchOverlay()
         }
         binding.drawerScrim.setOnClickListener { closeDrawer() }
 
+        showTouchOverlay()
         updateOverlayChannelInfo()
     }
 
@@ -459,7 +622,7 @@ class PlayerActivity : AppCompatActivity() {
     /**
      * 显示触控浮层。
      *
-     * 5 秒无操作后自动隐藏；错误态保持常驻，否则"重试"按钮会随之消失。
+     * 5 秒无操作后自动隐藏；错误态或抽屉打开时保持常驻。
      */
     private fun showTouchOverlay() {
         if (!isTouchDevice) return
@@ -467,13 +630,15 @@ class PlayerActivity : AppCompatActivity() {
         binding.overlayRetry.visibility =
             if (playerManager.playbackState is PlaybackState.Error) View.VISIBLE else View.GONE
         binding.root.removeCallbacks(hideOverlayRunnable)
-        binding.root.postDelayed(hideOverlayRunnable, TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS)
+        if (!isDrawerOpen) {
+            binding.root.postDelayed(hideOverlayRunnable, TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS)
+        }
     }
 
     private fun hideTouchOverlay() {
         if (!isTouchDevice) return
-        // 错误态下保持浮层可见，"重试"按钮才点得到
-        if (playerManager.playbackState is PlaybackState.Error) return
+        // 错误态或抽屉打开时保持浮层可见
+        if (playerManager.playbackState is PlaybackState.Error || isDrawerOpen) return
         binding.touchOverlayContainer.visibility = View.GONE
     }
 
@@ -496,11 +661,13 @@ class PlayerActivity : AppCompatActivity() {
      */
     private fun openDrawer() {
         if (!isTouchDevice) return
+        // 打开抽屉时暂停底层浮层自动隐藏
+        binding.root.removeCallbacks(hideOverlayRunnable)
         val rows = ChannelDrawerModel.buildRows(categories, currentChannel?.id)
+        currentDrawerRows = rows
         // 列表为空时显示空态文案，避免出现"打开抽屉一片黑"
         binding.drawerEmpty.visibility = if (rows.isEmpty()) View.VISIBLE else View.GONE
         binding.drawerList.visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
-        binding.drawerList.layoutManager = LinearLayoutManager(this)
         binding.drawerList.adapter = ChannelDrawerAdapter(rows) { channel ->
             // 先定位，让后续"上一台/下一台"从选中的频道继续
             navigator.locate(channel.id, channel.streamUrl)
@@ -511,13 +678,25 @@ class PlayerActivity : AppCompatActivity() {
         binding.channelDrawer.visibility = View.VISIBLE
         isDrawerOpen = true
 
-        val index = ChannelDrawerModel.currentRowIndex(rows)
-        if (index >= 0) binding.drawerList.scrollToPosition(index)
+        scrollDrawerToCurrentChannel()
+    }
+
+    private fun scrollDrawerToCurrentChannel() {
+        val index = ChannelDrawerModel.currentRowIndex(currentDrawerRows)
+        if (index >= 0) {
+            binding.drawerList.post {
+                val lm = binding.drawerList.layoutManager as? LinearLayoutManager
+                val offset = binding.drawerList.height / 3
+                lm?.scrollToPositionWithOffset(index, offset)
+                    ?: binding.drawerList.scrollToPosition(index)
+            }
+        }
     }
 
     private fun closeDrawer() {
         binding.drawerScrim.visibility = View.GONE
         binding.channelDrawer.visibility = View.GONE
         isDrawerOpen = false
+        showTouchOverlay()
     }
 }

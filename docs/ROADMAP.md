@@ -15,7 +15,7 @@
 | ViewBinding | `app/build.gradle.kts` `buildFeatures { viewBinding = true }` |
 | TV 声明齐全：`leanback` required=**false**（阶段六改为双端通用）、`touchscreen` required=false、`banner`、`LAUNCHER` + `LEANBACK_LAUNCHER` 双入口 | `app/src/main/AndroidManifest.xml` |
 | GitHub Actions CI：`push`/`pull_request` 触发，跑编译 + Lint + 单元测试 + 打包 Debug APK | `.github/workflows/android-ci.yml` |
-| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**18 个测试类 / 192 个用例**） | `app/src/test/java/com/livetv/android/` |
+| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**30 个测试类 / 287 个用例**） | `app/src/test/java/com/livetv/android/` |
 | 格式与忽略规则（`.editorconfig`、`.gitignore` 排除构建产物/密钥/`.tmp/`） | 仓库根目录 |
 
 ### 功能
@@ -410,6 +410,73 @@
 
 ---
 
+## 阶段九（本次交付）：MGTV 播放源接入（真机已出画）
+
+> ✅ **MGTV 已在真机上播放成功**：`sign` 从芒果 TV 网页播放器公开 JS 还原
+> （`UPPER(MD5(SALT + 参数名升序拼接 key+value + SALT))`，盐值为 JS 公开常量），
+> HAR 3 组样本离线校验 **3/3 一致**；`did`/`deviceId` 由客户端本地生成 UUID，请求不携带 Cookie。
+> 真机（OnePlus PKG110 / Android 16）实测：首页出现 MGTV 分组 → 点开「金鹰卡通」→ 画面持续播放，
+> 崩溃缓冲区为空。详见 `docs/MGTV-GAP-REPORT.md`。
+
+### 已交付（可在源码中指出）
+
+| 项 | 事实 | 证据 |
+|---|---|---|
+| P0 HLS 审查 | Media3 1.4.1 已含 `media3-exoplayer-hls`；`MediaSource` 统一由 `DefaultMediaSourceFactory` 构建，未使用 `ProgressiveMediaSource` 强播 M3U8 | `app/build.gradle.kts`、`player/PlayerManager.kt` |
+| P0 无后缀 HLS | `StreamTypeDetector` 显式推断 `application/x-mpegURL` 并写入 `MediaItem`，覆盖无 `.m3u8` 后缀 + 服务端 `Content-Type` 不规范的 IPTV 流；`.mp4/.mkv/.flv/.ts/.mp3/.aac/.webm` 明确不判为 HLS | `domain/stream/StreamTypeDetector.kt` |
+| P1 通用抽象 | `StreamResolver` / `ResolvedStream` / `StreamResolveResult` / `StreamRefreshCoordinator` / `HeaderHostPolicy` / `RoutingStreamResolver` / `Clock`，全部纯 Kotlin，可注入时钟 | `domain/stream/` |
+| P1 会话接入 | `PlayerManager` 构造注入 `streamResolver` + `clock`，持有 `PlaybackSession`；静态频道行为与改造前一致（`RetryPolicy.candidateUrls` 主备源路径不变） | `player/PlayerManager.kt` |
+| P1 Host 隔离 | `allowedHeaderHosts` 非空时走 `media/ScopedHeaderDataSourceFactory`，每次 `open(DataSpec)` 按 host 过滤，并关闭跨协议重定向 | `media/ScopedHeaderDataSourceFactory.kt`、`domain/stream/HeaderHostPolicy.kt` |
+| P1 刷新状态机 | 到期前 60 秒主动刷新；403 最多重解析 **1 次**（`MAX_FORBIDDEN_REFRESH_ATTEMPTS = 1`）；第二次 403 / 429 立即快速失败；其他状态码交回既有重试策略 | `domain/stream/StreamRefreshCoordinator.kt` |
+| P1 MGTV 数据层 | `MgtvEndpoints` / `MgtvCredentials` / `MgtvHttpClient` / `MgtvCatalogFetcher` / `HttpMgtvSourceFetcher` / `MgtvJsonParser` / `MgtvSourceSelector` / `MgtvStreamResolver` / `MgtvProvider` | `data/mgtv/` |
+| P1 白盒筛选 | 仅放行 `format=.m3u8` + `isp2p==0` + `hdcp==0` + 合法 `https://`；无合规源返回 `UNSUPPORTED_SOURCE`，**绝不降级到 P2P** | `data/mgtv/MgtvSourceSelector.kt` |
+| P2 熔断门禁 | 无外部 `MgtvCredentialProvider` 时 `HttpMgtvSourceFetcher` **不发出任何请求**，直接 `AuthUnavailable`；未实现、未猜测、未伪造 `sign` | `data/mgtv/HttpMgtvSourceFetcher.kt` |
+| P4 P2P 边界 | 未引入任何 P2P / WebSocket 模块或第三方依赖 | `app/build.gradle.kts` |
+
+### P2 参数归因结论（摘要）
+
+| 参数 | 类别 | 可否合法获取 |
+|---|---|---|
+| `cameraId` / `platform` / `appVersion` / `clientKey` / `auth_mode` / `init_definition` / `hdts` / `lls` / `supportFlv` / `_support` | 静态 | ✅ 公开常量或频道目录 |
+| `_t` | 动态（时间戳） | ✅ 本地生成 |
+| `uid` / `token` | 动态（可空） | ⚠️ 匿名会话为空 |
+| `did` / `deviceId` | 动态（设备 UUID） | ✅ 客户端本地生成 UUID（网页端同样如此） |
+| `sign` | 动态（32 位十六进制，绑定完整查询参数集） | ✅ 无需密钥：盐值 + 参数排序拼接的 MD5，算法在公开 JS 中 |
+
+→ **Go**：三组 HAR 样本（287 两次、344 一次）离线复算全部命中；真实网络请求返回 `code=0`。
+
+### 测试
+
+| 测试类 | 用例数 | 覆盖 |
+|---|---|---|
+| `SessionGenerationGateTest` | 5 | 代际号：快速连续切台时旧解析结果必须作废 |
+| `MgtvSignerTest` | 8 | **签名算法黄金向量**（期望值由独立 Node 实现预先算出）、参数顺序无关、空串参与、`_t` 变化即变 |
+| `MgtvJsonParserTest` | 9 | 脱敏 JSONP/JSON 目录与播放源解析、错误码、坏 JSON |
+| `MgtvSourceSelectorTest` | 9 | `.m3u8`/`isp2p=0`/`hdcp=0`/https 白盒过滤、P2P/HDCP/HTTP/非 m3u8 拦截、清晰度优先与确定性回退 |
+| `MgtvEndpointsTest` | 7 | 目录/播放源参数、`sourceParams`→`sourceUrl` 拼接顺序、**数据层无硬编码 sign/IP/敏感 token 守卫** |
+| `MgtvHttpClientTest` | 8 | 本地回环服务：200/403/404、非法 scheme、超限、连接失败 |
+| `HttpMgtvSourceFetcherTest` | 8 | 本地回环：RawJson、请求携带 32 位大写 `sign`、签名与 `MgtvSigner` 一致、`did==deviceId`、Referer、403/网络错误 |
+| `MgtvStreamResolverTest` | 10 | 成功流、过期时间、403/404/429 映射、业务错误码、无可用源、Host 白名单 |
+| `HeaderHostPolicyTest` | 10 | 精确/子域匹配、后缀伪造拦截、空白名单不限制 |
+| `StreamTypeDetectorTest` | 7 | `.m3u8`、无后缀参数/路径识别、渐进式排除 |
+| `StreamRefreshCoordinatorTest` | 10 | 缓存复用、临期刷新、403 单次重解析、二次 403/429 快速失败、500 委派、预算重置 |
+| `StaticStreamResolverTest` | 5 | 普通 IPTV 无回归（url/headers/MIME/无过期/无 Host 限制） |
+| `RoutingStreamResolverTest` | 3 | `mgtv:` 前缀路由与静态回退 |
+| `MgtvFailClosedHardeningTest` | 11 | `isp2p`/`hdcp` 缺失或非整数拒绝、DRM 源拒绝、缺 `code` 拒绝、Origin 无尾斜杠、userinfo 拒绝、过期时间钳制、302 不跟随 |
+| `StreamHardeningRegressionTest` | 5 | https/ftp 拒绝、userinfo 伪造、DASH/JSON 不误判、并发 403 只重解析一次、层间依赖纯度 |
+
+累计新增 **14 个测试类 / 107 个用例**（本仓库当前合计 34 个测试类 / 319 个用例），
+全部使用脱敏 fixture + 本地回环 `ServerSocket`，100% 离线。
+
+### 阶段九未做
+
+- **地址到期刷新的真机长测**：逻辑为「剩余 < 60 秒主动重解析」，8 小时有效期无法在验收窗口内验证
+- **断网恢复真机实测**：有重试与重解析路径，但未做断网/恢复用例
+- **TV（Leanback）端未接入 MGTV**：只在手机/平板端作为独立分组追加
+- **清晰度切换 UI**：当前固定 `init_definition=2`（480P）
+
+---
+
 ## P1：核心架构与数据系统
 
 目标：让"频道从哪来"可配置、可解析、可测试。
@@ -448,3 +515,5 @@
 | P2-6 | 多语言 | 现有资源仅中文 |
 | P2-7 | 仪器测试 / UI 自动化 | 需引入 `androidx.test` 依赖（属新增依赖，需单独论证） |
 | P2-8 | Release 流程 | 签名配置、混淆规则、产物归档；与 CI 的 PR 检查**分离** |
+| P2-9 | ~~MGTV 动态直播源（真实拉流）~~ **阶段九已跑通** | `sign` 已还原并本地计算，`did` 本地生成；真实网络验证 `code=0` + HLS/TS 200。见 `docs/MGTV-GAP-REPORT.md` |
+| P2-10 | ~~MGTV 频道目录 / UI 集成（P5）~~ **手机端已完成** | `MgtvCatalogCoordinator` 后台拉目录，独立分组追加；TV 端待接 |

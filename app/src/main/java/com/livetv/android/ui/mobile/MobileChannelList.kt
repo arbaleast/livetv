@@ -83,19 +83,36 @@ object MobileChannelList {
     }
 
     /**
-     * 根据可用宽度（dp）决定网格列数。
+     * 校验当前选中的分类 id 在新的分类列表里是否仍然有效。
      *
-     * - `>= 840dp`（大平板横屏）：4 列
-     * - `>= 600dp`（平板）：3 列
-     * - 其余（手机竖屏 / 横屏）：2 列
-     *
-     * 列数下限为 2：单列在手机上会让每张卡片拉得过宽、滚动过长。
+     * 刷新或切换订阅源后，旧分类可能不再存在或变空；若直接保留旧 id 会落入“总频道非空但列表为空”的假空态。
+     * 此时自动回退到 `null`（全部）。
      */
-    fun gridSpanCount(screenWidthDp: Int): Int = when {
-        screenWidthDp >= 840 -> 4
-        screenWidthDp >= 600 -> 3
-        else -> 2
+    fun resolveSelectedCategoryId(
+        categories: List<ChannelCategory>,
+        selectedCategoryId: String?,
+    ): String? {
+        if (selectedCategoryId == null) return null
+        val exists = categories.any { it.id == selectedCategoryId && it.channels.isNotEmpty() }
+        return if (exists) selectedCategoryId else null
     }
+
+    /**
+     * 根据可用宽度（dp）计算网格列数：**不再写死阈值**，而是按"单卡最小期望宽度"除出来。
+     *
+     * - 单卡最小宽度 [MIN_CARD_WIDTH_DP] = 190dp（横屏常见 780–900dp 可用宽度 → 4 列）
+     * - 下限 2 列（手机竖屏 1 列会让卡片过宽）、上限 5 列（避免超宽屏出现"细条"卡片）
+     */
+    fun gridSpanCount(screenWidthDp: Int): Int {
+        if (screenWidthDp <= 0) return 2
+        return (screenWidthDp / MIN_CARD_WIDTH_DP).coerceIn(2, MAX_SPAN_COUNT)
+    }
+
+    /** 单卡最小期望宽度（dp），用于列数计算。 */
+    const val MIN_CARD_WIDTH_DP = 190
+
+    /** 网格列数上限。 */
+    const val MAX_SPAN_COUNT = 5
 
     /** 像素 → dp。`density` 非正数时退回原始像素，避免除零。 */
     fun pxToDp(px: Int, density: Float): Int {
@@ -158,19 +175,76 @@ object MobileChannelList {
         String.format(Locale.US, "%02d", index.coerceAtLeast(0))
 
     /**
-     * 频道副标题：有描述用描述；没有描述时退回**来源标签**（流地址的文件名主干），
-     * 再不行退回频道 id——保证卡片副标题行永远有内容，行高一致、网格不参差。
+     * 频道副标题（**绝不暴露技术字段**）。
      *
-     * M3U 播放列表没有描述字段，`sample.m3u` 里的频道全部走这条兜底路径。
+     * 返回 `null` 表示"没有值得展示的辅助信息"，调用方应隐藏副标题行并让主标题垂直居中。
+     *
+     * 展示优先级：
+     * 1. 有效的节目简介 / EPG 文案；
+     * 2. 否则隐藏（**不再回退到 URL 文件名或频道 ID**）。
+     *
+     * 判定为"技术字段"的情形：纯 ASCII 的 slug/ID（`cctv13`、`mgtv:287`、`news_1`）、
+     * 含 `://` 的地址、纯数字编号。
      */
-    fun formatChannelSubtitle(channel: Channel): String {
+    fun sanitizeSubtitle(channel: Channel): String? {
         val description = channel.description.trim()
-        if (description.isNotEmpty()) return description
-
-        val segment = channel.streamUrl.substringAfterLast('/').substringBefore('?').trim()
-        val stem = segment.substringBeforeLast('.', segment).trim()
-        if (stem.isNotEmpty()) return stem
-
-        return channel.id.trim()
+        if (description.isEmpty()) return null
+        // 副标题与频道名完全相同属于冗余信息（MGTV 目录里 currentProgram 常等于频道名）
+        if (description.equals(channel.name.trim(), ignoreCase = true)) return null
+        return description.takeIf { !isTechnicalText(it) }
     }
+
+    /** 判断一段文本是否是用户不该看到的内部技术标识。 */
+    fun isTechnicalText(text: String): Boolean {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return true
+        if (trimmed.contains("://")) return true
+        if (trimmed.startsWith("mgtv:")) return true
+        // 纯 ASCII 的 slug / ID：字母数字加 _ - . : 组合，且不含空格
+        if (ASCII_SLUG.matches(trimmed)) return true
+        // 纯数字（频道编号之类）
+        if (trimmed.all { it.isDigit() }) return true
+        return false
+    }
+
+    /** 纯 ASCII slug/ID 形态（允许下划线、连字符、点、冒号）。 */
+    private val ASCII_SLUG = Regex("^[A-Za-z0-9_.:\\-]+$")                
+    /** 左侧分类导航栏的一行：`id == null` 表示"全部"。 */
+    data class RailItem(
+        val id: String?,
+        val name: String,
+        val count: Int,
+        val selected: Boolean,
+    )
+
+    /**
+     * 组装左侧分类导航项：第一项固定为"全部"（总数），之后每个**非空**分类一项。
+     * 与右侧内容使用同一份分类数据，保证角标数量与网格一致。
+     */
+    fun buildRailItems(
+        categories: List<ChannelCategory>,
+        selectedCategoryId: String?,
+    ): List<RailItem> {
+        val items = mutableListOf<RailItem>()
+        val total = categories.sumOf { it.channels.size }
+        items += RailItem(
+            id = null,
+            name = ALL_CATEGORY_NAME,
+            count = total,
+            selected = selectedCategoryId == null,
+        )
+        categories.forEach { category ->
+            if (category.channels.isEmpty()) return@forEach
+            items += RailItem(
+                id = category.id,
+                name = category.name,
+                count = category.channels.size,
+                selected = category.id == selectedCategoryId,
+            )
+        }
+        return items
+    }
+
+    /** "全部"导航项的名称。 */
+    const val ALL_CATEGORY_NAME = "全部"
 }

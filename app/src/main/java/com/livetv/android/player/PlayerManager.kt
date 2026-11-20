@@ -8,11 +8,23 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import com.livetv.android.domain.model.Channel
+import com.livetv.android.domain.stream.SessionGenerationGate
+import com.livetv.android.domain.stream.StreamResolveError
+import com.livetv.android.domain.stream.Clock
+import com.livetv.android.domain.stream.StaticStreamResolver
+import com.livetv.android.domain.stream.StreamRefreshCoordinator
+import com.livetv.android.domain.stream.StreamResolver
+import com.livetv.android.domain.stream.SystemClock
+import com.livetv.android.media.NoRetryOnClientErrorPolicy
+import com.livetv.android.media.ScopedHeaderDataSourceFactory
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Media3 桥接层（Android / Media3 专用）。
@@ -30,6 +42,12 @@ class PlayerManager(
     context: Context,
     private val onStateChanged: (PlaybackState) -> Unit,
     private val onChannelChanged: (Channel) -> Unit,
+    /**
+     * 播放会话解析器：普通 IPTV 用 [StaticStreamResolver]（行为与改造前一致），
+     * 动态签名地址（如 MGTV）由具体实现解析出带有效期的会话。
+     */
+    private val streamResolver: StreamResolver = StaticStreamResolver,
+    clock: Clock = SystemClock,
 ) {
 
     companion object {
@@ -82,6 +100,45 @@ class PlayerManager(
     var playbackState: PlaybackState = PlaybackState.Idle
         private set
 
+    /** 动态会话协调器：负责地址到期刷新与 HTTP 403 单次重解析。 */
+    private val streamCoordinator = StreamRefreshCoordinator(streamResolver, clock)
+
+    /**
+     * 会话解析后台线程（单线程，保证解析与协调器状态串行访问）。
+     *
+     * 之所以必须有它：`StreamResolver.resolve()` 对动态源（MGTV）会发起真实 HTTP 请求，
+     * 在主线程调用会直接抛 `NetworkOnMainThreadException`。
+     */
+    private val resolutionExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "livetv-session-resolve").apply { isDaemon = true }
+        }
+
+    /** 会话代际号：切台时递增，用于丢弃过期的解析结果。 */
+    private val generationGate = SessionGenerationGate()
+
+    /** 当前生效的播放会话（静态频道为 null，动态频道为解析结果）。 */
+    private var activeSession: PlaybackSession? = null
+
+    /**
+     * 解析后的播放会话快照。
+     *
+     * @param url 实际播放地址
+     * @param headers 该会话专用的请求头
+     * @param mimeType 显式 MIME（用于无 `.m3u8` 后缀的 HLS 识别）；`null` 表示交给 Media3 自动识别
+     * @param allowedHeaderHosts 请求头允许出现的域名白名单（空集合表示不限制）
+     * @param expiresAtMs 地址过期时间戳；`null` 表示静态地址
+     * @param dynamic 是否为动态会话（动态会话不走主备源切换，只按会话重新解析）
+     */
+    private data class PlaybackSession(
+        val url: String,
+        val headers: Map<String, String>,
+        val mimeType: String?,
+        val allowedHeaderHosts: Set<String>,
+        val expiresAtMs: Long?,
+        val dynamic: Boolean,
+    )
+
     /** 频道切换回调（用于更新 UI 提示）。 */
     var onChannelSwitched: ((Channel) -> Unit)? = null
 
@@ -90,6 +147,9 @@ class PlayerManager(
 
     /** 切换到备用线路的提示回调（备用源下标）。 */
     var onSwitchingSource: ((Int) -> Unit)? = null
+
+    /** ExoPlayer 实例创建或释放时的回调，供 UI 绑定/解绑 `PlayerView.player`。 */
+    var onPlayerChanged: ((ExoPlayer?) -> Unit)? = null
 
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -125,9 +185,11 @@ class PlayerManager(
     fun start(channel: Channel?) {
         if (player == null) {
             player = ExoPlayer.Builder(appContext).build().apply {
+                playWhenReady = true
                 addListener(playerListener)
             }
         }
+        onPlayerChanged?.invoke(player)
         if (channel != null) {
             switchChannel(channel)
         }
@@ -140,6 +202,8 @@ class PlayerManager(
      */
     fun stop() {
         retryHandler.removeCallbacksAndMessages(null)
+        generationGate.next()
+        onPlayerChanged?.invoke(null)
         player?.let {
             it.removeListener(playerListener)
             it.release()
@@ -147,6 +211,8 @@ class PlayerManager(
         player = null
         currentChannel = null
         retryState = RetryPolicy.RetryState()
+        activeSession = null
+        resolutionExecutor.execute { streamCoordinator.resetSession() }
         dispatch(PlaybackEvent.Released)
     }
 
@@ -154,20 +220,24 @@ class PlayerManager(
 
     /**
      * 切换到指定频道：**丢弃旧频道的重试状态**，从主源重新开始。
+     *
+     * 会话解析（可能包含网络请求）在后台线程完成，回到主线程前用代际号校验，
+     * 保证快速连点时旧频道的解析结果不会覆盖新频道。
      */
     fun switchChannel(channel: Channel) {
         retryHandler.removeCallbacksAndMessages(null)
         currentChannel = channel
-        val candidates = RetryPolicy.candidateUrls(channel)
-        retryState = RetryPolicy.onChannelSwitched(candidates.size)
+        val generation = generationGate.next()
         onChannelChanged(channel)
         onChannelSwitched?.invoke(channel)
-        val url = candidates.getOrNull(retryState.sourceIndex)
-        if (url.isNullOrEmpty()) {
-            dispatch(PlaybackEvent.Fatal(PlaybackError.SourceParsing))
-            return
+        resolutionExecutor.execute {
+            streamCoordinator.resetSession()
+            val resolution = resolveSession(channel)
+            retryHandler.post {
+                if (!generationGate.isCurrent(generation) || currentChannel !== channel) return@post
+                applySessionResolution(channel, resolution, PlaybackEvent.SwitchChannel)
+            }
         }
-        prepare(url, channel)
     }
 
     /**
@@ -177,14 +247,107 @@ class PlayerManager(
         val channel = currentChannel ?: return
         retryHandler.removeCallbacksAndMessages(null)
         retryState = RetryPolicy.onManualReset(retryState)
-        val candidates = RetryPolicy.candidateUrls(channel)
-        val url = candidates.getOrNull(retryState.sourceIndex)
-        if (url.isNullOrEmpty()) {
-            dispatch(PlaybackEvent.Fatal(PlaybackError.SourceParsing))
-            return
-        }
+        val generation = generationGate.next()
+        val previousSession = activeSession
         dispatch(PlaybackEvent.ManualReset)
-        prepare(url, channel)
+        resolutionExecutor.execute {
+            val session = if (previousSession?.dynamic == true) {
+                // 动态地址可能已过期：重新解析一次再重连
+                streamCoordinator.resetSession()
+                resolveSession(channel)
+            } else {
+                SessionResolution.Ready(previousSession)
+            }
+            retryHandler.post {
+                if (!generationGate.isCurrent(generation) || currentChannel !== channel) return@post
+                applySessionResolution(channel, session, PlaybackEvent.Retry)
+            }
+        }
+    }
+
+    /** 把一次会话解析结果应用到播放器（**必须在主线程**）。 */
+    private fun applySessionResolution(
+        channel: Channel,
+        resolution: SessionResolution,
+        event: PlaybackEvent,
+    ) {
+        when (resolution) {
+            is SessionResolution.Failed -> {
+                // 动态源解析失败：直接给出精确错误，不再回退到空地址
+                dispatch(PlaybackEvent.Fatal(resolution.error))
+            }
+
+            is SessionResolution.Ready -> {
+                activeSession = resolution.session
+                val candidates = candidatesFor(resolution.session, channel)
+                retryState = RetryPolicy.onChannelSwitched(candidates.size)
+                val url = candidates.getOrNull(retryState.sourceIndex)
+                if (url.isNullOrEmpty()) {
+                    dispatch(PlaybackEvent.Fatal(PlaybackError.SourceParsing))
+                    return
+                }
+                prepare(url, channel, event)
+            }
+        }
+    }
+
+    /**
+     * 解析当前频道的播放会话（**必须在解析线程调用**）。
+     *
+     * - 解析成功：返回会话快照（静态频道同样走这里，只是 `dynamic=false`）；
+     * - 静态频道解析失败：返回 `Ready(null)`，调用方回退到频道自带的静态地址；
+     * - 动态频道（`mgtv:` 等没有静态地址的频道）解析失败：返回 `Failed`，由调用方直接 Fatal。
+     */
+    private fun resolveSession(channel: Channel): SessionResolution {
+        val result = streamCoordinator.prepareForPlayback(channel)
+        if (result is com.livetv.android.domain.stream.StreamResolveResult.Success) {
+            val stream = result.stream
+            return SessionResolution.Ready(
+                PlaybackSession(
+                    url = stream.url,
+                    headers = stream.headers,
+                    mimeType = stream.mimeType,
+                    allowedHeaderHosts = stream.allowedHeaderHosts,
+                    expiresAtMs = stream.expiresAtMs,
+                    dynamic = stream.expiresAtMs != null || channel.streamUrl.isBlank(),
+                ),
+            )
+        }
+        val failure = result as com.livetv.android.domain.stream.StreamResolveResult.Failure
+        if (channel.streamUrl.isNotBlank()) {
+            // 静态频道：保留原有回退行为
+            return SessionResolution.Ready(null)
+        }
+        return SessionResolution.Failed(mapResolveError(failure))
+    }
+
+    /** 把会话解析错误映射成播放错误（用于精确文案）。 */
+    private fun mapResolveError(
+        failure: com.livetv.android.domain.stream.StreamResolveResult.Failure,
+    ): PlaybackError = when (failure.error) {
+        StreamResolveError.HTTP_FORBIDDEN -> PlaybackError.HttpStatus(403)
+        StreamResolveError.HTTP_NOT_FOUND -> PlaybackError.HttpStatus(404)
+        StreamResolveError.HTTP_RATE_LIMITED -> PlaybackError.HttpStatus(429)
+        StreamResolveError.NETWORK_ERROR -> PlaybackError.Network
+        StreamResolveError.PARSE_ERROR -> PlaybackError.SourceParsing
+        StreamResolveError.UNSUPPORTED_SOURCE -> PlaybackError.SourceParsing
+        StreamResolveError.AUTH_UNAVAILABLE -> PlaybackError.Unknown(failure.message)
+    }
+
+    /** 会话解析结果。 */
+    private sealed interface SessionResolution {
+        data class Ready(val session: PlaybackSession?) : SessionResolution
+        data class Failed(val error: PlaybackError) : SessionResolution
+    }
+
+    /**
+     * 候选地址列表：
+     * - 动态会话只有解析出的那一个地址（过期由会话刷新处理，不走主备源切换）；
+     * - 静态频道保持原有"主源 + 备用源"顺序。
+     */
+    private fun candidatesFor(session: PlaybackSession?, channel: Channel): List<String> {
+        if (session != null && session.dynamic) return listOf(session.url)
+        return RetryPolicy.candidateUrls(channel)
     }
 
     /**
@@ -192,41 +355,120 @@ class PlayerManager(
      *
      * 只重建 `MediaSource`/`DataSource`，**不重建 ExoPlayer**。
      */
-    private fun prepare(url: String, channel: Channel) {
+    private fun prepare(
+        url: String,
+        channel: Channel,
+        event: PlaybackEvent = PlaybackEvent.Prepare,
+    ) {
         val exoPlayer = player ?: return
         val mediaSource = buildMediaSource(url, channel)
         exoPlayer.setMediaSource(mediaSource)
+        exoPlayer.playWhenReady = true
         exoPlayer.prepare()
-        dispatch(PlaybackEvent.Prepare)
+        dispatch(event)
     }
 
     /**
      * 当前实际使用的播放地址（主源或备用源）。
      */
     fun currentUrl(): String? {
+        val session = activeSession
+        if (session != null && session.dynamic) return session.url
         val channel = currentChannel ?: return null
         return RetryPolicy.candidateUrls(channel).getOrNull(retryState.sourceIndex)
     }
 
     /**
      * 构建 MediaSource：请求头与超时都配置在 `DataSource` 层。
+     *
+     * - 显式 MIME：来自会话解析结果（`application/x-mpegURL`），
+     *   保证**无 `.m3u8` 后缀且服务端 Content-Type 不规范**的 HLS 也能进入 HLS 解析器；
+     * - Host 白名单：动态会话的专用请求头只允许出现在白名单域名上，
+     *   并阻断跨协议跳转；静态频道保持原有"工厂默认属性"行为，零回归。
      */
     private fun buildMediaSource(url: String, channel: Channel): MediaSource {
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(channel.headers)
+        val session = activeSession
+        val headers = session?.headers ?: channel.headers
+        val allowedHosts = session?.allowedHeaderHosts ?: emptySet()
+        val mimeType = session?.mimeType
+        val baseFactory = DefaultHttpDataSource.Factory()
             .setConnectTimeoutMs(CONNECT_TIMEOUT_MS)
             .setReadTimeoutMs(READ_TIMEOUT_MS)
-            .setAllowCrossProtocolRedirects(true)
-        return ProgressiveMediaSourceFactoryHolder.create(dataSourceFactory, url)
+        val dataSourceFactory: DataSource.Factory = if (allowedHosts.isEmpty()) {
+            baseFactory
+                .setAllowCrossProtocolRedirects(true)
+                .setDefaultRequestProperties(headers)
+        } else {
+            ScopedHeaderDataSourceFactory(
+                delegate = baseFactory.setAllowCrossProtocolRedirects(false),
+                headers = headers,
+                allowedHostSuffixes = allowedHosts,
+            )
+        }
+        val mediaItem = MediaItem.Builder()
+            .setUri(Uri.parse(url))
+            .apply { mimeType?.let { setMimeType(it) } }
+            .build()
+        return ProgressiveMediaSourceFactoryHolder.create(dataSourceFactory, mediaItem)
     }
 
     // ---------------- 错误与重试调度 ----------------
 
     /**
-     * 处理播放错误：交给纯策略层决策，再按结果调度重试 / 切源 / 致命错误。
+     * 处理播放错误：
+     * - 动态会话（带有效期的签名地址）先交给 [StreamRefreshCoordinator]：
+     *   403 最多重新解析 1 次、429 立即快速失败，杜绝无限重试；
+     * - 其余情况沿用既有 [RetryPolicy] 重试 / 主备源切换策略。
      */
     private fun handlePlaybackError(error: PlaybackException) {
         val mapped = mapException(error)
+        if (mapped is PlaybackError.HttpStatus && activeSession?.dynamic == true) {
+            val channel = currentChannel
+            if (channel != null) {
+                val generation = generationGate.current()
+                resolutionExecutor.execute {
+                    val action = streamCoordinator.onPlaybackHttpError(channel, mapped.code)
+                    retryHandler.post {
+                        if (!generationGate.isCurrent(generation) || currentChannel !== channel) return@post
+                        when (action) {
+                            is StreamRefreshCoordinator.RefreshAction.Reconnect ->
+                                applyResolvedStream(action.stream)
+
+                            is StreamRefreshCoordinator.RefreshAction.FastFail ->
+                                dispatch(PlaybackEvent.Fatal(mapped))
+
+                            is StreamRefreshCoordinator.RefreshAction.DelegateToRetryPolicy ->
+                                applyRetryPolicy(mapped)
+                        }
+                    }
+                }
+                return
+            }
+        }
+        applyRetryPolicy(mapped)
+    }
+
+    /**
+     * 使用重新解析出的会话重连（动态地址过期或 403 刷新后拿到新地址）。
+     */
+    private fun applyResolvedStream(stream: com.livetv.android.domain.stream.ResolvedStream) {
+        val channel = currentChannel ?: return
+        activeSession = PlaybackSession(
+            url = stream.url,
+            headers = stream.headers,
+            mimeType = stream.mimeType,
+            allowedHeaderHosts = stream.allowedHeaderHosts,
+            expiresAtMs = stream.expiresAtMs,
+            dynamic = true,
+        )
+        retryState = retryState.copy(sourceIndex = 0, retryCount = 0)
+        prepare(stream.url, channel, PlaybackEvent.Retry)
+    }
+
+    /**
+     * 既有重试策略：每源退避重试 → 切换备用源 → 致命错误；401/403/429 走快速失败。
+     */
+    private fun applyRetryPolicy(mapped: PlaybackError) {
         if (RetryPolicy.isFastFail(mapped)) {
             handleFastFail(mapped)
             return
@@ -282,14 +524,14 @@ class PlayerManager(
     private fun scheduleReload(delayMs: Long) {
         val channel = currentChannel ?: return
         val expectedChannel = channel
-        val url = RetryPolicy.candidateUrls(expectedChannel).getOrNull(retryState.sourceIndex)
+        val url = candidatesFor(activeSession, expectedChannel).getOrNull(retryState.sourceIndex)
         if (url.isNullOrEmpty()) {
             dispatch(PlaybackEvent.Fatal(PlaybackError.SourceParsing))
             return
         }
         retryHandler.postDelayed({
             if (currentChannel === expectedChannel) {
-                prepare(url, expectedChannel)
+                prepare(url, expectedChannel, PlaybackEvent.Retry)
             }
         }, delayMs)
     }
@@ -299,6 +541,8 @@ class PlayerManager(
      */
     fun markPlaying() {
         retryState = RetryPolicy.onSuccess(retryState)
+        // 起播成功：重置动态会话的 403 刷新预算，长播数小时后再次到期仍可刷新一次
+        resolutionExecutor.execute { streamCoordinator.onPlaybackRecovered() }
     }
 
     /**
@@ -374,12 +618,18 @@ class PlayerManager(
         onStateChanged(playbackState)
     }
 
-    /** MediaSource 构建的薄封装，便于在测试中替换。 */
+    /** MediaSource 构建的薄封装：使用 DefaultMediaSourceFactory 自动支持 HLS (.m3u8) 与渐进式流。 */
+    /**
+     * MediaSource 构建的薄封装：使用 `DefaultMediaSourceFactory` 自动支持 HLS（`.m3u8`）与渐进式流，
+     * 并挂载 [NoRetryOnClientErrorPolicy]，避免 Media3 底层把 401/403/429 再重试 3 次
+     * （应用层 `RetryPolicy` 已经判定这三类不可重试，两层叠加会把一次 403 放大成 4 次请求）。
+     */
     private object ProgressiveMediaSourceFactoryHolder {
         fun create(
-            dataSourceFactory: DefaultHttpDataSource.Factory,
-            url: String,
-        ): MediaSource = androidx.media3.exoplayer.source.ProgressiveMediaSource.Factory(dataSourceFactory)
-            .createMediaSource(MediaItem.fromUri(Uri.parse(url)))
+            dataSourceFactory: DataSource.Factory,
+            mediaItem: MediaItem,
+        ): MediaSource = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSourceFactory)
+            .setLoadErrorHandlingPolicy(NoRetryOnClientErrorPolicy())
+            .createMediaSource(mediaItem)
     }
 }

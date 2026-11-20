@@ -12,13 +12,14 @@
     <color name="mobile_card_pressed">#1E2533</color>
     <color name="mobile_card_stroke">#232B3A</color>
     <color name="mobile_text_primary">#F3F6FA</color>
-    <color name="mobile_text_secondary">#8B95A7</color>
-    <color name="mobile_text_tertiary">#5E687A</color>
+    <color name="mobile_text_secondary">#B0BACB</color>
+    <color name="mobile_text_tertiary">#8C98AD</color>
     <color name="mobile_accent">#3B82F6</color>
     <color name="mobile_pill_background">#151A23</color>
     <color name="mobile_drawer_background">#E6111620</color>
     <color name="mobile_drawer_edge">#26FFFFFF</color>
     <color name="mobile_drawer_scrim">#99000000</color>
+    <color name="mobile_drawer_item_selected">#263B82F6</color>
 
     <!-- 分类徽章的低饱和强调色（按分类稳定选取） -->
     <color name="mobile_badge_accent_1">#3B82F6</color>

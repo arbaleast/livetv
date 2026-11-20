@@ -7,7 +7,7 @@
 
 | 层级 | 运行环境 | 覆盖对象 | 现状 |
 |---|---|---|---|
-| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航、设备判定、网格列数、手机端徽章/筛选/抽屉、**远程订阅拉取与三级兜底、401/403/429 快速失败** | **已建立**：18 个测试类 / **192 个用例**（`app/src/test/`） |
+| L1 纯 JVM 单元测试 | 本地 JVM，`testDebugUnitTest` | 数据模型、解析器、Repository、状态流转、重试策略、频道导航、设备判定、网格列数、手机端徽章/筛选/抽屉、远程订阅拉取与三级兜底、401/403/429 快速失败、**HLS 识别、播放会话刷新状态机、Host 请求头隔离、MGTV 白盒筛选与 fail-closed** | **已建立**：34 个测试类 /**319 个用例**（`app/src/test/`） |
 | L2 仪器测试 | 模拟器/真机，`connectedDebugAndroidTest` | View 渲染、Leanback 焦点、Activity 生命周期 | **未建立**：无 `androidTest` 源集、无 `androidx.test` 依赖 |
 | L3 真机验收 | 真实 Android TV 设备 | 遥控器手感、直播流实际解码、长期稳定性 | **手动**：无自动化 |
 
@@ -30,6 +30,18 @@
 | `data/LocalAssetsChannelsTest` | 3 | 直接读 `src/main/assets/channels.json`，校验随包默认配置合法且 6 个频道无损 |
 | `data/remote/RemoteM3uFetcherTest` | 10 | **完全离线**（本地 `ServerSocket` 起 `127.0.0.1` 随机端口）：200 原文与 UTF-8 解码、403/404/500 → `HttpError`、`file://`/`ftp://`/空串 → `InvalidUrl` 且不发请求、响应超 2MB → `SizeExceeded`、连接被拒 → `NetworkError` |
 | `data/repository/ChannelRepositorySubscriptionTest` | 11 | 远端成功写缓存并 `RemoteLoaded`、失败有缓存 → `FallbackToCache` 且保留旧列表、失败无缓存 → `FallbackToBuiltin`、**HTTP 200 空内容不清空已有列表与缓存**、清 URL → `BuiltinOnly`、初始化优先有效缓存、换 URL 使旧缓存失效、`findChannelById`、URL trim |
+| `domain/stream/StreamTypeDetectorTest` | 7 | `.m3u8`/`.m3u`、**无后缀 HLS（`format/type/protocol/fmt=m3u8\|hls`、`/hls/`、`hls.php`、`/m3u8/`）**、`.mp4/.mkv/.flv/.ts/.mp3/.aac/.webm` 明确不误判、显式 MIME 推断 |
+| `domain/stream/HeaderHostPolicyTest` | 10 | 精确主机 / 子域匹配、**`evilmgtv.com` 与 `mgtv.com.evil.net` 后缀伪造拦截**、空白名单不限制（普通 IPTV 不变）、非法 URL |
+| `domain/stream/StreamRefreshCoordinatorTest` | 10 | 缓存复用、**注入 `Clock` 模拟临期（<60s）主动刷新**、403 单次重解析、**第二次 403 快速失败不再解析**、重解析失败即失败、**429 立即快速失败**、500 委派既有策略、起播成功重置预算、重置会话 |
+| `domain/stream/StaticStreamResolverTest` | 5 | **普通 IPTV 无回归**：url/headers/MIME 保留、`expiresAtMs=null`、无 Host 限制、渐进式 MIME 为空、空/非 http URL 拒绝 |
+| `domain/stream/RoutingStreamResolverTest` | 3 | `mgtv:` 前缀路由到 MGTV 解析器、普通频道走静态解析器 |
+| `data/mgtv/MgtvJsonParserTest` | 9 | 脱敏 JSONP/纯 JSON 目录解析、播放源字段与单源 `isp2p`/`hdcp` 覆写、业务错误码、坏 JSON 返回空/null |
+| `data/mgtv/MgtvSourceSelectorTest` | 9 | **白盒过滤**：放行 `.m3u8`+`isp2p=0`+`hdcp=0`+https，拦截 P2P/HDCP/HTTP/非 m3u8；清晰度优先匹配；未命中按分辨率确定性回退；无合规源返回 null |
+| `data/mgtv/MgtvSignerTest` | 8 | **签名算法黄金向量**（期望值由独立 Node 实现预先算出）：排序拼接、空串参与、参数顺序无关、`_t` 变化即变、输出 32 位大写十六进制 |
+| `data/mgtv/MgtvEndpointsTest` | 7 | 目录/播放源参数构造、`sourceParams`→`sourceUrl` 拼接顺序（`_support`/`sign` 在末尾）、`init_definition` 优先、**数据层源码守卫：无 32 位十六进制 sign、无 IP、无 `ftc=`/`sftc=`/Cookie** |
+| `data/mgtv/MgtvHttpClientTest` | 8 | 本地回环服务：200 原文、请求头发送、403/404、非法 scheme/空串、超限、连接拒绝 |
+| `data/mgtv/HttpMgtvSourceFetcherTest` | 8 | 本地回环：200 → `RawJson`、请求携带 32 位大写 `sign`、签名与 `MgtvSigner` 结果一致、`did == deviceId`、不同 `_t` 签名不同、Referer 上线、403 映射、网络错误映射 |
+| `data/mgtv/MgtvStreamResolverTest` | 10 | 成功流 + 过期时间计算、`AUTH_UNAVAILABLE`/403/404/429/网络/解析错误映射、业务错误码、无可用源、Host 白名单可配置、cameraId 提取 |
 
 ## 2. 命令
 
@@ -180,7 +192,9 @@ testImplementation("org.json:json:20231013")
   （重试策略 / 状态归约 / 错误映射 / 频道导航 + 纯度约束）；阶段 3.5 追加 2 个错误映射边界用例；
   阶段四补齐 **M3U 解析与多源合并**的 L1 覆盖；阶段五补齐 **M3U 请求头与仓库缓存**的 L1 覆盖；
   阶段 5.5 完成**真机实测**（见 §6），阶段六新增设备判定与网格列数用例，阶段七新增手机卡片徽章、分类筛选、副标题兜底、抽屉模型用例，
-  阶段八新增**远程订阅拉取、三级兜底与 401/403/429 快速失败**用例，合计 **192 个用例 / 18 个测试类**。
+  阶段八新增**远程订阅拉取、三级兜底与 401/403/429 快速失败**用例；
+  阶段九新增**HLS 识别、播放会话刷新状态机、Host 请求头隔离、MGTV 白盒筛选与签名黄金向量**用例，
+  合计 **319 个用例 / 34 个测试类**。
 
   阶段六新增：`DeviceUtilsTest`（6 例，TV 判定两种信号）、`MobileChannelListTest`（11 例，行序列组装、2/3/4 列阈值、**px→dp 换算**）。
   阶段七新增：`MobileChannelListTest` 扩到 24 例（徽章简标、分类筛选、副标题三级兜底、序号补零、分类配色稳定性），
@@ -194,6 +208,16 @@ testImplementation("org.json:json:20231013")
   因此改用 `java.net.ServerSocket` 自建本地 `127.0.0.1` 随机端口服务，不访问公网。
   先红后绿证据：清空 `FAST_FAIL_HTTP_STATUSES` → `192 tests completed, 7 failed`；
   把缓存读取强制为 `null` → `192 tests completed, 2 failed`；两次破坏均已还原。
+
+  **阶段九的 MGTV 测试全部离线且只用脱敏样本**：`TinyHttpServer` 用
+  `java.net.ServerSocket` 起 `127.0.0.1` 随机端口；JSON fixture 位于
+  `app/src/test/java/com/livetv/android/data/mgtv/MgtvSanitizedFixtures.kt`，
+  域名统一用 `.invalid`，`sid`/`deviceId` 全部是人造占位串；`MgtvSignerTest` 的黄金向量是对**人造参数**的 MD5 结果，不是抓包签名。
+  `MgtvEndpointsTest` 另有一条**源码守卫**用例，扫描 `data/mgtv/` 下所有 `.kt`，
+  断言不出现 32 位十六进制字面量（疑似 sign）、不出现 IP、不出现 `ftc=`/`sftc=`/`Cookie:`/`macid=`/`uip=`。
+  由于 JDK 的 `HttpURLConnection` 会静默丢弃受限的 `Origin` 头，`HttpMgtvSourceFetcherTest`
+  改为断言 `sourceRequestHeaders()` 映射内容 + 只在链路上验证 `Referer`。
+  先红后绿证据：两处初始失败（`Origin` 受限头、`ftp://` 的 host 提取预期错误）在修正测试与抽出纯函数后转绿。
 - **L1 单测无法覆盖的层次已被真机暴露**：D1/D2/D3/D4 都属于 Activity 与 Media3 之间的事件/时序问题，
   纯 JVM 用例在结构上不可能发现。后续再改 `PlayerActivity` 的按键或状态渲染时，必须做真机回归。
   阶段七同理：触控浮层与抽屉的真实布局、`isControllerOpenedByUser` 与抽屉的 BACK 优先级、

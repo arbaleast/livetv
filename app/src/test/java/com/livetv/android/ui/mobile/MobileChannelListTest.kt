@@ -3,6 +3,8 @@ package com.livetv.android.ui.mobile
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.model.ChannelCategory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -73,21 +75,20 @@ class MobileChannelListTest {
     }
 
     @Test
-    fun `phone width uses two columns`() {
+    fun `phone width uses at least two columns`() {
+        // 窄屏也必须保证 2 列，避免卡片被拉伸得过宽
         assertEquals(2, MobileChannelList.gridSpanCount(360))
         assertEquals(2, MobileChannelList.gridSpanCount(411))
+        assertEquals(2, MobileChannelList.gridSpanCount(1))
     }
 
     @Test
-    fun `tablet width uses three columns`() {
+    fun `columns grow with the available width instead of fixed breakpoints`() {
+        // 190dp 单卡最小宽度：600/190=3、839/190=4、1280/190=6 → 上限 5
         assertEquals(3, MobileChannelList.gridSpanCount(600))
-        assertEquals(3, MobileChannelList.gridSpanCount(839))
-    }
-
-    @Test
-    fun `large tablet width uses four columns`() {
+        assertEquals(4, MobileChannelList.gridSpanCount(839))
         assertEquals(4, MobileChannelList.gridSpanCount(840))
-        assertEquals(4, MobileChannelList.gridSpanCount(1280))
+        assertEquals(5, MobileChannelList.gridSpanCount(1280))
     }
 
     @Test
@@ -116,10 +117,10 @@ class MobileChannelListTest {
     }
 
     @Test
-    fun `landscape phone display density yields three columns after conversion`() {
-        // 2780px @ 3.5x = 794dp -> 横屏三列（不是四列）
+    fun `landscape phone display density yields four columns after conversion`() {
+        // 2780px @ 3.5x = 794dp -> 794/190=4 列（按单卡最小宽度动态算）
         val widthDp = MobileChannelList.pxToDp(2780, 3.5f)
-        assertEquals(3, MobileChannelList.gridSpanCount(widthDp))
+        assertEquals(4, MobileChannelList.gridSpanCount(widthDp))
     }
 
     // ---------------- 徽章简标 ----------------
@@ -191,23 +192,73 @@ class MobileChannelListTest {
         assertEquals(emptyList<MobileRow>(), MobileChannelList.filterRows(categories, "missing"))
     }
 
-    // ---------------- 副标题兜底 ----------------
-
     @Test
-    fun `subtitle prefers the description`() {
-        assertEquals("描述n1", MobileChannelList.formatChannelSubtitle(channel("n1")))
+    fun `resolveSelectedCategoryId keeps existing non empty category`() {
+        val categories = listOf(
+            category("news", "新闻", listOf(channel("n1"))),
+            category("sports", "体育", listOf(channel("s1"))),
+        )
+
+        assertEquals("sports", MobileChannelList.resolveSelectedCategoryId(categories, "sports"))
+        assertEquals(null, MobileChannelList.resolveSelectedCategoryId(categories, null))
     }
 
     @Test
-    fun `subtitle falls back to the stream url stem when description is blank`() {
-        val blank = Channel(id = "cctv1", name = "CCTV-1 综合", description = "  ", streamUrl = "https://example.com/live/cctv1.m3u8")
-        assertEquals("cctv1", MobileChannelList.formatChannelSubtitle(blank))
+    fun `resolveSelectedCategoryId resets to null when selected category is missing or empty`() {
+        val categories = listOf(
+            category("news", "新闻", listOf(channel("n1"))),
+            category("empty", "空分类", emptyList()),
+        )
+
+        assertEquals(null, MobileChannelList.resolveSelectedCategoryId(categories, "missing"))
+        assertEquals(null, MobileChannelList.resolveSelectedCategoryId(categories, "empty"))
+    }
+
+    // ---------------- 副标题净化（绝不暴露技术字段） ----------------
+
+    @Test
+    fun `subtitle prefers a human readable description`() {
+        val withProgram = Channel(id = "cctv1", name = "CCTV-1 综合", description = "晚间新闻", streamUrl = "")
+        assertEquals("晚间新闻", MobileChannelList.sanitizeSubtitle(withProgram))
     }
 
     @Test
-    fun `subtitle falls back to the channel id when there is neither description nor url`() {
-        val bare = Channel(id = "x1", name = "频道", description = "", streamUrl = "")
-        assertEquals("x1", MobileChannelList.formatChannelSubtitle(bare))
+    fun `subtitle is hidden when description is blank instead of exposing the url stem`() {
+        val blank = Channel(
+            id = "cctv1",
+            name = "CCTV-1 综合",
+            description = "  ",
+            streamUrl = "https://example.com/live/cctv1.m3u8",
+        )
+        assertNull("没有有效简介时必须隐藏副标题，而不是回退到 URL", MobileChannelList.sanitizeSubtitle(blank))
+    }
+
+    @Test
+    fun `subtitle is hidden when description is a technical slug`() {
+        listOf("cctv13", "mgtv:287", "news_1", "cctv-1", "12345").forEach { technical ->
+            val channel = Channel(id = "x", name = "频道", description = technical, streamUrl = "")
+            assertNull("技术字段不应作为副标题：$technical", MobileChannelList.sanitizeSubtitle(channel))
+        }
+    }
+
+    @Test
+    fun `subtitle is hidden when it merely repeats the channel name`() {
+        val channel = Channel(id = "mgtv:287", name = "金鹰卡通", description = "金鹰卡通", streamUrl = "")
+        assertNull(MobileChannelList.sanitizeSubtitle(channel))
+    }
+
+    @Test
+    fun `subtitle is hidden when description contains a url`() {
+        val channel = Channel(id = "x", name = "频道", description = "https://cdn.example.invalid/a.m3u8", streamUrl = "")
+        assertNull(MobileChannelList.sanitizeSubtitle(channel))
+    }
+
+    @Test
+    fun `technical text detection keeps human readable strings`() {
+        assertFalse(MobileChannelList.isTechnicalText("24 小时滚动"))
+        assertFalse(MobileChannelList.isTechnicalText("市场与政策"))
+        assertTrue(MobileChannelList.isTechnicalText("mgtv:344"))
+        assertTrue(MobileChannelList.isTechnicalText("  "))
     }
 
     // ---------------- 序号与强调色 ----------------
@@ -242,4 +293,38 @@ class MobileChannelListTest {
         assertEquals(3, sports)
         assertEquals(5, satellite)
     }
+    // ---------------- 左侧分类导航栏 ----------------
+
+    @Test
+    fun `rail items start with an all entry carrying the total count`() {
+        val categories = listOf(
+            category("news", "新闻", listOf(channel("n1"), channel("n2"))),
+            category("sports", "体育", listOf(channel("s1"))),
+        )
+
+        val rail = MobileChannelList.buildRailItems(categories, selectedCategoryId = null)
+
+        assertEquals(3, rail.size)
+        assertEquals(null, rail[0].id)
+        assertEquals(MobileChannelList.ALL_CATEGORY_NAME, rail[0].name)
+        assertEquals(3, rail[0].count)
+        assertTrue(rail[0].selected)
+    }
+
+    @Test
+    fun `rail skips empty categories and marks the selected one`() {
+        val categories = listOf(
+            category("news", "新闻", listOf(channel("n1"))),
+            category("empty", "空分类", emptyList()),
+            category("sports", "体育", listOf(channel("s1"), channel("s2"))),
+        )
+
+        val rail = MobileChannelList.buildRailItems(categories, selectedCategoryId = "sports")
+
+        assertEquals(listOf(null, "news", "sports"), rail.map { it.id })
+        assertEquals(2, rail.last().count)
+        assertTrue(rail.last().selected)
+        assertFalse(rail[0].selected)
+    }
+
 }

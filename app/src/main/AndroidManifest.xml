@@ -38,8 +38,8 @@
             android:theme="@style/Theme.LiveTv.Mobile" />
         <activity
             android:name=".ui.PlayerActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"
-            android:screenOrientation="landscape"
-            android:theme="@style/Theme.AppCompat" />
+            android:theme="@style/Theme.LiveTv.Player" />
     </application>
 </manifest>

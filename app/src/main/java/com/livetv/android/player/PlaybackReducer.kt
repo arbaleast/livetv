@@ -40,8 +40,7 @@ object PlaybackReducer {
             is PlaybackState.Error -> current
             PlaybackState.Idle -> current
             PlaybackState.Loading -> PlaybackState.Loading
-            PlaybackState.Buffering, PlaybackState.Playing -> PlaybackState.Playing
-            PlaybackState.Paused -> PlaybackState.Paused
+            PlaybackState.Buffering, PlaybackState.Playing, PlaybackState.Paused -> PlaybackState.Playing
         }
 
         PlaybackEvent.Paused -> when (current) {
@@ -62,6 +61,15 @@ object PlaybackReducer {
         PlaybackEvent.ManualReset -> when (current) {
             is PlaybackState.Error -> PlaybackState.Loading
             else -> current
+        }
+
+        PlaybackEvent.SwitchChannel -> PlaybackState.Loading
+
+        PlaybackEvent.Retry -> when (current) {
+            is PlaybackState.Error -> if (current.fatal) current else PlaybackState.Loading
+            PlaybackState.Idle -> current
+            PlaybackState.Loading, PlaybackState.Buffering, PlaybackState.Playing, PlaybackState.Paused ->
+                PlaybackState.Loading
         }
 
         PlaybackEvent.Released -> PlaybackState.Idle

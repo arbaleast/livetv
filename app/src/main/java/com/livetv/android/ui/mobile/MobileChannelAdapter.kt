@@ -19,22 +19,44 @@ import com.livetv.android.domain.model.Channel
  * 徽章底色/描边按分类强调色程序化生成，因此这里只需要拿到一组强调色即可。
  */
 class MobileChannelAdapter(
-    private val rows: List<MobileRow>,
+    rows: List<MobileRow>,
     private val accentColors: IntArray,
     private val onChannelClick: (Channel) -> Unit,
+    /** 上次播放的频道 id：用于给卡片加"最近播放"高亮边框。 */
+    private var lastPlayedChannelId: String? = null,
+    /** D-Pad UP 回调：网格在顶部时交给 Activity 展开顶栏并转移焦点。 */
+    private val onDpadUp: (() -> Unit)? = null,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-    /** 每个频道卡片在可见列表中的序号（1 起），用于右上角的 `01` / `02` 编号。 */
-    private val ordinals: IntArray = IntArray(rows.size)
+    private var rows: List<MobileRow> = rows
 
-    init {
+    /** 每个频道卡片在可见列表中的序号（1 起），用于右上角的 `01` / `02` 编号。 */
+    private var ordinals: IntArray = buildOrdinals(rows)
+
+    /** 原地更新行数据，避免重建 Adapter 导致 ViewHolder 复用池失效。 */
+    fun updateRows(newRows: List<MobileRow>) {
+        rows = newRows
+        ordinals = buildOrdinals(newRows)
+        notifyDataSetChanged()
+    }
+
+    /** 更新"上次播放"高亮（只重绘受影响的卡片）。 */
+    fun setLastPlayedChannelId(channelId: String?) {
+        if (lastPlayedChannelId == channelId) return
+        lastPlayedChannelId = channelId
+        notifyDataSetChanged()
+    }
+
+    private fun buildOrdinals(source: List<MobileRow>): IntArray {
+        val result = IntArray(source.size)
         var counter = 0
-        rows.forEachIndexed { index, row ->
+        source.forEachIndexed { index, row ->
             if (row is MobileRow.ChannelCard) {
                 counter += 1
-                ordinals[index] = counter
+                result[index] = counter
             }
         }
+        return result
     }
 
     override fun getItemCount(): Int = rows.size
@@ -52,9 +74,10 @@ class MobileChannelAdapter(
             )
 
             else -> ChannelViewHolder(
-                ItemMobileChannelBinding.inflate(inflater, parent, false),
-                accentColors,
-                onChannelClick,
+                binding = ItemMobileChannelBinding.inflate(inflater, parent, false),
+                accentColors = accentColors,
+                onChannelClick = onChannelClick,
+                onDpadUp = onDpadUp,
             )
         }
     }
@@ -62,7 +85,11 @@ class MobileChannelAdapter(
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         when (val row = rows[position]) {
             is MobileRow.CategoryHeader -> (holder as HeaderViewHolder).bind(row)
-            is MobileRow.ChannelCard -> (holder as ChannelViewHolder).bind(row, ordinals[position])
+            is MobileRow.ChannelCard -> (holder as ChannelViewHolder).bind(
+                card = row,
+                ordinal = ordinals[position],
+                isLastPlayed = row.channel.id == lastPlayedChannelId,
+            )
         }
     }
 
@@ -81,17 +108,44 @@ class MobileChannelAdapter(
         private val binding: ItemMobileChannelBinding,
         private val accentColors: IntArray,
         private val onChannelClick: (Channel) -> Unit,
+        private val onDpadUp: (() -> Unit)? = null,
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(card: MobileRow.ChannelCard, ordinal: Int) {
+        fun bind(card: MobileRow.ChannelCard, ordinal: Int, isLastPlayed: Boolean = false) {
             val channel = card.channel
+            binding.root.isSelected = isLastPlayed
             val accent = accentColorFor(card.categoryName)
 
             binding.channelBadge.text = MobileChannelList.extractChannelBadge(channel.name)
             applyBadgeStyle(binding.channelBadge, accent)
             binding.channelIndex.text = MobileChannelList.formatChannelIndex(ordinal)
             binding.channelName.text = channel.name
-            binding.channelDescription.text = MobileChannelList.formatChannelSubtitle(channel)
+
+            // 副标题只展示"用户能看懂"的信息；没有有效简介时整行隐藏，主标题自然垂直居中
+            val subtitle = MobileChannelList.sanitizeSubtitle(channel)
+            if (subtitle == null) {
+                binding.channelDescription.visibility = android.view.View.GONE
+            } else {
+                binding.channelDescription.visibility = android.view.View.VISIBLE
+                binding.channelDescription.text = subtitle
+            }
+
+            binding.root.contentDescription =
+                if (isLastPlayed) "${channel.name}（上次播放）" else channel.name
+            binding.root.nextFocusUpId = R.id.mobile_refresh
+            // D-Pad：网格已在顶部时按 UP → 展开顶栏并把焦点交给刷新按钮。
+            // RecyclerView 的 LayoutManager 会先拦截方向键做内部滚动，所以这里显式接管。
+            binding.root.setOnKeyListener { _, keyCode, event ->
+                if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP &&
+                    event.action == android.view.KeyEvent.ACTION_DOWN &&
+                    onDpadUp != null
+                ) {
+                    onDpadUp.invoke()
+                    true
+                } else {
+                    false
+                }
+            }
             binding.root.setOnClickListener { onChannelClick(channel) }
         }
 

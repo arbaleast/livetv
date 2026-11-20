@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/player_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -8,7 +9,8 @@
     <androidx.media3.ui.PlayerView
         android:id="@+id/player_view"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        app:resize_mode="fit" />
 
     <!--
         触控设备的"轻触画面"捕获层：TV 设备保持 GONE，不参与任何焦点与按键逻辑。
@@ -18,6 +20,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:clickable="true"
+        android:contentDescription="@string/player_tap_catcher_desc"
         android:focusable="false"
         android:visibility="gone" />
 
@@ -27,8 +30,13 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top|start"
         android:layout_margin="24dp"
+        android:background="@drawable/bg_player_badge"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp"
         android:textColor="@android:color/white"
-        android:textSize="24sp"
+        android:textSize="22sp"
         android:textStyle="bold" />
 
     <TextView
@@ -36,8 +44,17 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:accessibilityLiveRegion="polite"
+        android:background="@drawable/bg_player_badge"
+        android:gravity="center"
+        android:paddingStart="18dp"
+        android:paddingTop="10dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="10dp"
         android:textColor="@android:color/white"
-        android:textSize="18sp"
+        android:textSize="17sp"
         android:visibility="gone" />
 
     <TextView
@@ -45,9 +62,17 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:accessibilityLiveRegion="polite"
+        android:background="@drawable/bg_player_badge"
         android:gravity="center"
+        android:paddingStart="20dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="14dp"
         android:textColor="@android:color/white"
-        android:textSize="18sp"
+        android:textSize="17sp"
         android:visibility="gone" />
 
     <!--
@@ -68,9 +93,9 @@
             android:background="#99000000"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="10dp"
+            android:paddingStart="12dp"
             android:paddingTop="10dp"
-            android:paddingEnd="10dp"
+            android:paddingEnd="12dp"
             android:paddingBottom="10dp">
 
             <TextView
@@ -80,10 +105,13 @@
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
-                android:paddingStart="14dp"
-                android:paddingTop="7dp"
-                android:paddingEnd="14dp"
-                android:paddingBottom="7dp"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:paddingStart="16dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="8dp"
                 android:text="@string/player_touch_back"
                 android:textColor="@color/mobile_text_primary"
                 android:textSize="13sp" />
@@ -92,7 +120,7 @@
                 android:id="@+id/overlay_channel_info"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
+                android:layout_marginStart="12dp"
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:maxLines="1"
@@ -104,14 +132,17 @@
                 android:id="@+id/overlay_channel_list"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="10dp"
+                android:layout_marginStart="12dp"
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
-                android:paddingStart="14dp"
-                android:paddingTop="7dp"
-                android:paddingEnd="14dp"
-                android:paddingBottom="7dp"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:paddingStart="16dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="16dp"
+                android:paddingBottom="8dp"
                 android:text="@string/player_touch_list"
                 android:textColor="@color/mobile_text_primary"
                 android:textSize="13sp" />
@@ -125,8 +156,10 @@
             android:background="#99000000"
             android:gravity="center"
             android:orientation="horizontal"
-            android:paddingTop="12dp"
-            android:paddingBottom="18dp">
+            android:paddingStart="12dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="12dp"
+            android:paddingBottom="14dp">
 
             <TextView
                 android:id="@+id/overlay_prev"
@@ -135,10 +168,13 @@
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
                 android:paddingStart="20dp"
-                android:paddingTop="9dp"
+                android:paddingTop="10dp"
                 android:paddingEnd="20dp"
-                android:paddingBottom="9dp"
+                android:paddingBottom="10dp"
                 android:text="@string/player_touch_prev"
                 android:textColor="@color/mobile_text_primary"
                 android:textSize="14sp" />
@@ -151,10 +187,13 @@
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
                 android:paddingStart="20dp"
-                android:paddingTop="9dp"
+                android:paddingTop="10dp"
                 android:paddingEnd="20dp"
-                android:paddingBottom="9dp"
+                android:paddingBottom="10dp"
                 android:text="@string/player_touch_retry"
                 android:textColor="@color/mobile_accent"
                 android:textSize="14sp"
@@ -168,10 +207,13 @@
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
                 android:paddingStart="20dp"
-                android:paddingTop="9dp"
+                android:paddingTop="10dp"
                 android:paddingEnd="20dp"
-                android:paddingBottom="9dp"
+                android:paddingBottom="10dp"
                 android:text="@string/player_touch_next"
                 android:textColor="@color/mobile_text_primary"
                 android:textSize="14sp" />
@@ -185,6 +227,7 @@
         android:layout_height="match_parent"
         android:background="@color/mobile_drawer_scrim"
         android:clickable="true"
+        android:contentDescription="@string/player_drawer_scrim_desc"
         android:focusable="false"
         android:visibility="gone" />
 

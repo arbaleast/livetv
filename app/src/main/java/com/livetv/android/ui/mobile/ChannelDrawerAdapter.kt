@@ -61,6 +61,7 @@ class ChannelDrawerAdapter(
     ) : RecyclerView.ViewHolder(binding.root) {
 
         fun bind(item: ChannelDrawerRow.ChannelItem) {
+            binding.root.isSelected = item.isCurrent
             binding.drawerChannelName.text = item.channel.name
             binding.drawerChannelPlaying.visibility =
                 if (item.isCurrent) View.VISIBLE else View.GONE

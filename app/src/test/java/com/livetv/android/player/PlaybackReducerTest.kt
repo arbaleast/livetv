@@ -123,4 +123,45 @@ class PlaybackReducerTest {
 
         assertEquals(PlaybackState.Idle, state)
     }
+
+    @Test
+    fun `paused returns to playing on playing event`() {
+        val state = PlaybackReducer.reduce(PlaybackState.Paused, PlaybackEvent.Playing)
+
+        assertEquals(PlaybackState.Playing, state)
+    }
+
+    @Test
+    fun `switch channel resets fatal error back to loading`() {
+        val error = PlaybackState.Error(PlaybackError.Network, fatal = true)
+
+        val state = PlaybackReducer.reduce(error, PlaybackEvent.SwitchChannel)
+
+        assertEquals(PlaybackState.Loading, state)
+    }
+
+    @Test
+    fun `switch channel transitions playing state to loading`() {
+        val state = PlaybackReducer.reduce(PlaybackState.Playing, PlaybackEvent.SwitchChannel)
+
+        assertEquals(PlaybackState.Loading, state)
+    }
+
+    @Test
+    fun `retry unlocks non fatal error back to loading`() {
+        val error = PlaybackState.Error(PlaybackError.Timeout, fatal = false)
+
+        val state = PlaybackReducer.reduce(error, PlaybackEvent.Retry)
+
+        assertEquals(PlaybackState.Loading, state)
+    }
+
+    @Test
+    fun `retry does not unlock fatal error`() {
+        val error = PlaybackState.Error(PlaybackError.Timeout, fatal = true)
+
+        val state = PlaybackReducer.reduce(error, PlaybackEvent.Retry)
+
+        assertEquals(PlaybackState.Error(PlaybackError.Timeout, fatal = true), state)
+    }
 }
