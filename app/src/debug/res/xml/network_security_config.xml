@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Debug 源集专属：仅允许本机回环地址走明文 HTTP，用于连接本地 SecLab 沙箱网关。
+    Debug 源集专属：仅允许本机回环地址走明文 HTTP（例如本机起的 HLS 测试流）。
 
     - base-config 关闭明文，Release / main 源集完全不受影响；
     - domain-config 只放行 127.0.0.1 与 localhost，不含任何真实公网域名。

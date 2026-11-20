@@ -51,7 +51,6 @@
 | 手机端频道抽屉：按分类列出全部频道、当前频道标"播放中"并自动滚动定位，点选即切台（阶段七） | `PlayerActivity.openDrawer()`、`ChannelDrawerModel`、`ChannelDrawerAdapter` |
 | 两端共用同一份数据与同一个播放页（`LiveTvApplication.channelRepository` + `PlayerActivity`） | `LiveTvApplication`、`ui/mobile/MobileMainActivity.kt` |
 | 手机端订阅源管理：顶栏「刷新」「订阅源」按钮 + 暗色订阅对话框（保存并刷新 / 恢复内置源 / 取消），启动时先渲染内存快照再静默后台刷新（阶段八） | `ui/mobile/MobileMainActivity.kt`、`data/SubscriptionCoordinator.kt` |
-| Debug 包专属「填入本地 SecLab」快捷胶囊，填入 `http://127.0.0.1:18080/playlist.m3u`（阶段八） | `ui/mobile/MobileMainActivity.kt` 的 `LOCAL_LAB_PLAYLIST_URL` |
 | Debug 源集**仅本机地址**放行明文 HTTP（`127.0.0.1` / `localhost`），Release 无任何明文例外（阶段八） | `app/src/debug/res/xml/network_security_config.xml`、`app/src/debug/AndroidManifest.xml` |
 | HTTP 401/403/429 **快速失败**：不消耗 1500/3000ms 退避，有备用源立即切换，否则进入致命错误（阶段八） | `RetryPolicy.isFastFailHttpStatus()`、`PlayerManager.handleFastFail()` |
 | 403 / 429 专用错误文案（防盗链与风控限流分开提示） | `strings.xml` 的 `player_error_http_forbidden` / `player_error_http_rate_limited` |
@@ -383,8 +382,7 @@
 - [x] 顶栏新增「刷新」「订阅源」两个紧凑按钮（沿用 `#0B0E14` 画布 / `#151A23` 卡片 / `#3B82F6` 强调色）
 - [x] 刷新：后台执行 + 禁用重复点击（按钮半透明）+ 按 `RefreshResult` 给出 Toast 反馈
 - [x] 订阅源对话框：当前 URL 可编辑 / 清空；动作 `保存并刷新` / `恢复内置源` / `取消`
-- [x] Debug 判定用 `(applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0`（不新增 `BuildConfig` 开关），
-      Debug 包额外提供「填入本地 SecLab」胶囊，填入 `http://127.0.0.1:18080/playlist.m3u`
+- [x] 订阅源对话框只接受用户手输的 http(s) M3U 地址（应用内不内置任何演示/沙箱快捷入口）
 - [x] 启动顺序：**先渲染内存快照**（不白屏）→ 有订阅 URL 时后台静默刷新 → 成功后平滑更新
 
 ### 测试与验收

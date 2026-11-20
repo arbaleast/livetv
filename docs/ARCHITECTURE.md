@@ -533,8 +533,7 @@ HTTP 200 但内容为空/无有效频道时按失败处理——**绝不因为�
 | `app/src/main/` | — | **没有任何** `usesCleartextTraffic` / `networkSecurityConfig` / `cleartextTrafficPermitted` |
 
 Release 构建不包含 `app/src/debug/`，因此正式包既不放行明文，也不会出现 `127.0.0.1` 例外。
-手机端「订阅源」对话框里的「填入本地 SecLab」入口也只在
-`(applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0` 时出现。
+应用内**不再内置任何演示/沙箱快捷入口**：订阅源对话框只接受用户手输的 http(s) M3U 地址。
 
 > **Lint 注意**：manifest 合并以优先级更高的 Debug 文件为基准文档，Lint 的
 > `MissingLeanbackLauncher` / `MissingLeanbackSupport` / `ImpliedTouchscreenHardware`
