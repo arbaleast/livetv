@@ -7,8 +7,9 @@
 
 Android TV 直播客户端原型，**单 `app` 模块、无 DI 框架、不拆多模块**。最容易踩的隐性约定：
 
-- 频道数据**只来自 MGTV 公开目录**（`data/mgtv/`），由 `MgtvProvider` 映射为 `mgtv:<cameraId>`；
-  全局快照由 `LiveTvApplication.catalogStore` 持有 → `docs/ARCHITECTURE.md` §2–§3
+- 频道数据来自 **CCTV 静态目录（P1，仅元数据）+ MGTV 公开目录**，两源由
+  `CompositeCatalogCoordinator` 分槽合并后写入 `LiveTvApplication.catalogStore`；
+  CCTV 频道 `streamUrl` 恒为空，播放地址要等 P2（VDN）→ `docs/ARCHITECTURE.md` §2–§3
 - 播放页按键拦截在 `PlayerActivity.dispatchKeyEvent`（**不是** `onKeyDown`）——Media3 会抢先吞掉方向键 → `docs/TV-INTERACTION.md` §4.1
 - 入口按设备形态分流：`MainActivity` 判定 TV 后走 Leanback、触控设备走 `ui/mobile/`；**播放页两端共用** → `docs/ARCHITECTURE.md` §7
 
@@ -36,7 +37,7 @@ Android TV 直播客户端原型，**单 `app` 模块、无 DI 框架、不拆�
 | 2 | **文档 100% 基于事实**：`docs/` 描述现状时必须能在源码里指到具体文件；未实现的能力只能写进 `docs/ROADMAP.md` 的规划区 | 抽查每条"已实现"断言 |
 | 3 | **禁止擅自引入新依赖**：新增依赖需在交付说明里写明**为什么必须加**、**替代方案为何不可行**；禁止 Hilt/Dagger/Room 等重型框架 | `app/build.gradle.kts` diff |
 | 4 | **禁止删功能凑编译**：不得删除、注释或绕过既有功能/代码来让构建通过；构建失败先怀疑自己的改动 | 删除类改动必须为零 |
-| 5 | **禁止硬编码新业务数据**：频道/EPG/URL 等业务数据不得写进源码或布局；频道内容一律来自 MGTV 公开目录（`data/mgtv/`） | `grep` 复核新增字面量 |
+| 5 | **禁止硬编码新业务数据**：频道/EPG/URL 等业务数据不得写进源码或布局；频道内容只来自 MGTV 目录接口（`data/mgtv/`）或 `assets/cctv_channels.json`（仅静态元数据、严禁含播放链接） | `grep` 复核新增字面量 + `CctvCatalogSourceGuardTest` |
 | 6 | **禁止越界扩展**：不新增 UI 页面/弹窗、不换 Leanback/Media3、不引入 DI 框架；改动范围不得超出任务书 | 交付范围与任务书一致 |
 | 7 | **最小修改**：只改任务明确点名的隐患；不顺手"优化"无关代码 | 每处改动可对应到任务条目 |
 | 8 | **不覆盖用户改动**：动手前 `git status`，工作区脏时先确认，不得 `git checkout/reset` 他人未提交内容 | 改前 `git status --short` |

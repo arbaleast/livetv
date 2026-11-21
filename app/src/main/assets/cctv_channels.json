@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "source": "P1 seed — static metadata only; replace by the authoritative E8 channel list when available",
+  "categories": [
+    {
+      "id": "general",
+      "name": "综合·新闻",
+      "channels": [
+        {"id": "cctv1", "name": "CCTV-1 综合", "epgId": "cctv1"},
+        {"id": "cctv2", "name": "CCTV-2 财经", "epgId": "cctv2"},
+        {"id": "cctv13", "name": "CCTV-13 新闻", "epgId": "cctv13"}
+      ]
+    },
+    {
+      "id": "culture",
+      "name": "文艺·国际",
+      "channels": [
+        {"id": "cctv3", "name": "CCTV-3 综艺", "epgId": "cctv3"},
+        {"id": "cctv4", "name": "CCTV-4 中文国际", "epgId": "cctv4"},
+        {"id": "cctv11", "name": "CCTV-11 戏曲", "epgId": "cctv11"},
+        {"id": "cctv15", "name": "CCTV-15 音乐", "epgId": "cctv15"}
+      ]
+    },
+    {
+      "id": "film",
+      "name": "影视·纪录",
+      "channels": [
+        {"id": "cctv6", "name": "CCTV-6 电影", "epgId": "cctv6"},
+        {"id": "cctv8", "name": "CCTV-8 电视剧", "epgId": "cctv8"},
+        {"id": "cctv9", "name": "CCTV-9 纪录", "epgId": "cctv9"}
+      ]
+    },
+    {
+      "id": "sports",
+      "name": "体育·少儿",
+      "channels": [
+        {"id": "cctv5", "name": "CCTV-5 体育", "epgId": "cctv5"},
+        {"id": "cctv14", "name": "CCTV-14 少儿", "epgId": "cctv14"},
+        {"id": "cctv16", "name": "CCTV-16 奥林匹克", "epgId": "cctv16"}
+      ]
+    },
+    {
+      "id": "public",
+      "name": "社会·科教",
+      "channels": [
+        {"id": "cctv7", "name": "CCTV-7 国防军事", "epgId": "cctv7"},
+        {"id": "cctv10", "name": "CCTV-10 科教", "epgId": "cctv10"},
+        {"id": "cctv12", "name": "CCTV-12 社会与法", "epgId": "cctv12"},
+        {"id": "cctv17", "name": "CCTV-17 农业农村", "epgId": "cctv17"}
+      ]
+    },
+    {
+      "id": "uhd",
+      "name": "超高清",
+      "channels": [
+        {"id": "cctv4k", "name": "CCTV-4K 超高清", "epgId": "cctv4k"},
+        {"id": "cctv8k", "name": "CCTV-8K 超高清", "epgId": "cctv8k"}
+      ]
+    }
+  ]
+}

@@ -18,7 +18,7 @@
 | ViewBinding | `app/build.gradle.kts` `buildFeatures { viewBinding = true }` |
 | TV 声明齐全：`leanback` required=**false**（阶段六改为双端通用）、`touchscreen` required=false、`banner`、`LAUNCHER` + `LEANBACK_LAUNCHER` 双入口 | `app/src/main/AndroidManifest.xml` |
 | GitHub Actions CI：`push`/`pull_request` 触发，跑编译 + Lint + 单元测试 + 打包 Debug APK | `.github/workflows/android-ci.yml` |
-| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**31 个测试类 / 285 个用例**） | `app/src/test/java/com/livetv/android/` |
+| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**35 个测试类 / 306 个用例**） | `app/src/test/java/com/livetv/android/` |
 | 格式与忽略规则（`.editorconfig`、`.gitignore` 排除构建产物/密钥/`.tmp/`） | 仓库根目录 |
 
 ### 功能

@@ -193,7 +193,7 @@ class PlayerActivity : AppCompatActivity() {
         setupChannelDrawer()
         setupTouchUi()
         resolveInitialChannel(savedInstanceState)
-        ensureMgtvCatalogLoaded()
+        ensureCatalogLoaded()
         updateOverlayChannelInfo()
         updateFavoriteButton()
     }
@@ -281,20 +281,18 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     /**
-     * 播放页兜底加载 MGTV 目录。
+     * 播放页兜底加载频道目录（CCTV + MGTV 分槽合并）。
      *
-     * 正常链路下手机端首页 / TV 首页已经拉过目录并写入 [com.livetv.android.domain.repository.ChannelCatalogStore]，
-     * 这里只处理"直接从外部/历史入口打开 MGTV 频道、首页尚未加载目录"的边角情况，
-     * 保证抽屉里一定能看到当前 MGTV 频道所在分组并能在 MGTV 频道间上下切台。
+     * 正常链路下手机端首页 / TV 首页已经加载并写入
+     * [com.livetv.android.domain.repository.ChannelCatalogStore]；这里只处理
+     * "直接从外部/历史入口打开频道、首页尚未加载目录"的边角情况，
+     * 保证抽屉里能看到当前频道所在分组并能在频道间上下切台。
      */
-    private fun ensureMgtvCatalogLoaded() {
-        val channel = currentChannel ?: return
-        if (!channel.id.startsWith(MgtvStreamResolver.CHANNEL_ID_PREFIX)) return
+    private fun ensureCatalogLoaded() {
         if (!app.catalogStore.isEmpty()) return
-        app.mgtvCatalogCoordinator.load { mgtvCategories ->
-            if (mgtvCategories.isEmpty() || isFinishing || isDestroyed) return@load
-            app.catalogStore.update(mgtvCategories)
-            categories = app.catalogStore.getAllCategories()
+        app.compositeCatalogCoordinator.refresh { categories ->
+            if (isFinishing || isDestroyed) return@refresh
+            this.categories = categories
             rebuildNavigatorKeepingCurrent()
             if (isDrawerOpen) refreshDrawerRows()
         }

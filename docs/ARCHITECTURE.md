@@ -38,10 +38,13 @@
 
 ```
 app/src/main/java/com/livetv/android/
-├── LiveTvApplication.kt                  # 全局单例：catalogStore / mgtvCatalogCoordinator / streamResolver
+├── LiveTvApplication.kt                  # 全局单例：catalogStore / cctv+mgtv 协调器 / 聚合协调器 / streamResolver
 ├── MainActivity.kt                       # 宿主 Activity（TV/触控分流）
 ├── data/
-│   └── mgtv/                             # **唯一**频道来源：MGTV 公开目录 + 播放源
+│   ├── cctv/                             # CCTV 目录（P1：仅静态元数据，无播放地址）
+│   │   ├── CctvChannelCatalog.kt         # assets JSON → 领域分类（cctv: 前缀，streamUrl 恒空）
+│   │   └── CctvCatalogCoordinator.kt    # 后台解析 + 主线程回传
+│   └── mgtv/                             # MGTV 公开目录 + 播放源
 │       ├── MgtvEndpoints.kt              # 目录/播放源 URL 构造（只含公开静态参数）
 │       ├── MgtvHttpClient.kt             # JDK HttpURLConnection 小客户端
 │       ├── MgtvCatalogFetcher.kt         # 公开频道目录抓取（无需 Cookie/签名）
@@ -56,6 +59,8 @@ app/src/main/java/com/livetv/android/
 │   ├── model/Channel.kt                  # 领域模型
 │   ├── model/ChannelCategory.kt          # 分类领域模型
 │   ├── repository/ChannelCatalogStore.kt # 应用级频道快照（纯 Kotlin，线程安全）
+│   ├── repository/ChannelCatalogMerger.kt # 多源合并纯函数（CCTV 前 / MGTV 后，按 channel.id 去重）
+│   ├── repository/CompositeCatalogCoordinator.kt # 分槽聚合：两源乱序到达不互相覆盖
 │   └── stream/                           # 通用播放会话解析（纯 Kotlin）
 ├── player/                               # 播放状态机 / 重试 / 切台（纯策略 + PlayerManager 桥接）
 ├── ui/                                   # Leanback 浏览页 + 播放页 + 手机端
@@ -385,22 +390,26 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 > 引入图片加载库（Glide/Coil 等）被明确排除，避免为占位图引入重型依赖。
 > TV 分支**只做了代码级保证与触控视图隔离**，未在真实 Android TV 硬件上回归。
 
-### 8. 频道数据管线（MGTV-only）
+### 8. 频道数据管线（CCTV + MGTV，分槽聚合）
 
 ```
 LiveTvApplication（Application）
- ├─ catalogStore: ChannelCatalogStore               ← 唯一的频道快照（MGTV 分类）
- ├─ mgtvCatalogCoordinator: MgtvCatalogCoordinator  ← 后台拉目录 + 主线程回传
- └─ streamResolver: StreamResolver                  ← mgtv: → MGTV，其余 → 静态
+ ├─ catalogStore: ChannelCatalogStore                   ← 唯一的频道快照
+ ├─ cctvCatalogCoordinator: CctvCatalogCoordinator      ← assets 静态目录（P1，仅元数据）
+ ├─ mgtvCatalogCoordinator: MgtvCatalogCoordinator      ← 公开目录拉取
+ ├─ compositeCatalogCoordinator: CompositeCatalogCoordinator
+ │      └─ 分槽 latestCctv / latestMgtv → ChannelCatalogMerger.merge() → store.update()
+ └─ streamResolver: StreamResolver                      ← mgtv: → MGTV，其余 → 静态
 ```
 
-- **唯一来源**：`data/mgtv/`（目录接口公开、免签名）；`app/src/main/assets/` 为空，
-  内置频道与 M3U 订阅管线（`LocalAssetChannelSource` / `LocalM3uChannelSource` /
-  `M3uPlaylistParser` / `ChannelJsonParser` / `RemoteM3uFetcher` /
-  `SubscriptionChannelRepository` / `SubscriptionCoordinator` / `FileSubscriptionStore`）
-  已整体移除。
-- **写入方**：手机端 `MobileMainActivity.loadChannels()` / `reloadMgtvCatalog()`、TV 端
-  `MainBrowseFragment.reloadMgtvCatalog()`、播放页 `PlayerActivity.ensureMgtvCatalogLoaded()`
+- **CCTV（P1）**：`data/cctv/CctvChannelCatalog.kt` 解析 `assets/cctv_channels.json` 的静态元数据
+  （id/名称/分类/Logo/EPG ID），分类与频道 id 均加 `cctv:` 命名空间前缀，**`streamUrl` 恒为空**；
+  播放地址要等 P2（VDN）实现，在此之前点击 `cctv:` 频道不可播放，属预期状态。
+- **MGTV**：公开目录接口（免签名），`MgtvProvider` 映射为 `mgtv:<cameraId>`。
+- **分槽聚合**：`CompositeCatalogCoordinator` 按来源持有最新快照，任一来源返回空列表时
+  **保留该来源上一次的有效槽位**，绝不覆盖另一来源；合并顺序固定 CCTV 在前、MGTV 在后。
+- **写入方**：手机端 `MobileMainActivity.loadChannels()` / `reloadCatalogs()`、TV 端
+  `MainBrowseFragment.reloadCatalogs()`、播放页 `PlayerActivity.ensureCatalogLoaded()`
   （仅在目录为空时兜底）。
 - **读取方**：首页网格/分类条、TV 列表行、播放页抽屉与上下切台，全部读同一份 `catalogStore`。
 - **聚合分类处理**：「热门」不整段展示（避免重复卡片），但**只在「热门」出现的频道会被捞回**
@@ -546,7 +555,7 @@ RoutingStreamResolver(
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段九持续扩充** | `app/src/test` 现有 31 个测试类 /**285 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 21 + 阶段八 31 + 阶段九 82，另有外部同步带来的增量） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉、远程拉取、订阅兜底、快速失败、HLS 识别、Host 白名单隔离、MGTV 白盒筛选、签名还原与 fail-closed 已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段九持续扩充** | `app/src/test` 现有 35 个测试类 /**306 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 21 + 阶段八 31 + 阶段九 82，另有外部同步带来的增量） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉、远程拉取、订阅兜底、快速失败、HLS 识别、Host 白名单隔离、MGTV 白盒筛选、签名还原与 fail-closed 已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |

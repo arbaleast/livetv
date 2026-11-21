@@ -38,7 +38,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
     private val app: LiveTvApplication
         get() = requireActivity().application as LiveTvApplication
 
-    private var mgtvLoading = false
+    private var catalogLoading = false
 
     /** 当前焦点行的标识（分类名 / 「设置与订阅」行名），刷新后用它恢复焦点。 */
     private var selectedRowKey: String? = null
@@ -55,7 +55,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
         loadRows(preserveFocus = false)
         setupEventListeners()
         if (app.catalogStore.isEmpty()) {
-            reloadMgtvCatalog(preserveFocus = false)
+            reloadCatalogs(preserveFocus = false)
         }
     }
 
@@ -84,7 +84,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
                     TvActionItem(
                         action = TvAction.REFRESH,
                         title = getString(R.string.tv_empty_channels),
-                        subtitle = if (mgtvLoading) getString(R.string.tv_action_refreshing) else idleSubtitle,
+                        subtitle = if (catalogLoading) getString(R.string.tv_action_refreshing) else idleSubtitle,
                         idleSubtitle = idleSubtitle,
                     ),
                 )
@@ -127,7 +127,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
 
     /** 刷新卡片副标题：刷新中给出可见的加载态文案，结束后恢复说明文字。 */
     private fun refreshActionSubtitle(): String = getString(
-        if (mgtvLoading) R.string.tv_action_refreshing else R.string.tv_action_refresh_desc,
+        if (catalogLoading) R.string.tv_action_refreshing else R.string.tv_action_refresh_desc,
     )
 
     private fun updateRefreshActionCards() {
@@ -136,7 +136,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
             for (index in 0 until rowAdapter.size()) {
                 val item = rowAdapter.get(index) as? TvActionItem ?: continue
                 if (item.action != TvAction.REFRESH) continue
-                val target = if (mgtvLoading) busySubtitle else item.idleSubtitle
+                val target = if (catalogLoading) busySubtitle else item.idleSubtitle
                 if (item.subtitle != target) {
                     rowAdapter.replace(index, item.copy(subtitle = target))
                 }
@@ -236,16 +236,14 @@ class MainBrowseFragment : BrowseSupportFragment() {
         }
     }
 
-    private fun reloadMgtvCatalog(preserveFocus: Boolean) {
-        if (mgtvLoading) return
-        mgtvLoading = true
+    /** 重新加载频道目录（CCTV + MGTV 分槽合并）；失败时保留旧列表与焦点。 */
+    private fun reloadCatalogs(preserveFocus: Boolean) {
+        if (catalogLoading) return
+        catalogLoading = true
         updateRefreshActionCards()
-        app.mgtvCatalogCoordinator.load { mgtvCategories ->
-            mgtvLoading = false
-            if (mgtvCategories.isNotEmpty()) {
-                app.catalogStore.update(mgtvCategories)
-            }
-            if (!isAdded || view == null) return@load
+        app.compositeCatalogCoordinator.refresh {
+            catalogLoading = false
+            if (!isAdded || view == null) return@refresh
             loadRows(preserveFocus = preserveFocus)
             updateRefreshActionCards()
         }
@@ -253,7 +251,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
 
     private fun handleActionClick(action: TvAction) {
         when (action) {
-            TvAction.REFRESH -> reloadMgtvCatalog(preserveFocus = true)
+            TvAction.REFRESH -> reloadCatalogs(preserveFocus = true)
         }
     }
 

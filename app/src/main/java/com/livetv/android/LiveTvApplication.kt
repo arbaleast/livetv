@@ -1,6 +1,8 @@
 package com.livetv.android
 
 import android.app.Application
+import com.livetv.android.data.cctv.CctvCatalogCoordinator
+import com.livetv.android.data.cctv.CctvChannelCatalog
 import com.livetv.android.data.mgtv.HttpMgtvSourceFetcher
 import com.livetv.android.data.mgtv.MgtvCatalogCoordinator
 import com.livetv.android.data.mgtv.MgtvCatalogFetcher
@@ -8,27 +10,54 @@ import com.livetv.android.data.mgtv.MgtvProvider
 import com.livetv.android.data.mgtv.MgtvStreamResolver
 import com.livetv.android.data.mgtv.SharedPrefsMgtvDeviceId
 import com.livetv.android.domain.repository.ChannelCatalogStore
+import com.livetv.android.domain.repository.CompositeCatalogCoordinator
 import com.livetv.android.domain.stream.RoutingStreamResolver
 import com.livetv.android.domain.stream.StaticStreamResolver
 import com.livetv.android.domain.stream.StreamResolver
 
 /**
- * 应用入口：持有全局唯一的频道目录、MGTV 目录协调器与播放源解析器。
+ * 应用入口：持有全局唯一的频道目录、CCTV/MGTV 目录协调器与播放源解析器。
  *
- * **频道来源只有 MGTV 公开目录**：内置 assets 与 M3U 订阅管线已移除
- * （占位频道不可达、订阅入口长期无内容，属于冗余数据源）。
- * 目录快照由 [ChannelCatalogStore] 持有，手机首页、TV 首页、播放页抽屉与切台共用。
+ * 频道来源：**CCTV 静态目录（P1，仅元数据）+ MGTV 公开目录**。
+ * 两个来源由 [CompositeCatalogCoordinator] 分槽合并后写入 [ChannelCatalogStore]，
+ * 手机首页、TV 首页、播放页抽屉与切台共用同一份快照。
+ * CCTV 的播放地址由 P2 的 VDN 解析提供，目录里的 `streamUrl` 恒为空。
  *
  * 装配在 `by lazy` 中完成：**首次访问**时才创建，避免 Application 启动阶段就发起网络请求。
  */
 class LiveTvApplication : Application() {
 
     /**
-     * 应用级频道目录：只有 MGTV 一个来源。
+     * 应用级频道目录：CCTV + MGTV 合并后的唯一快照。
      *
      * 首页（手机 / TV）与播放页（上下切台 / 抽屉）共用该快照。
      */
     val catalogStore: ChannelCatalogStore by lazy { ChannelCatalogStore() }
+
+
+    /**
+     * CCTV 频道目录协调器（P1：静态元数据，后台解析 + 主线程回传）。
+     *
+     * 数据来自 `assets/cctv_channels.json`，**不含任何播放地址**。
+     */
+    val cctvCatalogCoordinator: CctvCatalogCoordinator by lazy {
+        CctvCatalogCoordinator(
+            catalog = CctvChannelCatalog(catalogLoader = { readCctvCatalogAsset() }),
+        )
+    }
+
+    /**
+     * 多源分槽聚合协调器：CCTV 与 MGTV 的加载结果合并后统一写入 [catalogStore]。
+     *
+     * 注入的是两个协调器的 `load(callback)`，便于纯 JVM 测试替换为 fake。
+     */
+    val compositeCatalogCoordinator: CompositeCatalogCoordinator by lazy {
+        CompositeCatalogCoordinator(
+            store = catalogStore,
+            cctvLoader = { callback -> cctvCatalogCoordinator.load(callback) },
+            mgtvLoader = { callback -> mgtvCatalogCoordinator.load(callback) },
+        )
+    }
 
     /**
      * MGTV 频道目录协调器（后台拉取 + 主线程回传）。
@@ -63,5 +92,14 @@ class LiveTvApplication : Application() {
             mgtvResolver = MgtvStreamResolver(HttpMgtvSourceFetcher(SharedPrefsMgtvDeviceId(this))),
             fallbackResolver = StaticStreamResolver,
         )
+    }
+
+    /** 读取 CCTV 静态目录；文件缺失或读取失败返回 null（该来源为空，不影响 MGTV）。 */
+    private fun readCctvCatalogAsset(): String? = runCatching {
+        assets.open(CCTV_CATALOG_ASSET).bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }.getOrNull()
+
+    private companion object {
+        const val CCTV_CATALOG_ASSET = "cctv_channels.json"
     }
 }

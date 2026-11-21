@@ -66,7 +66,7 @@ class MobileMainActivity : AppCompatActivity() {
     private var currentSpanCount = 2
     private var selectedCategoryId: String? = null
     private var accentColors: IntArray = IntArray(0)
-    private var mgtvLoading = false
+    private var catalogLoading = false
 
     /** 上次播放的频道 id（用于卡片高亮与蓝点标识）；与播放页双向同步。 */
     private var lastPlayedChannelId: String? = null
@@ -241,7 +241,7 @@ class MobileMainActivity : AppCompatActivity() {
         get() = application as LiveTvApplication
 
     private fun setupHeaderActions() {
-        binding.mobileRefresh.setOnClickListener { reloadMgtvCatalog() }
+        binding.mobileRefresh.setOnClickListener { reloadCatalogs() }
 
         val expandHeaderOnFocus = View.OnFocusChangeListener { _, hasFocus ->
             if (hasFocus && isFloatingHeaderMode()) {
@@ -328,25 +328,27 @@ class MobileMainActivity : AppCompatActivity() {
         )
     }
 
-    /** 重新拉取 MGTV 目录；失败时保留旧列表。 */
-    private fun reloadMgtvCatalog(silent: Boolean = false) {
-        if (mgtvLoading) {
+    /** 重新加载频道目录（CCTV + MGTV 分槽合并）；失败时保留旧列表。 */
+    private fun reloadCatalogs(silent: Boolean = false) {
+        if (catalogLoading) {
             if (!silent) toast(getString(R.string.mobile_refresh_busy))
             return
         }
-        mgtvLoading = true
+        catalogLoading = true
         setReloadingState(true)
-        app.mgtvCatalogCoordinator.load { mgtvCategories ->
-            mgtvLoading = false
-            if (isFinishing || isDestroyed) return@load
+        app.compositeCatalogCoordinator.refresh {
+            catalogLoading = false
+            if (isFinishing || isDestroyed) return@refresh
             setReloadingState(false)
-            if (mgtvCategories.isNotEmpty()) {
-                app.catalogStore.update(mgtvCategories)
-                categories = app.catalogStore.getAllCategories()
-                applyCategories()
-                if (!silent) toast(getString(R.string.mobile_refresh_remote, categories.sumOf { it.channels.size }))
-            } else if (!silent) {
-                toast(getString(R.string.mobile_refresh_failed))
+            categories = app.catalogStore.getAllCategories()
+            applyCategories()
+            if (!silent) {
+                val total = categories.sumOf { it.channels.size }
+                if (total > 0) {
+                    toast(getString(R.string.mobile_refresh_remote, total))
+                } else {
+                    toast(getString(R.string.mobile_refresh_failed))
+                }
             }
         }
     }
@@ -567,27 +569,20 @@ class MobileMainActivity : AppCompatActivity() {
 
     private fun loadChannels() {
         categories = app.catalogStore.getAllCategories()
-        val needsMgtvLoad = categories.isEmpty() && !mgtvLoading
-        if (needsMgtvLoad) {
-            mgtvLoading = true
+        val needsLoad = categories.isEmpty() && !catalogLoading
+        if (needsLoad) {
+            catalogLoading = true
             setReloadingState(true)
         }
         applyCategories()
-        if (needsMgtvLoad) {
-            fetchMgtvCatalog()
-        }
-    }
-
-    private fun fetchMgtvCatalog() {
-        app.mgtvCatalogCoordinator.load { mgtvCategories ->
-            mgtvLoading = false
-            if (isFinishing || isDestroyed) return@load
-            setReloadingState(false)
-            if (mgtvCategories.isNotEmpty()) {
-                app.catalogStore.update(mgtvCategories)
+        if (needsLoad) {
+            app.compositeCatalogCoordinator.refresh {
+                catalogLoading = false
+                if (isFinishing || isDestroyed) return@refresh
+                setReloadingState(false)
+                categories = app.catalogStore.getAllCategories()
+                applyCategories()
             }
-            categories = app.catalogStore.getAllCategories()
-            applyCategories()
         }
     }
 
@@ -647,7 +642,7 @@ class MobileMainActivity : AppCompatActivity() {
 
         if (rows.isEmpty()) {
             binding.rvChannels.visibility = View.GONE
-            val showLoading = !isSearchMode && mgtvLoading && categories.isEmpty()
+            val showLoading = !isSearchMode && catalogLoading && categories.isEmpty()
             binding.loadingView.visibility = if (showLoading) View.VISIBLE else View.GONE
             binding.emptyView.visibility = if (showLoading) View.GONE else View.VISIBLE
             binding.emptyView.text = if (isSearchMode && trimmedQuery.isNotEmpty()) {

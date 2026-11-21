@@ -198,7 +198,7 @@ testImplementation("org.json:json:20231013")
   阶段 5.5 完成**真机实测**（见 §6），阶段六新增设备判定与网格列数用例，阶段七新增手机卡片徽章、分类筛选、副标题兜底、抽屉模型用例，
   阶段八新增**远程订阅拉取、三级兜底与 401/403/429 快速失败**用例；
   阶段九新增**HLS 识别、播放会话刷新状态机、Host 请求头隔离、MGTV 白盒筛选与签名黄金向量**用例，
-  合计 **285 个用例 / 31 个测试类**。
+  合计 **306 个用例 / 35 个测试类**。
 
   阶段六新增：`DeviceUtilsTest`（6 例，TV 判定两种信号）、`MobileChannelListTest`（11 例，行序列组装、2/3/4 列阈值、**px→dp 换算**）。
   阶段七新增：`MobileChannelListTest` 扩到 24 例（徽章简标、分类筛选、副标题三级兜底、序号补零、分类配色稳定性），
@@ -240,7 +240,7 @@ testImplementation("org.json:json:20231013")
 | `FocusRestorePolicyTest`（6 例） | 刷新后按分类名恢复行、分类被删时退回有界行号、越界安全返回 `null` | TV 端刷新后焦点错位 |
 | `MobileChannelListTest`（新增窄屏/边界 3 例） | `< 360dp` 降 1 列、359/360 硬边界、600/900/1280 列数封顶 | 360dp 竖屏卡片挤压崩坏 |
 | `ChannelNavigatorTest`（新增 1 例） | 聚合目录"订阅分段在前 + MGTV 分段在后"的定位与跨分组循环切台 | 播放页看不到 MGTV 频道 / 无法在 MGTV 间切台 |
-| `ChannelCatalogStoreTest`（既有 5 例） | 订阅分段与 MGTV 补充分段的合并顺序、按 id 去重、清空订阅保留 MGTV | MGTV 目录生命周期独立于订阅刷新 |
+| `ChannelCatalogStoreTest`（5 例） | 单快照替换、空分类过滤、顺序保持 | 目录快照语义 |
 | `PlayerKeyPolicyTest`（新增 2 例） | 锁屏态下方向键/确认键一律透传（不再切台、不呼出控制器），Error 态行为保持不变 | 锁屏后硬件键仍可切台 |
 
 档位边界：`gridSpanCount` 在 359dp→1 列、360dp→2 列、600dp→3 列、900dp→4 列、1280dp 及以上→5 列（上限）。
@@ -268,3 +268,15 @@ TV 遥控器在设置的订阅弹窗里 D-Pad 可达、刷新卡片"刷新中…
 
 仍未验证（需 Android TV 设备 / 电视模拟器）：TV 遥控器在订阅弹窗内的 D-Pad 可达性与暗色可读性、
 刷新卡片"刷新中…"的焦点保持、320×180 TV 桌面横幅在启动器中的实际显示、分屏（split-screen）缩放路径。
+
+### 7.4 CCTV P1 目录与多源聚合（2026-11-21）
+
+| 用例类 | 覆盖点 |
+|---|---|
+| `CctvChannelCatalogTest`（6 例） | JSON → 领域映射：`cctv:` 频道/分类前缀、`streamUrl` 恒空、名称/Logo/EPG ID；损坏 JSON、缺字段、空数组 fail-closed |
+| `ChannelCatalogMergerTest`（6 例） | CCTV 在前 / MGTV 在后、空分类丢弃、同分类 id 合并频道并按 `channel.id` 去重（不吞频道）、单侧为空保留另一侧 |
+| `CompositeCatalogCoordinatorTest`（7 例） | 两源乱序到达不互相覆盖、单源失败（空列表）保留另一槽位、单源二次刷新保留另一源、回调仅在两侧完成后触发一次且此时 store 已更新 |
+| `CctvCatalogSourceGuardTest`（2 例） | `data/cctv/*.kt` 无播放地址/签名/凭据/IP/硬编码频道表；`assets/cctv_channels.json` 只含静态元数据（无 `http(s)://`、无 `streamUrl`） |
+
+> P1 只做目录：`cctv:` 频道的 `streamUrl` 为空，点击会走既有「无可用播放地址」提示。
+> 播放能力（VDN 解析）属于 P2–P4，尚未实施。
