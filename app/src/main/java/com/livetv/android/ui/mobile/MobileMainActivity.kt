@@ -19,6 +19,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.livetv.android.BuildConfig
 import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
 import com.livetv.android.data.mgtv.MgtvStreamResolver
@@ -26,6 +27,8 @@ import com.livetv.android.databinding.ActivityMobileMainBinding
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.model.ChannelCategory
 import com.livetv.android.ui.PlayerActivity
+import com.livetv.android.webplayer.CctvWebChannel
+import com.livetv.android.webplayer.CctvWebPlayerActivity
 import com.livetv.android.util.HeaderAutoHidePolicy
 
 /**
@@ -129,6 +132,7 @@ class MobileMainActivity : AppCompatActivity() {
 
         setupList()
         setupHeaderActions()
+        setupDebugEntries()
         setupSearchActions()
         loadChannels()
         if (isSearchMode) {
@@ -239,6 +243,15 @@ class MobileMainActivity : AppCompatActivity() {
 
     private val app: LiveTvApplication
         get() = application as LiveTvApplication
+
+    /** 仅 Debug 构建可见：长按标题进入 CCTV WebView 原型（Release 不挂任何入口）。 */
+    private fun setupDebugEntries() {
+        if (!BuildConfig.DEBUG) return
+        binding.topTitle.setOnLongClickListener {
+            startActivity(Intent(this, CctvWebPlayerActivity::class.java))
+            true
+        }
+    }
 
     private fun setupHeaderActions() {
         binding.mobileRefresh.setOnClickListener { reloadCatalogs() }
@@ -679,6 +692,13 @@ class MobileMainActivity : AppCompatActivity() {
     }
 
     private fun openChannel(channel: Channel) {
+        if (channel.id.startsWith(CctvWebChannel.CHANNEL_PREFIX)) {
+            startActivity(
+                Intent(this, CctvWebPlayerActivity::class.java)
+                    .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_ID, channel.id),
+            )
+            return
+        }
         val isDynamicSource = channel.id.startsWith(MgtvStreamResolver.CHANNEL_ID_PREFIX)
         if (channel.streamUrl.isEmpty() && !isDynamicSource) {
             toast(getString(R.string.channel_no_stream_url, channel.name))

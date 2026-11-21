@@ -37,6 +37,12 @@
             android:exported="false"
             android:theme="@style/Theme.LiveTv.Mobile" />
         <activity
+            android:name=".webplayer.CctvWebPlayerActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:theme="@style/Theme.LiveTv.Mobile" />
+        <activity
             android:name=".ui.PlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"

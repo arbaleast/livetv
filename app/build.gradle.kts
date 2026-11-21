@@ -33,6 +33,8 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        // Debug 专用入口（CCTV WebView 原型）需要 BuildConfig.DEBUG 门控
+        buildConfig = true
     }
 }
 
