@@ -37,7 +37,7 @@ class MgtvFailClosedHardeningTest {
 
     private fun resolverOf(rawJson: String, nowMs: Long = 10_000L): MgtvStreamResolver =
         MgtvStreamResolver(
-            sourceFetcher = { _, _ -> MgtvSourceFetchResult.RawJson(rawJson) },
+            sourceFetcher = { _, _, _ -> MgtvSourceFetchResult.RawJson(rawJson) },
             clock = { nowMs },
         )
 

@@ -1,14 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Debug 源集专属：仅允许本机回环地址走明文 HTTP（例如本机起的 HLS 测试流）。
+    Debug 源集专属明文策略。
 
     - base-config 关闭明文，Release / main 源集完全不受影响；
-    - domain-config 只放行 127.0.0.1 与 localhost，不含任何真实公网域名。
+    - 放行两类目标：
+      1. 本机回环（127.0.0.1 / localhost）：本机起的 HLS 测试流；
+      2. `*.qing.mgtv.com`：芒果 CDN 的边缘节点会把 https 播放请求 302 到
+         `http://hlsal-*.qing.mgtv.com/...`（明文 Host，签名路径等价）。
+         该跳转目标只提供明文 HTTP，不跟随就完全无法播放
+         （真机日志：`HTTP 302 ... location=http://hlsal-ldvt.qing.mgtv.com/...`，
+         换成 https 再跟会得到 403）。**仅 Debug 放行**，用于验证与自用调试。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="true">qing.mgtv.com</domain>
     </domain-config>
 </network-security-config>

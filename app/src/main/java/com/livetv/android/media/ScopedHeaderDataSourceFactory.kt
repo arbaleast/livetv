@@ -1,6 +1,7 @@
 package com.livetv.android.media
 
 import android.net.Uri
+import android.util.Log
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
@@ -55,8 +56,25 @@ private class ScopedHeaderDataSource(
             try {
                 return delegate.open(requestSpec)
             } catch (e: HttpDataSource.InvalidResponseCodeException) {
+                val location = locationOf(e)
                 val next = nextRedirectUrl(spec, e)
-                if (next == null || hops >= MAX_REDIRECTS) throw e
+                if (next == null) {
+                    Log.w(
+                        TAG,
+                        "HTTP ${e.responseCode} 不可跟随 hop=$hops url=${describeUri(spec.uri)} " +
+                            "location=${location ?: "<none>"}",
+                    )
+                    throw e
+                }
+                if (hops >= MAX_REDIRECTS) {
+                    Log.w(TAG, "HTTP ${e.responseCode} 跳转超限($MAX_REDIRECTS) url=${describeUri(spec.uri)}")
+                    throw e
+                }
+                Log.i(
+                    TAG,
+                    "HTTP ${e.responseCode} 跟随跳转 hop=${hops + 1} " +
+                        "${describeUri(spec.uri)} -> ${describeUri(next)}",
+                )
                 // 用"干净"的 DataSpec 重新开始：旧请求头不跟随跳转，逐跳重新过滤
                 spec = spec.buildUpon()
                     .setUri(next)
@@ -70,27 +88,50 @@ private class ScopedHeaderDataSource(
     /**
      * 从 3xx 响应里解析下一跳地址。
      *
-     * 只接受 **https** 目标：明文跳转在 Release 包里本来就会被系统拦截，
-     * 提前拒绝可以避免把源专用头带到明文链路上。
+     * 芒果 CDN 的边缘节点会把 https 播放请求 302 到 **明文**
+     * `http://hlsal-*.qing.mgtv.com/...`（同一组签名路径）。实测把 scheme 换成 https 再跟会得到
+     * 403，说明该回源 Host 只认 http；因此这里**原样跟随**（含明文跳转），由网络策略决定是否允许：
+     * Debug 源集的 NSC 放行 `*.qing.mgtv.com` 明文，Release 不放行，届时会以
+     * `CLEARTEXT communication not permitted` 明确失败而不是静默黑屏。
+     *
+     * 仍然强制 **Host 白名单**：跳转目标必须是 `allowedHostSuffixes` 内的域名，
+     * 避免把源专用请求头带到第三方。
      */
     private fun nextRedirectUrl(spec: DataSpec, error: HttpDataSource.InvalidResponseCodeException): Uri? {
         if (error.responseCode !in 300..399) return null
-        val location = error.headerFields?.entries
-            ?.firstOrNull { it.key.equals("Location", ignoreCase = true) }
-            ?.value?.firstOrNull()
-            ?.trim()
-            .orEmpty()
+        val location = locationOf(error).orEmpty()
         if (location.isEmpty()) return null
-        val resolved = try {
+        val target = try {
             URI(spec.uri.toString()).resolve(location).toString()
         } catch (e: Exception) {
             return null
         }
-        if (!resolved.startsWith("https://", ignoreCase = true)) return null
-        return Uri.parse(resolved)
+        if (!target.startsWith("https://", ignoreCase = true) &&
+            !target.startsWith("http://", ignoreCase = true)
+        ) {
+            return null
+        }
+        if (!HeaderHostPolicy.isHostAllowed(target, allowedHostSuffixes, requireHttps = false)) {
+            return null
+        }
+        return Uri.parse(target)
     }
+
+    /** 302 的 Location 头（大小写不敏感）。 */
+    private fun locationOf(error: HttpDataSource.InvalidResponseCodeException): String? =
+        error.headerFields?.entries
+            ?.firstOrNull { it.key.equals("Location", ignoreCase = true) }
+            ?.value?.firstOrNull()
+            ?.trim()
+
+    /** 日志里只打 scheme+host+path，丢掉查询串（可能含签名）。 */
+    private fun describeUri(uri: Uri): String =
+        "${uri.scheme}://${uri.host}${uri.path.orEmpty()}"
 
     private companion object {
         const val MAX_REDIRECTS = 5
+
+        /** logcat tag：重定向相关诊断。 */
+        const val TAG = "LiveTvHttp"
     }
 }

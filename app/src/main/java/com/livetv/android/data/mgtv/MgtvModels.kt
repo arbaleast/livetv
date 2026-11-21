@@ -42,6 +42,8 @@ data class MgtvSourceItem(
     val hdcp: Int? = null,
     /** 单源级 DRM 标记（显式非 0/非 false 时严格拦截）。 */
     val isDrm: Boolean = false,
+    /** 服务端下发的换节点凭证：重解析时带回，服务端会调度到另一个 CDN。 */
+    val npuk: String = "",
 )
 
 /**

@@ -25,7 +25,7 @@ class MgtvStreamResolverTest {
         nowMs: Long = 1_000_000L,
         allowedHosts: Set<String> = MgtvStreamResolver.DEFAULT_ALLOWED_HEADER_HOSTS,
     ) = MgtvStreamResolver(
-        sourceFetcher = { _, _ -> result },
+        sourceFetcher = { _, _, _ -> result },
         clock = { nowMs },
         allowedHeaderHosts = allowedHosts,
     )

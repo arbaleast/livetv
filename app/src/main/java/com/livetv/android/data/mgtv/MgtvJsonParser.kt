@@ -99,6 +99,7 @@ object MgtvJsonParser {
                     name = itemObj.optString("name", "").trim(),
                     urlExpireDurationSec = parseLongField(itemObj, "urlExpireDuration", defaultValue = 0L),
                     sid = itemObj.optString("sid", "").trim(),
+                    npuk = itemObj.optString("npuk", "").trim(),
                     isOtherCdn = parseIntField(itemObj, "isothercdn", defaultValue = 0),
                     isP2p = if (itemObj.has("isp2p") && !itemObj.isNull("isp2p")) {
                         parseIntField(itemObj, "isp2p", defaultValue = UNKNOWN_FLAG)

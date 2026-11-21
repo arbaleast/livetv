@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -79,6 +80,10 @@ class PlayerManager(
 
         /** 遍历 cause 链的最大深度，防止异常成环时死循环。 */
         const val MAX_CAUSE_DEPTH = 10
+
+        /** logcat tag：播放/会话诊断。 */
+        private const val TAG = "LiveTvPlayer"
+
     }
 
     private val appContext: Context = context.applicationContext
@@ -227,9 +232,15 @@ class PlayerManager(
     fun switchChannel(channel: Channel) {
         retryHandler.removeCallbacksAndMessages(null)
         currentChannel = channel
+        activeSession = null
         val generation = generationGate.next()
+        // 切台即刻停止旧频道并切入 Loading，避免后台解析动态源（1~3 秒）期间
+        // 画面仍停留在旧频道或旧错误提示上导致“切台无响应”的错觉。
+        player?.stop()
+        player?.clearMediaItems()
         onChannelChanged(channel)
         onChannelSwitched?.invoke(channel)
+        dispatch(PlaybackEvent.SwitchChannel)
         resolutionExecutor.execute {
             streamCoordinator.resetSession()
             val resolution = resolveSession(channel)
@@ -273,11 +284,19 @@ class PlayerManager(
     ) {
         when (resolution) {
             is SessionResolution.Failed -> {
+                Log.w(TAG, "会话解析失败：channel=${channel.id} error=${resolution.error}")
                 // 动态源解析失败：直接给出精确错误，不再回退到空地址
                 dispatch(PlaybackEvent.Fatal(resolution.error))
             }
 
             is SessionResolution.Ready -> {
+                resolution.session?.let { s ->
+                    Log.i(
+                        TAG,
+                        "会话就绪：channel=${channel.id} host=${hostOf(s.url)} " +
+                            "mime=${s.mimeType} dynamic=${s.dynamic} def=${s.headers.size} headers",
+                    )
+                }
                 activeSession = resolution.session
                 val candidates = candidatesFor(resolution.session, channel)
                 retryState = RetryPolicy.onChannelSwitched(candidates.size)
@@ -322,6 +341,10 @@ class PlayerManager(
     }
 
     /** 把会话解析错误映射成播放错误（用于精确文案）。 */
+    /** 只取 host 打日志，避免把带签名的完整 URL 写进 logcat。 */
+    private fun hostOf(url: String): String =
+        runCatching { java.net.URI(url).host }.getOrNull() ?: "?"
+
     private fun mapResolveError(
         failure: com.livetv.android.domain.stream.StreamResolveResult.Failure,
     ): PlaybackError = when (failure.error) {
@@ -377,6 +400,17 @@ class PlayerManager(
         val channel = currentChannel ?: return null
         return RetryPolicy.candidateUrls(channel).getOrNull(retryState.sourceIndex)
     }
+
+    /** 切换播放/暂停，返回切换后的 `playWhenReady` 状态。 */
+    fun togglePlayPause(): Boolean {
+        val exoPlayer = player ?: return false
+        val target = !exoPlayer.playWhenReady
+        exoPlayer.playWhenReady = target
+        return target
+    }
+
+    /** 当前是否处于计划播放状态（用于刷新播放/暂停按钮文案）。 */
+    fun isPlayWhenReady(): Boolean = player?.playWhenReady == true
 
     /**
      * 构建 MediaSource：请求头与超时都配置在 `DataSource` 层。

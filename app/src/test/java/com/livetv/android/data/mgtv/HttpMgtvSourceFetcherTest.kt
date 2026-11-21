@@ -54,7 +54,7 @@ class HttpMgtvSourceFetcherTest {
     fun `returns raw json on http 200`() {
         val server = startServer { 200 to MgtvSanitizedFixtures.SOURCE_OK }
 
-        val result = fetcherAgainst(server).fetchSourceJson("287", null)
+        val result = fetcherAgainst(server).fetchSourceJson("287", null, null)
 
         assertTrue("expected RawJson but was $result", result is MgtvSourceFetchResult.RawJson)
         assertTrue((result as MgtvSourceFetchResult.RawJson).body.contains("\"code\":\"0\""))
@@ -64,7 +64,7 @@ class HttpMgtvSourceFetcherTest {
     fun `request carries computed sign and generated device id`() {
         val server = startServer { 200 to "{}" }
 
-        fetcherAgainst(server).fetchSourceJson("287", null)
+        fetcherAgainst(server).fetchSourceJson("287", null, null)
 
         val line = server.lastRequestLine.orEmpty()
         assertTrue("请求行应包含 cameraId: $line", line.contains("cameraId=287"))
@@ -83,7 +83,7 @@ class HttpMgtvSourceFetcherTest {
             MgtvEndpoints.sourceParams("287", sanitizedDeviceId, 1700000000000L),
         )
 
-        fetcherAgainst(server).fetchSourceJson("287", null)
+        fetcherAgainst(server).fetchSourceJson("287", null, null)
 
         assertTrue(server.lastRequestLine.orEmpty().contains("sign=$expected"))
     }
@@ -100,7 +100,7 @@ class HttpMgtvSourceFetcherTest {
     fun `sends referer header on the wire`() {
         val server = startServer { 200 to "{}" }
 
-        fetcherAgainst(server).fetchSourceJson("287", null)
+        fetcherAgainst(server).fetchSourceJson("287", null, null)
 
         assertEquals("https://www.mgtv.com/", server.lastHeaders["referer"])
     }
@@ -118,7 +118,7 @@ class HttpMgtvSourceFetcherTest {
     fun `maps http 403 to http error`() {
         val server = startServer { 403 to """{"code":"2040117","msg":"签名不正确"}""" }
 
-        val result = fetcherAgainst(server).fetchSourceJson("287", null)
+        val result = fetcherAgainst(server).fetchSourceJson("287", null, null)
 
         assertTrue(result is MgtvSourceFetchResult.HttpError)
         assertEquals(403, (result as MgtvSourceFetchResult.HttpError).code)
@@ -138,7 +138,7 @@ class HttpMgtvSourceFetcherTest {
             urlBuilder = { _, _ -> "$deadBaseUrl/v1/live/source" },
         )
 
-        val result = fetcher.fetchSourceJson("287", null)
+        val result = fetcher.fetchSourceJson("287", null, null)
 
         assertTrue("expected NetworkError but was $result", result is MgtvSourceFetchResult.NetworkError)
     }

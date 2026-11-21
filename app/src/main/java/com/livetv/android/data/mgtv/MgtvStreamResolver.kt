@@ -20,8 +20,17 @@ sealed interface MgtvSourceFetchResult {
 }
 
 fun interface MgtvSourceFetcher {
-    fun fetchSourceJson(cameraId: String, preferredDefinition: String?): MgtvSourceFetchResult
+    /**
+     * @param npuk 上一次响应里的 `sources[].npuk`：带上它服务端会换一个 CDN 节点（官方换节点重试）。
+     *             `null` 表示首次请求。
+     */
+    fun fetchSourceJson(
+        cameraId: String,
+        preferredDefinition: String?,
+        npuk: String?,
+    ): MgtvSourceFetchResult
 }
+
 
 /**
  * MGTV 动态直播流解析器。
@@ -38,6 +47,9 @@ class MgtvStreamResolver(
     private val allowedHeaderHosts: Set<String> = DEFAULT_ALLOWED_HEADER_HOSTS,
 ) : StreamResolver {
 
+    /** 每个频道上一次响应里的 npuk：用于"换节点重试"。 */
+    private val lastNpuk = HashMap<String, String>()
+
     override fun resolve(
         channel: Channel,
         preferredDefinition: String?,
@@ -50,7 +62,10 @@ class MgtvStreamResolver(
             )
         }
 
-        return when (val fetched = sourceFetcher.fetchSourceJson(cameraId, preferredDefinition)) {
+        // 记住上一次响应给出的 npuk：重解析时带回去，服务端才会换一个 CDN 节点。
+        val previousNpuk = lastNpuk[cameraId]
+        return when (val fetched = sourceFetcher.fetchSourceJson(cameraId, preferredDefinition, previousNpuk)) {
+
             is MgtvSourceFetchResult.AuthUnavailable -> StreamResolveResult.Failure(
                 error = StreamResolveError.AUTH_UNAVAILABLE,
                 message = fetched.reason,
@@ -71,11 +86,15 @@ class MgtvStreamResolver(
                 message = "HTTP ${fetched.code}: ${fetched.message}",
             )
 
-            is MgtvSourceFetchResult.RawJson -> parseAndSelect(fetched.body, preferredDefinition)
+            is MgtvSourceFetchResult.RawJson -> parseAndSelect(fetched.body, preferredDefinition, cameraId)
         }
     }
 
-    private fun parseAndSelect(rawJson: String, preferredDefinition: String?): StreamResolveResult {
+    private fun parseAndSelect(
+        rawJson: String,
+        preferredDefinition: String?,
+        cameraId: String,
+    ): StreamResolveResult {
         val parsed = MgtvJsonParser.parseSourceResponse(rawJson)
             ?: return StreamResolveResult.Failure(
                 error = StreamResolveError.PARSE_ERROR,
@@ -95,6 +114,9 @@ class MgtvStreamResolver(
                 error = StreamResolveError.UNSUPPORTED_SOURCE,
                 message = "no eligible non-P2P/non-HDCP HTTPS .m3u8 source available",
             )
+
+        // 记录本次的 npuk，供下一次"换节点重试"使用
+        selected.npuk.takeIf { it.isNotBlank() }?.let { lastNpuk[cameraId] = it }
 
         val effectiveExpireSec = if (selected.urlExpireDurationSec <= 0L) {
             FALLBACK_EXPIRE_DURATION_SEC

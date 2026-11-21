@@ -23,12 +23,16 @@ class HttpMgtvSourceFetcher(
     override fun fetchSourceJson(
         cameraId: String,
         preferredDefinition: String?,
+        npuk: String?,
     ): MgtvSourceFetchResult {
         val params = MgtvEndpoints.sourceParams(
             cameraId = cameraId,
             deviceId = deviceIdProvider.deviceId(),
             timestampMs = timestampProvider(),
             preferredDefinition = preferredDefinition,
+            npuk = npuk,
+            // 官方换节点重试时同时固定 vf=h264
+            vf = if (npuk.isNullOrBlank()) null else "h264",
         )
         val url = urlBuilder(params, signer(params))
         return when (val response = client.get(url, sourceRequestHeaders())) {

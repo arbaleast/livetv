@@ -62,7 +62,9 @@ object MgtvEndpoints {
         deviceId: String,
         timestampMs: Long,
         preferredDefinition: String? = null,
-    ): Map<String, String> = linkedMapOf(
+        npuk: String? = null,
+        vf: String? = null,
+    ): Map<String, String> = linkedMapOf<String, String>(
         "cameraId" to cameraId,
         "activityId" to "",
         "platform" to PLATFORM,
@@ -79,7 +81,13 @@ object MgtvEndpoints {
         "did" to deviceId,
         "deviceId" to deviceId,
         "_t" to timestampMs.toString(),
-    )
+    ).apply {
+        // 官方播放器的"换节点重试"参数：把上一次响应的 npuk 带回去，服务端会调度到另一个 CDN
+        // （实测 padal → padqq，且新地址在真机上是 200，而原地址会 302 到只认明文的 LDVT 集群）。
+        // 首次请求不带；只有重解析时才有值，且它们同样参与签名。
+        npuk?.takeIf { it.isNotBlank() }?.let { put("npuk", it) }
+        vf?.takeIf { it.isNotBlank() }?.let { put("vf", it) }
+    }
 
     /**
      * 播放源接口地址：把 [sign] 与 `_support` 追加到已签名参数之后。
