@@ -21,6 +21,9 @@ class ChannelNavigator(channels: List<Channel>) {
     /**
      * 按 `channelId` 定位当前频道；找不到时按 `streamUrl` 匹配（多个同 URL 取第一个）。
      *
+     * **空 `streamUrl` 不参与 URL 回退**：动态源频道（`mgtv:*`）的 `streamUrl` 全是空串，
+     * 若允许空串匹配，任何 id 查找失败都会命中"第一个 streamUrl 为空的频道"——也就是串台。
+     *
      * @return 是否定位成功。
      */
     fun locate(channelId: String?, streamUrl: String?): Boolean {
@@ -29,10 +32,13 @@ class ChannelNavigator(channels: List<Channel>) {
             currentIndex = byId
             return true
         }
-        val byUrl = channels.indexOfFirst { it.streamUrl == streamUrl }
-        if (byUrl >= 0) {
-            currentIndex = byUrl
-            return true
+        val url = streamUrl?.trim().orEmpty()
+        if (url.isNotEmpty()) {
+            val byUrl = channels.indexOfFirst { it.streamUrl == url }
+            if (byUrl >= 0) {
+                currentIndex = byUrl
+                return true
+            }
         }
         currentIndex = -1
         return false

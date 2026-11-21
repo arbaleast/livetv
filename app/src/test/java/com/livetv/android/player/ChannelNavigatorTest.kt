@@ -133,4 +133,32 @@ class ChannelNavigatorTest {
         assertEquals(3, flat.size)
         assertEquals(listOf("n1", "n2", "s1"), flat.map { it.id })
     }
+    @Test
+    fun `blank stream url never matches, so dynamic channels cannot mis-locate`() {
+        // 动态源（mgtv:*）streamUrl 全为空串：id 找不到时必须失败，而不是命中第一个空地址频道
+        val dynamic1 = Channel(id = "mgtv:287", name = "金鹰卡通", description = "", streamUrl = "")
+        val dynamic2 = Channel(id = "mgtv:344", name = "湖南娱乐", description = "", streamUrl = "")
+        val navigator = ChannelNavigator(listOf(dynamic1, dynamic2))
+
+        assertTrue(navigator.locate("mgtv:287", ""))
+        assertEquals(0, navigator.currentIndex)
+
+        // 目标 id 不存在 → 不允许退化成"第一个空 streamUrl 的频道"
+        assertFalse(navigator.locate("mgtv:999", ""))
+        assertEquals(-1, navigator.currentIndex)
+
+        // null 同样不参与回退
+        assertFalse(navigator.locate("mgtv:999", null))
+        assertEquals(-1, navigator.currentIndex)
+    }
+
+    @Test
+    fun `non blank stream url still falls back after id miss`() {
+        val a = Channel(id = "a", name = "A", description = "", streamUrl = "https://x.invalid/a.m3u8")
+        val b = Channel(id = "b", name = "B", description = "", streamUrl = "https://x.invalid/b.m3u8")
+        val navigator = ChannelNavigator(listOf(a, b))
+
+        assertTrue(navigator.locate("missing", "https://x.invalid/b.m3u8"))
+        assertEquals(1, navigator.currentIndex)
+    }
 }
