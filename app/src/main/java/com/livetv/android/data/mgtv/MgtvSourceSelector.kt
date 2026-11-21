@@ -7,11 +7,15 @@ import java.util.Locale
  * MGTV `sources` 白盒筛选与清晰度选择策略（纯 Kotlin，确定性实现）。
  *
  * 规则：
- * 1. **硬过滤**：仅放行同时满足以下 4 项的源：
+ * 1. **硬过滤**：仅放行同时满足以下 3 项的源：
  *    - `format` 为 `.m3u8`（忽略大小写）；
- *    - `effectiveIsP2p == 0`（严禁静默降级至 P2P）；
- *    - `effectiveHdcp == 0`（拦截 HDCP 受限流）；
+ *    - `effectiveHdcp == 0`（拦截 HDCP 受限流；缺失或非整数一律视为不合规）；
  *    - `url` 为合法 `https://` 且包含有效 host。
+ *
+ *    **`isp2p` 不再作为过滤条件**：它只表示"该源另外支持 P2P 传输"，与本应用无关——
+ *    我们始终按标准 HTTPS HLS 拉流，从不建立 P2P 连接。实测 `cameraId=221`（湖南经视）
+ *    返回 `isp2p=1`，但其 `.m3u8` 与 `.ts` 均为 HTTP 200 且为标准 MPEG-TS；
+ *    若按 `isp2p==0` 过滤，这个频道会永远"无可用源"。
  * 2. **清晰度选择**：
  *    - 优先匹配 `preferredDefinition`（按 `definition` 编号或 `name` 如 `"720P"` 忽略大小写匹配）；
  *    - 未命中时按确定性顺序回退至最高可用普通清晰度（先按 `<数字>P` 分辨率降序，再按 `definition` 数值降序，最后按原始顺序）。
@@ -26,11 +30,9 @@ object MgtvSourceSelector {
     fun filterSupportedSources(response: MgtvSourceResponse): List<MgtvSourceItem> {
         if (response.isDrm) return emptyList()
         return response.sources.filter { item ->
-            val effectiveIsP2p = item.isP2p ?: response.isP2p
             val effectiveHdcp = item.hdcp ?: response.hdcp
             !item.isDrm &&
                 isM3u8Format(item.format) &&
-                effectiveIsP2p == 0 &&
                 effectiveHdcp == 0 &&
                 isValidHttpsUrl(item.url)
         }

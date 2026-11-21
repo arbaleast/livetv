@@ -14,21 +14,27 @@ class MgtvSourceSelectorTest {
         MgtvJsonParser.parseSourceResponse(raw)!!
 
     @Test
-    fun `keeps only https m3u8 non-p2p non-hdcp sources`() {
+    fun `keeps https m3u8 sources with hdcp zero`() {
         val response = responseOf(MgtvSanitizedFixtures.SOURCE_MIXED)
 
         val eligible = MgtvSourceSelector.filterSupportedSources(response)
 
-        assertEquals(1, eligible.size)
+        assertEquals(2, eligible.size)
         assertEquals("https://cdn.example.invalid/ok/360.m3u8", eligible[0].url)
+        assertEquals("https://cdn.example.invalid/p2p/720.m3u8", eligible[1].url)
     }
 
     @Test
-    fun `rejects p2p source`() {
+    fun `accepts hls source flagged as p2p because we never use p2p transport`() {
+        // 实测 221（湖南经视）返回 isp2p=1，但 .m3u8/.ts 均为 HTTP 200 标准 HLS；
+        // 若按 isp2p==0 过滤，该频道会永远"无可用源"。
         val response = responseOf(MgtvSanitizedFixtures.SOURCE_MIXED)
         val p2p = response.sources.first { it.url.contains("/p2p/") }
 
-        assertTrue(MgtvSourceSelector.filterSupportedSources(response).none { it.url == p2p.url })
+        assertTrue(
+            "isp2p=1 但为 https .m3u8 且 hdcp=0 时应放行",
+            MgtvSourceSelector.filterSupportedSources(response).any { it.url == p2p.url },
+        )
     }
 
     @Test
@@ -65,12 +71,12 @@ class MgtvSourceSelectorTest {
     }
 
     @Test
-    fun `falls back to the only eligible source when preference misses`() {
+    fun `falls back to the highest resolution eligible source when preference misses`() {
         val response = responseOf(MgtvSanitizedFixtures.SOURCE_MIXED)
 
         val selected = MgtvSourceSelector.selectBestSource(response, "4K")
 
-        assertEquals("https://cdn.example.invalid/ok/360.m3u8", selected?.url)
+        assertEquals("https://cdn.example.invalid/p2p/720.m3u8", selected?.url)
     }
 
     @Test

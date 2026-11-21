@@ -74,7 +74,7 @@ class MgtvFailClosedHardeningTest {
     }
 
     @Test
-    fun `per-source non-numeric isp2p override fails closed even when top-level is zero`() {
+    fun `per-source non-numeric isp2p override no longer blocks a source whose hdcp is zero`() {
         val raw = """
             {"code":"0","msg":"","data":{
               "cameraId":"287","cameraName":"金鹰卡通","isp2p":0,"hdcp":0,"servertime":1700000000,
@@ -86,7 +86,7 @@ class MgtvFailClosedHardeningTest {
 
         val result = resolverOf(raw).resolve(channel)
 
-        assertEquals(StreamResolveError.UNSUPPORTED_SOURCE, (result as StreamResolveResult.Failure).error)
+        assertTrue("hdcp=0 且为 https .m3u8 时应解析成功，实际 $result", result is StreamResolveResult.Success)
     }
 
     @Test
