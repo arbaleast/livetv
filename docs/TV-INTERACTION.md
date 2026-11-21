@@ -11,7 +11,7 @@
 | 左 / 右 | `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | 在行内卡片之间横向移动焦点；在首列向左且有 Header 时切到 Header 栏 | 浏览页：Leanback 默认行为。**播放页**：正常态按左键呼出侧边选台栏；选台栏打开时按右键收起 |
 | OK | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | 激活当前焦点项（= 点击） | 浏览页：触发 `MainBrowseFragment.onItemViewClickedListener`。**播放页**：Error 态手动重置；选台栏打开时选中频道并收起；正常态呼出控制器 |
 | Back | `KEYCODE_BACK` | 逐层返回：先关 Header / 抽屉 / 控制器，再退到上一个 Activity | 浏览页启用 `isHeadersTransitionOnBackEnabled = true`；**播放页**：依次收起侧边选台栏 → 控制器 → 退出播放页 |
-| Menu | `KEYCODE_MENU` | 打开快速选台 / 菜单 | **播放页**：已实现，呼出侧边频道选台栏（与 `KEYCODE_DPAD_LEFT` 一致）；浏览页保留独立「设置与订阅」行 |
+| Menu | `KEYCODE_MENU` | 打开快速选台 / 菜单 | **播放页**：已实现，呼出侧边频道选台栏（与 `KEYCODE_DPAD_LEFT` 一致）；浏览页保留独立「设置」行 |
 
 补充约定：
 
@@ -24,7 +24,7 @@
 1. **返回后回到原位置**：从浏览页进入播放页再 Back 回来，焦点应落在**进入前的那张卡片**上，
    而不是列表首项。Leanback 依赖 `Row`/Fragment 的视图状态保存来实现这一点，
    因此**不要在 `onItemViewClickedListener` 里重建 adapter 或刷新列表**（重建会丢失焦点位置）。
-2. **刷新列表要保留焦点**：刷新前记录当前行的**标识**（分类名 / 「设置与订阅」行名）与行内条目 id，
+2. **刷新列表要保留焦点**：刷新前记录当前行的**标识**（分类名 / 「设置」行名）与行内条目 id，
    刷新后**优先按标识**找回对应行——分类增删时行号会整体偏移，只按 `selectedPosition` 恢复必然错位；
    行内条目按频道 id / 动作恢复，标识找不到时退回原行号（有界），最后才落回首行。
    实现见 `MainBrowseFragment.loadRows(preserveFocus = true)` + `restoreFocus`，

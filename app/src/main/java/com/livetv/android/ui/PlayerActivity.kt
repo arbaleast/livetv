@@ -254,7 +254,7 @@ class PlayerActivity : AppCompatActivity() {
     // ---------------- 频道解析 ----------------
 
     private fun resolveInitialChannel(savedInstanceState: Bundle?) {
-        categories = app.catalogStore.getAllCategories().ifEmpty { app.channelRepository.getCategories() }
+        categories = app.catalogStore.getAllCategories()
         val flat = ChannelNavigator.flatten(categories)
 
         val channelId = PlayerOrientationPolicy.resolveChannelIdToRestore(
@@ -290,10 +290,10 @@ class PlayerActivity : AppCompatActivity() {
     private fun ensureMgtvCatalogLoaded() {
         val channel = currentChannel ?: return
         if (!channel.id.startsWith(MgtvStreamResolver.CHANNEL_ID_PREFIX)) return
-        if (app.catalogStore.hasSupplementalCategories()) return
+        if (!app.catalogStore.isEmpty()) return
         app.mgtvCatalogCoordinator.load { mgtvCategories ->
             if (mgtvCategories.isEmpty() || isFinishing || isDestroyed) return@load
-            app.catalogStore.updateSupplementalCategories(mgtvCategories)
+            app.catalogStore.update(mgtvCategories)
             categories = app.catalogStore.getAllCategories()
             rebuildNavigatorKeepingCurrent()
             if (isDrawerOpen) refreshDrawerRows()

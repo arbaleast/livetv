@@ -7,8 +7,8 @@ import org.junit.Test
 /**
  * [MgtvProvider] 的目录映射测试。
  *
- * 关键约定：**聚合分类「热门」不展示**——它的频道是其它分类的重复集合，
- * 跳过它之后列表天然没有重复卡片，也不需要运行时去重。
+ * 关键约定：**聚合分类「热门」不整段展示**——它的频道大多与其它分类重复；
+ * 但**只在「热门」出现的频道必须捞回来**（实测 `344 湖南娱乐`），否则会丢台。
  */
 class MgtvProviderTest {
 
@@ -46,5 +46,21 @@ class MgtvProviderTest {
         assertEquals("mgtv:287", channel.id)
         assertEquals("287", channel.epgId)
         assertEquals("", channel.streamUrl)
+    }
+
+    @Test
+    fun `aggregator only channel is rescued into its own hot group exactly once`() {
+        val provider = providerWith(MgtvSanitizedFixtures.CATEGORY_WITH_AGGREGATOR_ORPHAN)
+        provider.loadMgtvCategories()
+
+        val categories = provider.toDomainCategories()
+
+        assertEquals(listOf("卫视台", "地方台", "热门"), categories.map { it.name })
+        val hot = categories.last()
+        assertEquals("热门分组只应保留聚合独有频道", listOf("mgtv:344"), hot.channels.map { it.id })
+
+        val allIds = categories.flatMap { it.channels }.map { it.id }
+        assertEquals(listOf("mgtv:287", "mgtv:221", "mgtv:344"), allIds)
+        assertEquals("不应产生重复频道", allIds.size, allIds.toSet().size)
     }
 }

@@ -63,30 +63,26 @@ adb shell am start -n com.livetv.android/.MainActivity
 
 ```
 app/src/main/java/com/livetv/android/
-├── LiveTvApplication.kt            # 全局单例：订阅仓库 + 刷新协调器
+├── LiveTvApplication.kt            # 全局单例：频道目录 / MGTV 协调器 / 播放源解析
 ├── MainActivity.kt                 # 入口分流：TV 走 Leanback，触控设备走 ui/mobile
-├── data/                           # 数据层
-│   ├── model/ChannelConfigDto.kt   # JSON 映射 DTO
-│   ├── parser/ChannelJsonParser.kt # JSON 解析与安全校验（纯函数）
-│   ├── parser/M3uPlaylistParser.kt # M3U 解析与安全校验（纯函数，含请求头提取）
-│   ├── source/                     # 数据源接口 + assets 实现（JSON / M3U）
-│   ├── remote/RemoteM3uFetcher.kt  # 远程 M3U 拉取（JDK HttpURLConnection）
-│   ├── subscription/               # 订阅持久化（SharedPreferences + filesDir 原子写）
-│   ├── repository/                 # 多源合并仓库 + 订阅仓库（远程→缓存→内置三级兜底）
-│   └── SubscriptionCoordinator.kt   # 后台刷新协调（ExecutorService + 主线程 Handler）
-├── domain/                         # 领域层
-│   ├── model/                      # Channel / ChannelCategory / RefreshResult
-│   └── repository/                 # ChannelRepository / SubscriptionRepository
+├── data/mgtv/                      # 唯一频道来源：MGTV 公开目录 + 播放源
+│   ├── MgtvEndpoints.kt            # 目录/播放源 URL 构造
+│   ├── MgtvCatalogFetcher.kt       # 公开频道目录抓取（免签名）
+│   ├── MgtvCatalogCoordinator.kt   # 后台拉目录 + 主线程回传
+│   ├── MgtvJsonParser.kt           # JSONP 剥离 + 目录/播放源解析
+│   ├── MgtvProvider.kt             # 目录 → 领域频道（mgtv:<cameraId>，捞回聚合独有频道）
+│   ├── MgtvStreamResolver.kt       # mgtv: 频道的播放地址解析
+│   └── ...                         # 签名 / HTTP 客户端 / 播放源筛选
+├── domain/
+│   ├── model/                      # Channel / ChannelCategory
+│   ├── repository/ChannelCatalogStore.kt  # 应用级频道快照（手机/TV/播放页共用）
+│   └── stream/                     # 通用播放会话解析（纯 Kotlin）
 ├── player/                         # 播放层（除 PlayerManager 外为纯 Kotlin 策略层）
 └── ui/
-    ├── MainBrowseFragment.kt       # Leanback 浏览页（通过 Repository 取分类）
+    ├── MainBrowseFragment.kt       # Leanback 浏览页
     ├── ChannelCardPresenter.kt     # 频道卡片 Presenter
     ├── PlayerActivity.kt           # Media3 播放器页（HLS，TV 遥控器 + 触控双端）
-    └── mobile/                     # 手机/平板触控 UI（RecyclerView 网格）
-
-app/src/main/assets/
-├── channels.json                   # 默认频道配置（JSON 源）
-└── sample.m3u                      # 示例 M3U 播放列表（M3U 源）
+    └── mobile/                     # 手机/平板触控 UI（RecyclerView 网格 + 搜索/收藏）
 
 app/src/debug/                      # 仅 Debug 源集：放行 127.0.0.1 / localhost 明文
 └── res/xml/network_security_config.xml
@@ -105,15 +101,13 @@ app/src/debug/                      # 仅 Debug 源集：放行 127.0.0.1 / loca
 
 ## 当前状态与限制
 
-- 频道有三级来源：**远程 M3U 订阅 → 本地有效缓存 → APK 内置 assets**
-  （`assets/channels.json` + `assets/sample.m3u`，按**分类名合并**同名分类）。
-  手机端顶栏提供「刷新」与「订阅源」入口，订阅 URL 与最近一次成功的播放列表会被持久化。
-  暂不支持从本地文件导入 M3U，也不支持管理多个订阅源。
-- M3U 里的 `#EXTVLCOPT` / `#KODIPROP` 请求头（`User-Agent` / `Referer` / `Origin`）
-  会被解析成频道的自定义请求头，播放时随该频道一起下发。
+- 频道**只来自 MGTV 公开目录**（`data/mgtv/`，公开免签名接口）。内置 assets 与 M3U 订阅管线已移除：
+  手机端顶栏保留「刷新」用于重新拉取目录，不再提供订阅源配置入口。
+- 「热门」聚合分类不整段展示（避免重复卡片），但**只在该分类出现的频道会被捞回**并归入「热门」分组
+  （例如 `344 湖南娱乐`），保证不丢台。
 - 播放支持 HLS 直链；失败时按**每源 2 次退避重试（1500ms / 3000ms）→ 切换备用源 → 手动重置**处理。
   HTTP **401 / 403 / 429** 属于不可重试状态，会**跳过退避**、立即切备用源（无备用源则直接报错）。
 - Release 包**不允许明文 HTTP**；只有 Debug 包额外放行 `127.0.0.1` / `localhost`，
   用于对接本地教学沙箱。
-- 无 EPG、无搜索、无收藏、无播放历史、无设置页；TV 端暂无订阅源管理入口。
-- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试（当前 **192 个** / 18 个测试类）。
+- 无 EPG、无播放历史、无设置页；手机端已支持频道搜索与本地收藏，TV 端提供「重新加载频道」入口。
+- 无仪器测试（`androidTest`）与 UI 自动化，用例全部为纯 JVM 单元测试（当前 **285 个** / 31 个测试类）。

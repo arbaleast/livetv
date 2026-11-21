@@ -100,19 +100,6 @@
                 android:background="@drawable/bg_mobile_action_button"
                 android:text="@string/mobile_action_refresh" />
 
-            <TextView
-                android:id="@+id/mobile_subscription"
-                style="@style/WidgetLiveTvHeaderAction"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:maxWidth="84dp"
-                android:minHeight="48dp"
-                android:minWidth="48dp"
-                android:layout_marginStart="4dp"
-                android:background="@drawable/bg_mobile_action_button"
-                android:text="@string/mobile_action_subscription" />
         </LinearLayout>
 
         <!-- 内联实时搜索栏 -->

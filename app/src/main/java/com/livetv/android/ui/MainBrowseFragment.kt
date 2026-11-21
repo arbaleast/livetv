@@ -1,6 +1,5 @@
 package com.livetv.android.ui
 
-import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Canvas
 import android.graphics.Color
@@ -11,11 +10,7 @@ import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
 import android.os.Bundle
-import android.text.InputType
 import android.view.ViewGroup
-import android.widget.EditText
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.leanback.app.BrowseSupportFragment
@@ -33,8 +28,6 @@ import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
 import com.livetv.android.data.mgtv.MgtvStreamResolver
 import com.livetv.android.domain.model.Channel
-import com.livetv.android.domain.model.RefreshResult
-import com.livetv.android.player.RetryPolicy
 import com.livetv.android.ui.mobile.MobileChannelList
 import com.livetv.android.ui.mobile.MobileUiPreferences
 import com.livetv.android.util.FocusRestorePolicy
@@ -45,7 +38,6 @@ class MainBrowseFragment : BrowseSupportFragment() {
     private val app: LiveTvApplication
         get() = requireActivity().application as LiveTvApplication
 
-    private var isRefreshing = false
     private var mgtvLoading = false
 
     /** 当前焦点行的标识（分类名 / 「设置与订阅」行名），刷新后用它恢复焦点。 */
@@ -60,14 +52,10 @@ class MainBrowseFragment : BrowseSupportFragment() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupUi()
-        app.refreshCatalogFromRepository()
         loadRows(preserveFocus = false)
         setupEventListeners()
-        loadMgtvChannelsIfNeeded()
-
-        // 与手机端对齐：已配置订阅源时，首次进入静默刷新一次
-        if (savedInstanceState == null && !app.subscriptionRepository.getSubscriptionUrl().isNullOrBlank()) {
-            refreshSubscription(silent = true)
+        if (app.catalogStore.isEmpty()) {
+            reloadMgtvCatalog(preserveFocus = false)
         }
     }
 
@@ -96,7 +84,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
                     TvActionItem(
                         action = TvAction.REFRESH,
                         title = getString(R.string.tv_empty_channels),
-                        subtitle = if (isRefreshing) getString(R.string.tv_action_refreshing) else idleSubtitle,
+                        subtitle = if (mgtvLoading) getString(R.string.tv_action_refreshing) else idleSubtitle,
                         idleSubtitle = idleSubtitle,
                     ),
                 )
@@ -110,28 +98,21 @@ class MainBrowseFragment : BrowseSupportFragment() {
                 }
                 rowsAdapter.add(ListRow(HeaderItem(category.name), channelAdapter))
             }
-        }
 
-        // TV 端遥控器可达的订阅源与刷新入口（纯 D-Pad + OK，无需触屏）
-        val settingsAdapter = ArrayObjectAdapter(TvActionCardPresenter()).apply {
-            add(
-                TvActionItem(
-                    action = TvAction.REFRESH,
-                    title = getString(R.string.tv_action_refresh),
-                    subtitle = refreshActionSubtitle(),
-                    idleSubtitle = getString(R.string.tv_action_refresh_desc),
-                ),
-            )
-            add(
-                TvActionItem(
-                    action = TvAction.SUBSCRIPTION,
-                    title = getString(R.string.tv_action_subscription),
-                    subtitle = getString(R.string.tv_action_subscription_desc),
-                ),
-            )
+            // TV 端遥控器可达的「重新加载频道」入口（纯 D-Pad + OK，无需触屏）
+            val settingsAdapter = ArrayObjectAdapter(TvActionCardPresenter()).apply {
+                add(
+                    TvActionItem(
+                        action = TvAction.REFRESH,
+                        title = getString(R.string.tv_action_refresh),
+                        subtitle = refreshActionSubtitle(),
+                        idleSubtitle = getString(R.string.tv_action_refresh_desc),
+                    ),
+                )
+            }
+            refreshActionAdapters += settingsAdapter
+            rowsAdapter.add(ListRow(HeaderItem(getString(R.string.tv_row_settings)), settingsAdapter))
         }
-        refreshActionAdapters += settingsAdapter
-        rowsAdapter.add(ListRow(HeaderItem(getString(R.string.tv_row_settings)), settingsAdapter))
 
         adapter = rowsAdapter
 
@@ -146,7 +127,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
 
     /** 刷新卡片副标题：刷新中给出可见的加载态文案，结束后恢复说明文字。 */
     private fun refreshActionSubtitle(): String = getString(
-        if (isRefreshing) R.string.tv_action_refreshing else R.string.tv_action_refresh_desc,
+        if (mgtvLoading) R.string.tv_action_refreshing else R.string.tv_action_refresh_desc,
     )
 
     private fun updateRefreshActionCards() {
@@ -155,7 +136,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
             for (index in 0 until rowAdapter.size()) {
                 val item = rowAdapter.get(index) as? TvActionItem ?: continue
                 if (item.action != TvAction.REFRESH) continue
-                val target = if (isRefreshing) busySubtitle else item.idleSubtitle
+                val target = if (mgtvLoading) busySubtitle else item.idleSubtitle
                 if (item.subtitle != target) {
                     rowAdapter.replace(index, item.copy(subtitle = target))
                 }
@@ -255,161 +236,29 @@ class MainBrowseFragment : BrowseSupportFragment() {
         }
     }
 
-    private fun loadMgtvChannelsIfNeeded() {
-        if (app.catalogStore.hasSupplementalCategories() || mgtvLoading) return
+    private fun reloadMgtvCatalog(preserveFocus: Boolean) {
+        if (mgtvLoading) return
         mgtvLoading = true
+        updateRefreshActionCards()
         app.mgtvCatalogCoordinator.load { mgtvCategories ->
             mgtvLoading = false
             if (mgtvCategories.isNotEmpty()) {
-                app.catalogStore.updateSupplementalCategories(mgtvCategories)
+                app.catalogStore.update(mgtvCategories)
             }
             if (!isAdded || view == null) return@load
-            if (mgtvCategories.isNotEmpty()) {
-                loadRows(preserveFocus = true)
-            }
+            loadRows(preserveFocus = preserveFocus)
+            updateRefreshActionCards()
         }
     }
 
     private fun handleActionClick(action: TvAction) {
         when (action) {
-            TvAction.REFRESH -> refreshSubscription(silent = false)
-            TvAction.SUBSCRIPTION -> showSubscriptionDialog()
+            TvAction.REFRESH -> reloadMgtvCatalog(preserveFocus = true)
         }
-    }
-
-    private fun refreshSubscription(silent: Boolean) {
-        if (isRefreshing) {
-            if (!silent && isAdded) {
-                Toast.makeText(requireContext(), R.string.mobile_refresh_busy, Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-        isRefreshing = true
-        // 刷新期间把「刷新订阅」卡片副标题切到“刷新中…”，大屏上无需触屏也能看到进度反馈
-        updateRefreshActionCards()
-        if (!silent && isAdded) {
-            Toast.makeText(requireContext(), R.string.mobile_action_refreshing, Toast.LENGTH_SHORT).show()
-        }
-        app.subscriptionCoordinator.refresh { result ->
-            isRefreshing = false
-            app.refreshCatalogFromRepository()
-            loadMgtvChannelsIfNeeded()
-            if (!isAdded || view == null) return@refresh
-            loadRows(preserveFocus = true)
-            updateRefreshActionCards()
-            if (!silent) showRefreshResult(result)
-        }
-    }
-
-    private fun updateSubscriptionUrl(url: String?) {
-        if (isRefreshing) {
-            if (isAdded) {
-                Toast.makeText(requireContext(), R.string.mobile_refresh_busy, Toast.LENGTH_SHORT).show()
-            }
-            return
-        }
-        isRefreshing = true
-        updateRefreshActionCards()
-        app.subscriptionCoordinator.updateUrl(url) { result ->
-            isRefreshing = false
-            app.refreshCatalogFromRepository()
-            loadMgtvChannelsIfNeeded()
-            if (!isAdded || view == null) return@updateUrl
-            loadRows(preserveFocus = true)
-            updateRefreshActionCards()
-            showRefreshResult(result)
-        }
-    }
-
-    private fun showSubscriptionDialog() {
-        val ctx = context ?: return
-        val density = resources.displayMetrics.density
-        val pad = (20 * density).roundToInt()
-        val container = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad / 2, pad, 0)
-        }
-
-        val current = app.subscriptionRepository.getSubscriptionUrl()
-        val status = TextView(ctx).apply {
-            text = if (current.isNullOrBlank()) {
-                getString(R.string.mobile_subscription_none)
-            } else {
-                getString(R.string.mobile_subscription_current, current)
-            }
-            textSize = 14f
-            setTextColor(ContextCompat.getColor(ctx, R.color.mobile_text_secondary))
-        }
-        container.addView(status)
-
-        val input = EditText(ctx).apply {
-            setText(current.orEmpty())
-            hint = getString(R.string.mobile_subscription_hint)
-            setSingleLine()
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            // 大屏暗色主题下显式指定前景/提示色，避免输入框文字与提示语融入背景
-            setTextColor(ContextCompat.getColor(ctx, R.color.mobile_text_primary))
-            setHintTextColor(ContextCompat.getColor(ctx, R.color.mobile_text_tertiary))
-            textSize = 15f
-            minHeight = (48 * density).roundToInt()
-        }
-        container.addView(input)
-
-        val builder = AlertDialog.Builder(ctx)
-            .setTitle(R.string.mobile_subscription_title)
-            .setView(container)
-            .setPositiveButton(R.string.mobile_subscription_save, null)
-            .setNegativeButton(R.string.mobile_subscription_cancel, null)
-
-        if (!current.isNullOrBlank()) {
-            builder.setNeutralButton(R.string.mobile_subscription_reset) { _, _ ->
-                AlertDialog.Builder(ctx)
-                    .setTitle(R.string.mobile_subscription_reset_confirm_title)
-                    .setMessage(R.string.mobile_subscription_reset_confirm_message)
-                    .setPositiveButton(R.string.mobile_subscription_reset_confirm_ok) { _, _ ->
-                        updateSubscriptionUrl(null)
-                    }
-                    .setNegativeButton(R.string.mobile_subscription_cancel, null)
-                    .show()
-            }
-        }
-
-        val dialog = builder.create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val url = input.text.toString().trim()
-                if (!RetryPolicy.isValidUrl(url)) {
-                    input.error = getString(R.string.mobile_subscription_invalid_url)
-                    return@setOnClickListener
-                }
-                dialog.dismiss()
-                updateSubscriptionUrl(url)
-            }
-        }
-        dialog.show()
-    }
-
-    private fun showRefreshResult(result: RefreshResult) {
-        val totalAvailable = app.catalogStore.getAllCategories().sumOf { it.channels.size }
-        val message = when (result) {
-            is RefreshResult.BuiltinOnly -> getString(R.string.mobile_refresh_builtin, totalAvailable)
-            is RefreshResult.RemoteLoaded -> getString(R.string.mobile_refresh_remote, totalAvailable)
-            is RefreshResult.FallbackToCache ->
-                getString(R.string.mobile_refresh_cache, result.channelCount, result.reason)
-            is RefreshResult.FallbackToBuiltin ->
-                getString(R.string.mobile_refresh_builtin_fallback, totalAvailable, result.reason)
-        }
-        val duration = if (result is RefreshResult.FallbackToCache || result is RefreshResult.FallbackToBuiltin) {
-            Toast.LENGTH_LONG
-        } else {
-            Toast.LENGTH_SHORT
-        }
-        Toast.makeText(requireContext(), message, duration).show()
     }
 
     private enum class TvAction {
         REFRESH,
-        SUBSCRIPTION,
     }
 
     private data class TvActionItem(
@@ -458,10 +307,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
         private val density: Float,
     ) : Drawable() {
 
-        private val accent = when (action) {
-            TvAction.REFRESH -> 0xFF3B82F6.toInt()
-            TvAction.SUBSCRIPTION -> 0xFF10B981.toInt()
-        }
+        private val accent = 0xFF3B82F6.toInt()
 
         private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = 0xFF151A23.toInt()
@@ -500,10 +346,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
             canvas.drawCircle(cx, cy, badgeRadius, circleFillPaint)
             canvas.drawCircle(cx, cy, badgeRadius, circleStrokePaint)
 
-            when (action) {
-                TvAction.REFRESH -> drawRefreshIcon(canvas, cx, cy)
-                TvAction.SUBSCRIPTION -> drawSubscriptionIcon(canvas, cx, cy)
-            }
+            drawRefreshIcon(canvas, cx, cy)
         }
 
         private fun drawRefreshIcon(canvas: Canvas, cx: Float, cy: Float) {
@@ -521,17 +364,6 @@ class MainBrowseFragment : BrowseSupportFragment() {
             arrowPath.lineTo(tipX + wing * 0.1f, tipY - wing * 0.9f)
             arrowPath.close()
             canvas.drawPath(arrowPath, iconFillPaint)
-        }
-
-        private fun drawSubscriptionIcon(canvas: Canvas, cx: Float, cy: Float) {
-            val halfW = 12f * density
-            val stepY = 7f * density
-            // 三条紧凑列表线 + 左侧圆点，清晰表达 M3U 播放列表配置语义
-            for (i in -1..1) {
-                val y = cy + i * stepY
-                canvas.drawCircle(cx - halfW + 1.5f * density, y, 2f * density, iconFillPaint)
-                canvas.drawLine(cx - halfW + 7f * density, y, cx + halfW, y, iconStrokePaint)
-            }
         }
 
         override fun setAlpha(alpha: Int) {

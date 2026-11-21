@@ -17,7 +17,7 @@ import com.livetv.android.util.DeviceUtils
  * - **手机 / 平板等触控设备**：转交 `MobileMainActivity`（`RecyclerView` 触控网格），
  *   本 Activity 随即结束，屏幕上不会留下多余的空白页。
  *
- * 两端共用底层资产：`LiveTvApplication.channelRepository`（数据）与 `PlayerActivity`（播放）。
+ * 两端共用底层资产：`LiveTvApplication.catalogStore`（数据）与 `PlayerActivity`（播放）。
  */
 class MainActivity : FragmentActivity() {
 

@@ -103,4 +103,20 @@ internal object MgtvSanitizedFixtures {
         ]}});
     """
 
+    /** 聚合分类里存在一个只在「热门」出现的频道（实测 344 湖南娱乐）。 */
+    const val CATEGORY_WITH_AGGREGATOR_ORPHAN = """
+        livecallback({"errno":"0","data":{"category":[
+          {"category_id":"2100001","name":"热门","channels":[
+            {"id":"287","name":"金鹰卡通","channel_image":"","channel_number":"1","curr_program":""},
+            {"id":"344","name":"湖南娱乐","channel_image":"","channel_number":"2","curr_program":""}
+          ]},
+          {"category_id":"2100002","name":"卫视台","channels":[
+            {"id":"287","name":"金鹰卡通","channel_image":"","channel_number":"3","curr_program":""}
+          ]},
+          {"category_id":"2100003","name":"地方台","channels":[
+            {"id":"221","name":"湖南经视","channel_image":"","channel_number":"4","curr_program":""}
+          ]}
+        ]}});
+    """
+
 }

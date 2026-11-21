@@ -42,37 +42,66 @@ class MgtvProvider(
     /**
      * 映射为通用领域层 [ChannelCategory]（频道 ID 带 `mgtv:` 前缀，与普通 IPTV 源隔离）。
      *
-     * **跳过聚合分类「热门」**（`category_id=2100001`）：它只是把「卫视台 / 地方台 / 特色频道」
-     * 里的频道再列一遍——实测目录 21 条只对应 12 个唯一频道，其中 9 条是「热门」的重复。
-     * 直接不展示聚合分类，列表就没有重复卡片、总数也不再虚高，**不需要运行时去重**。
+     * **跳过聚合分类「热门」**（`category_id=2100001`）：它基本是把「卫视台 / 地方台 / 特色频道」
+     * 里的频道再列一遍，直接展示会产生重复卡片。
+     *
+     * 但**不能整段丢弃**：实测目录 21 条对应 13 个唯一频道，其中 `344 湖南娱乐` 只出现在「热门」里，
+     * 整段过滤会把它永久丢掉（曾导致"只有 12 台"）。这里只把「热门独有」的频道捞回来，
+     * 追加成一个只含这些频道的「热门」分类，既没有重复也不丢台。
      */
-    fun toDomainCategories(): List<ChannelCategory> =
-        cachedCategories
+    fun toDomainCategories(): List<ChannelCategory> {
+        val keptCategories = cachedCategories
             .filterNot { it.id in AGGREGATOR_CATEGORY_IDS || it.name in AGGREGATOR_CATEGORY_NAMES }
-            .map { cat ->
-                ChannelCategory(
-                    id = "mgtv:${cat.id}",
-                    name = cat.name,
-                    channels = cat.channels.map { ch ->
-                        Channel(
-                            id = "${MgtvStreamResolver.CHANNEL_ID_PREFIX}${ch.cameraId}",
-                            name = ch.name,
-                            description = ch.currentProgram.trim().ifEmpty { "芒果TV" },
-                            streamUrl = "",
-                            logo = ch.logoUrl,
-                            epgId = ch.cameraId,
-                            enabled = true,
-                        )
-                    },
-                )
-            }
+        val keptChannelIds = keptCategories
+            .flatMap { it.channels }
+            .map { it.cameraId }
+            .toSet()
+
+        val categories = keptCategories.map { cat ->
+            ChannelCategory(
+                id = "mgtv:${cat.id}",
+                name = cat.name,
+                channels = cat.channels.map { it.toDomainChannel() },
+            )
+        }
+
+        val orphanChannels = cachedCategories
+            .filter { it.id in AGGREGATOR_CATEGORY_IDS || it.name in AGGREGATOR_CATEGORY_NAMES }
+            .flatMap { it.channels }
+            .filter { it.cameraId !in keptChannelIds }
+            .distinctBy { it.cameraId }
+            .map { it.toDomainChannel() }
+
+        if (orphanChannels.isEmpty()) return categories
+        return categories + ChannelCategory(
+            id = AGGREGATOR_ORPHAN_CATEGORY_ID,
+            name = AGGREGATOR_ORPHAN_CATEGORY_NAME,
+            channels = orphanChannels,
+        )
+    }
+
+    private fun MgtvChannel.toDomainChannel(): Channel = Channel(
+        id = "${MgtvStreamResolver.CHANNEL_ID_PREFIX}$cameraId",
+        name = name,
+        description = currentProgram.trim().ifEmpty { "芒果TV" },
+        streamUrl = "",
+        logo = logoUrl,
+        epgId = cameraId,
+        enabled = true,
+    )
 
     companion object {
-        /** 聚合分类（内容是其它分类的重复集合），不单独展示。 */
+        /** 聚合分类（内容基本是其它分类的重复集合），不整段展示。 */
         private val AGGREGATOR_CATEGORY_IDS = setOf("2100001")
 
         /** 兜底：若服务端换了分类 id，按名称再挡一次。 */
         private val AGGREGATOR_CATEGORY_NAMES = setOf("热门")
+
+        /** 「热门独有」频道的归组 id（不与服务端数值分类 id 冲突）。 */
+        private const val AGGREGATOR_ORPHAN_CATEGORY_ID = "mgtv:hot"
+
+        /** 「热门独有」频道的归组名称。 */
+        private const val AGGREGATOR_ORPHAN_CATEGORY_NAME = "热门"
     }
 
 

@@ -6,6 +6,9 @@
 
 ## 阶段〇：已实现能力（当前仓库真实状态）
 
+> **2026-11-21 更新**：M3U 订阅、内置 assets 与三级兜底管线已移除，频道**只来自 MGTV 公开目录**；
+> 下文中提到 `SubscriptionChannelRepository` / `RemoteM3uFetcher` / `assets/*` / 订阅源管理的条目均为**历史记录**。
+
 ### 构建与工程
 
 | 能力 | 证据 |
@@ -15,7 +18,7 @@
 | ViewBinding | `app/build.gradle.kts` `buildFeatures { viewBinding = true }` |
 | TV 声明齐全：`leanback` required=**false**（阶段六改为双端通用）、`touchscreen` required=false、`banner`、`LAUNCHER` + `LEANBACK_LAUNCHER` 双入口 | `app/src/main/AndroidManifest.xml` |
 | GitHub Actions CI：`push`/`pull_request` 触发，跑编译 + Lint + 单元测试 + 打包 Debug APK | `.github/workflows/android-ci.yml` |
-| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**30 个测试类 / 287 个用例**） | `app/src/test/java/com/livetv/android/` |
+| 纯 JVM 单元测试链路（JUnit4 + 真实 `org.json` 实现，**31 个测试类 / 285 个用例**） | `app/src/test/java/com/livetv/android/` |
 | 格式与忽略规则（`.editorconfig`、`.gitignore` 排除构建产物/密钥/`.tmp/`） | 仓库根目录 |
 
 ### 功能
@@ -23,8 +26,8 @@
 | 能力 | 证据 |
 |---|---|
 | Leanback 浏览页：标题、品牌色、Header 栏、Back 逐层返回 | `MainBrowseFragment.setupUi()` |
-| 频道分类与卡片：分类行由仓库数据动态生成（当前 assets 为 新闻 / 体育 / 卫视 三类），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
-| 频道数据**三级兜底**：远程 M3U 订阅 → 本地有效缓存 → APK 内 `assets/channels.json`（JSON 源）与 `assets/sample.m3u`（M3U 源）按分类名合并 | `SubscriptionChannelRepository`、`LocalAssetChannelSource`、`LocalM3uChannelSource`、`DefaultChannelRepository` |
+| 频道分类与卡片：分类行由 MGTV 目录动态生成（卫视台 / 地方台 / 特色频道 / 热门-独有），卡片显示标题 + 描述 | `MainBrowseFragment.loadRows()`、`ChannelCardPresenter.onBindViewHolder()` |
+| 频道数据**唯一来源**：MGTV 公开目录（`MgtvProvider` → `mgtv:<cameraId>`），全局快照见 `LiveTvApplication.catalogStore` | `data/mgtv/`、`domain/repository/ChannelCatalogStore.kt` |
 | 远程 M3U 拉取（仅 http/https、5s 连接 / 8s 读取超时、2MB 响应上限、仅接受 200、UTF-8） | `data/remote/RemoteM3uFetcher.kt` |
 | 订阅持久化：URL 存 `SharedPreferences`，M3U 原文存 `filesDir/remote_playlist.m3u`（临时文件 + rename 原子写） | `data/subscription/FileSubscriptionStore.kt` |
 | 全局仓库单例 + 内存缓存（UI 层零重复装配） | `LiveTvApplication`、`SubscriptionChannelRepository`、`DefaultChannelRepository` 的 `enableCache`/`refresh()`/`invalidateCache()` |

@@ -8,7 +8,7 @@ import org.junit.Test
  * `Channel` 领域模型的纯 JVM 冒烟测试。
  *
  * 目的：固定模型层的契约（字段语义、默认值、值语义相等），并保证
- * `testDebugUnitTest` 链路通畅。解析与过滤规则见 `ChannelJsonParserTest`。
+ * `testDebugUnitTest` 链路通畅。
  */
 class ChannelTest {
 

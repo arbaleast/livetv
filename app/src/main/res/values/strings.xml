@@ -5,14 +5,12 @@
     <string name="channel_no_stream_url">「%1$s」暂无可用的播放地址</string>
 
     <!-- TV 端设置与空态 -->
-    <string name="tv_row_settings">设置与订阅</string>
-    <string name="tv_action_refresh">刷新订阅</string>
-    <string name="tv_action_refresh_desc">从远程 M3U 重新拉取频道</string>
-    <string name="tv_action_refreshing">刷新中…</string>
-    <string name="tv_action_subscription">配置订阅源</string>
-    <string name="tv_action_subscription_desc">修改远程 M3U 地址或清除订阅</string>
+    <string name="tv_row_settings">设置</string>
+    <string name="tv_action_refresh">重新加载频道</string>
+    <string name="tv_action_refresh_desc">重新拉取芒果 TV 频道目录</string>
+    <string name="tv_action_refreshing">加载中…</string>
     <string name="tv_empty_channels">暂无可播放的频道</string>
-    <string name="tv_empty_channels_desc">请检查订阅源配置或刷新重试</string>
+    <string name="tv_empty_channels_desc">点击重新加载频道目录</string>
 
     <!-- 播放页 -->
     <string name="player_loading">正在加载：%1$s</string>
@@ -47,26 +45,12 @@
     <string name="mobile_channel_desc_favorite">%1$s（已收藏）</string>
     <string name="mobile_channel_desc_last_played">%1$s（上次播放）</string>
 
-    <!-- 手机端订阅源（远程 M3U） -->
+    <!-- 手机端顶栏与频道目录刷新（MGTV） -->
     <string name="mobile_action_refresh">刷新</string>
     <string name="mobile_action_refreshing">刷新中…</string>
-    <string name="mobile_action_subscription">订阅源</string>
     <string name="mobile_action_search">搜索</string>
-    <string name="mobile_subscription_title">订阅源</string>
-    <string name="mobile_subscription_hint">M3U 播放列表地址（http:// 或 https://）</string>
-    <string name="mobile_subscription_invalid_url">请输入以 http:// 或 https:// 开头的有效地址</string>
-    <string name="mobile_subscription_save">保存并刷新</string>
-    <string name="mobile_subscription_reset">清除订阅源</string>
-    <string name="mobile_subscription_reset_confirm_title">确认清除订阅源</string>
-    <string name="mobile_subscription_reset_confirm_message">将清除当前自定义 M3U 订阅地址与本地缓存（公开频道目录不受影响），确定继续吗？</string>
-    <string name="mobile_subscription_reset_confirm_ok">确认清除</string>
-    <string name="mobile_subscription_cancel">取消</string>
-    <string name="mobile_subscription_current">当前：%1$s</string>
-    <string name="mobile_subscription_none">未配置自定义 M3U 订阅源</string>
-    <string name="mobile_refresh_builtin">未配置自定义订阅，当前共 %1$d 个可用频道</string>
-    <string name="mobile_refresh_remote">订阅已更新（共 %1$d 个频道）</string>
-    <string name="mobile_refresh_cache">刷新失败，已回退到本地缓存（%1$d 个）：%2$s</string>
-    <string name="mobile_refresh_builtin_fallback">订阅刷新失败，当前共 %1$d 个可用频道：%2$s</string>
+    <string name="mobile_refresh_remote">已刷新（共 %1$d 个频道）</string>
+    <string name="mobile_refresh_failed">频道目录加载失败，请稍后重试</string>
     <string name="mobile_refresh_busy">正在刷新，请稍候…</string>
 
     <!-- 播放页触控浮层 / 频道抽屉 -->

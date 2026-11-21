@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [ChannelCatalogStore] 纯 JVM 单元测试：验证订阅目录与补充目录（如 MGTV）的聚合与隔离。
+ * [ChannelCatalogStore] 纯 JVM 单元测试：目录快照的替换、空分类过滤与顺序保持。
  */
 class ChannelCatalogStoreTest {
 
@@ -19,80 +19,58 @@ class ChannelCatalogStoreTest {
         ChannelCategory(id = id, name = name, channels = channels.toList())
 
     @Test
-    fun `initial store is empty and has no supplemental categories`() {
+    fun `initial store is empty`() {
         val store = ChannelCatalogStore()
 
+        assertTrue(store.isEmpty())
         assertEquals(emptyList<ChannelCategory>(), store.getAllCategories())
-        assertFalse(store.hasSupplementalCategories())
     }
 
     @Test
-    fun `combines subscription categories first followed by supplemental categories`() {
+    fun `update replaces the whole snapshot and keeps category order`() {
         val store = ChannelCatalogStore()
-        val sub = listOf(category("cctv", "央视", channel("c1")))
-        val mgtv = listOf(category("mgtv", "芒果 TV", channel("mgtv:287", "金鹰卡通", "")))
-
-        store.updateSubscriptionCategories(sub)
-        store.updateSupplementalCategories(mgtv)
-
-        assertTrue(store.hasSupplementalCategories())
-        assertEquals(listOf("cctv", "mgtv"), store.getAllCategories().map { it.id })
-        assertEquals(listOf("c1", "mgtv:287"), store.getAllCategories().flatMap { it.channels }.map { it.id })
-    }
-
-    @Test
-    fun `refreshing or clearing subscription preserves loaded supplemental categories`() {
-        val store = ChannelCatalogStore()
-        val subV1 = listOf(category("cctv", "央视", channel("c1")))
-        val mgtv = listOf(category("mgtv", "芒果 TV", channel("mgtv:287", "金鹰卡通", "")))
-        val subV2 = listOf(category("sports", "体育", channel("s1")))
-
-        store.updateSubscriptionCategories(subV1)
-        store.updateSupplementalCategories(mgtv)
-
-        // 刷新订阅为新分组：MGTV 分组不得丢失
-        store.updateSubscriptionCategories(subV2)
-        assertEquals(listOf("sports", "mgtv"), store.getAllCategories().map { it.id })
-        assertTrue(store.hasSupplementalCategories())
-
-        // 清空订阅（恢复无自定义订阅态）：MGTV 分组仍应保留
-        store.updateSubscriptionCategories(emptyList())
-        assertEquals(listOf("mgtv"), store.getAllCategories().map { it.id })
-        assertTrue(store.hasSupplementalCategories())
-    }
-
-    @Test
-    fun `skips empty categories and prevents duplicate category ids across segments`() {
-        val store = ChannelCatalogStore()
-        store.updateSubscriptionCategories(
+        store.update(
             listOf(
-                category("empty_sub", "空分组"),
-                category("shared", "订阅分组", channel("sub1")),
-            ),
-        )
-        store.updateSupplementalCategories(
-            listOf(
-                category("empty_sup", "空补充"),
-                category("shared", "重复分组", channel("sup_dup")),
-                category("mgtv", "芒果 TV", channel("mgtv:1", "湖南卫视", "")),
+                category("sat", "卫视台", channel("287"), channel("229")),
+                category("local", "地方台", channel("221")),
             ),
         )
 
-        val result = store.getAllCategories()
-        assertEquals(listOf("shared", "mgtv"), result.map { it.id })
-        assertEquals("订阅分组", result[0].name)
-        assertEquals(listOf("sub1"), result[0].channels.map { it.id })
+        assertFalse(store.isEmpty())
+        assertEquals(listOf("sat", "local"), store.getAllCategories().map { it.id })
+        assertEquals(listOf("287", "229", "221"), store.getAllCategories().flatMap { it.channels }.map { it.id })
     }
 
     @Test
-    fun `updating supplemental categories with empty list clears supplemental flag without touching subscription`() {
+    fun `update drops empty categories so the ui never renders a bare header`() {
         val store = ChannelCatalogStore()
-        store.updateSubscriptionCategories(listOf(category("cctv", "央视", channel("c1"))))
-        store.updateSupplementalCategories(listOf(category("mgtv", "芒果 TV", channel("mgtv:1", "湖南卫视", ""))))
+        store.update(
+            listOf(
+                category("empty", "空分类"),
+                category("sat", "卫视台", channel("287")),
+            ),
+        )
 
-        store.updateSupplementalCategories(emptyList())
+        assertEquals(listOf("sat"), store.getAllCategories().map { it.id })
+    }
 
-        assertFalse(store.hasSupplementalCategories())
-        assertEquals(listOf("cctv"), store.getAllCategories().map { it.id })
+    @Test
+    fun `second update fully replaces the previous snapshot`() {
+        val store = ChannelCatalogStore()
+        store.update(listOf(category("old", "旧分组", channel("1"))))
+        store.update(listOf(category("new", "新分组", channel("2"))))
+
+        assertEquals(listOf("new"), store.getAllCategories().map { it.id })
+        assertEquals(listOf("2"), store.getAllCategories().flatMap { it.channels }.map { it.id })
+    }
+
+    @Test
+    fun `empty update clears the catalog`() {
+        val store = ChannelCatalogStore()
+        store.update(listOf(category("sat", "卫视台", channel("287"))))
+        store.update(emptyList())
+
+        assertTrue(store.isEmpty())
+        assertEquals(emptyList<ChannelCategory>(), store.getAllCategories())
     }
 }

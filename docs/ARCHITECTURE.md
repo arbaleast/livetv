@@ -4,6 +4,11 @@
 > **第二部分是演进方向**（尚未实现，仅供排期参考，不代表现状）。
 > 阶段二已落地轻量分层（`data/` + `domain/`），**仍未拆分多 Gradle 模块**。
 
+> **现状（2026-11-21 起）**：频道数据**只来自 MGTV 公开目录**（`data/mgtv/`）。
+> 内置 `assets/`、M3U 订阅、远程拉取与三级兜底（`SubscriptionChannelRepository` 等）已整体移除；
+> 下文凡标注「阶段四 / 阶段八」的 M3U 与订阅子系统均为**历史记录**，对应代码已不存在。
+
+
 ---
 
 ## 第一部分：当前真实结构
@@ -33,122 +38,30 @@
 
 ```
 app/src/main/java/com/livetv/android/
-├── LiveTvApplication.kt                  # ← 阶段八升级：全局订阅仓库 + 订阅协调器
-├── MainActivity.kt                       # 宿主 Activity
-├── data/                                 # ← 阶段二新增：数据获取与解析（阶段四扩展 M3U）
-│   ├── model/ChannelConfigDto.kt        # JSON 映射 DTO（version / categories / channels）
-│   ├── parser/ChannelJsonParser.kt      # 纯文本 JSON → DTO/领域模型 的解析与校验
-│   ├── parser/M3uPlaylistParser.kt      # ← 阶段四新增：纯文本 M3U → 领域模型 的解析与校验
-│   ├── source/ChannelDataSource.kt       # 数据源接口
-│   ├── source/LocalAssetChannelSource.kt # 读 assets/channels.json 并调用 Parser
-│   ├── source/LocalM3uChannelSource.kt  # ← 阶段四新增：读 assets/sample.m3u 并调用 Parser
-│   ├── remote/RemoteM3uFetcher.kt       # ← 阶段八新增：HttpURLConnection 远程 M3U 拉取
-│   ├── mgtv/                            # ← 阶段九新增：MGTV 数据层（签名已还原，可直接解析）
-│   │   ├── MgtvEndpoints.kt             # 目录/播放源 URL 构造（只含公开静态参数）
-│   │   ├── MgtvCredentials.kt           # 凭据外部注入接口 + NoMgtvCredentials
-│   │   ├── MgtvHttpClient.kt            # JDK HttpURLConnection 小客户端
-│   │   ├── MgtvCatalogFetcher.kt        # 公开频道目录抓取（无需 Cookie/签名）
-│   │   ├── HttpMgtvSourceFetcher.kt     # 播放源抓取（无合规凭据绝不发请求）
-│   │   ├── MgtvJsonParser.kt            # JSONP 剥离 + 目录/播放源解析
-│   │   ├── MgtvModels.kt                # 频道/分类/播放源模型
-│   │   ├── MgtvSourceSelector.kt        # 白盒筛选（.m3u8 + isp2p=0 + hdcp=0 + https）
-│   │   ├── MgtvStreamResolver.kt        # StreamResolver 实现
-│   │   └── MgtvProvider.kt              # 目录 → 领域频道（mgtv:<cameraId>）
-│   ├── subscription/SubscriptionStore.kt        # ← 阶段八新增：订阅持久化接口（纯 Kotlin）
-│   ├── subscription/FileSubscriptionStore.kt    # ← 阶段八新增：SharedPreferences + filesDir 实现
-│   ├── SubscriptionCoordinator.kt       # ← 阶段八新增：后台拉取 + 主线程回传
-│   └── repository/DefaultChannelRepository.kt   # ← 阶段四升级：多数据源合并（阶段五加缓存）
-│   └── repository/SubscriptionChannelRepository.kt # ← 阶段八新增：远程→缓存→内置 三级兜底
-├── domain/                               # ← 阶段二新增：领域层
-│   ├── model/Channel.kt                  # 领域模型（由阶段一 model/Channel.kt 升级迁移）
+├── LiveTvApplication.kt                  # 全局单例：catalogStore / mgtvCatalogCoordinator / streamResolver
+├── MainActivity.kt                       # 宿主 Activity（TV/触控分流）
+├── data/
+│   └── mgtv/                             # **唯一**频道来源：MGTV 公开目录 + 播放源
+│       ├── MgtvEndpoints.kt              # 目录/播放源 URL 构造（只含公开静态参数）
+│       ├── MgtvHttpClient.kt             # JDK HttpURLConnection 小客户端
+│       ├── MgtvCatalogFetcher.kt         # 公开频道目录抓取（无需 Cookie/签名）
+│       ├── MgtvCatalogCoordinator.kt     # 后台拉目录 + 主线程回传
+│       ├── HttpMgtvSourceFetcher.kt      # 播放源抓取（本地签名）
+│       ├── MgtvJsonParser.kt             # JSONP 剥离 + 目录/播放源解析
+│       ├── MgtvModels.kt                 # 频道/分类/播放源模型
+│       ├── MgtvSourceSelector.kt         # 白盒筛选（.m3u8 + hdcp=0 + https）
+│       ├── MgtvStreamResolver.kt         # StreamResolver 实现
+│       └── MgtvProvider.kt               # 目录 → 领域频道（mgtv:<cameraId>，捞回聚合独有频道）
+├── domain/
+│   ├── model/Channel.kt                  # 领域模型
 │   ├── model/ChannelCategory.kt          # 分类领域模型
-│   ├── model/RefreshResult.kt            # ← 阶段八新增：刷新结果（成功/缓存兜底/内置兜底）
-│   ├── repository/ChannelRepository.kt   # 仓库接口
-│   ├── repository/SubscriptionRepository.kt # ← 阶段八新增：订阅仓库接口（继承 ChannelRepository）
-│   └── stream/                           # ← 阶段九新增：通用播放会话解析（纯 Kotlin）
-│       ├── StreamResolver.kt             # 解析抽象 + StaticStreamResolver
-│       ├── ResolvedStream.kt             # 解析结果（url/headers/过期时间/MIME/Host 白名单）
-│       ├── StreamResolveResult.kt        # Success/Failure + 错误枚举
-│       ├── StreamRefreshCoordinator.kt   # 临期刷新 + 403 单次重解析 + 429 快速失败
-│       ├── HeaderHostPolicy.kt           # 请求头 Host 白名单隔离
-│       ├── StreamTypeDetector.kt         # HLS 识别（含无后缀地址）+ 显式 MIME
-│       ├── RoutingStreamResolver.kt      # 按 `mgtv:` 前缀路由
-│       └── Clock.kt                      # 可注入时钟
-├── player/                               # ← 阶段三新增：播放器层
-│   ├── PlaybackState.kt                  # 纯 Kotlin：状态密封接口（纯策略层）
-│   ├── PlaybackEvent.kt                  # 纯 Kotlin：事件密封接口（纯策略层）
-│   ├── PlaybackReducer.kt                # 纯 Kotlin：状态归约（纯策略层）
-│   ├── PlaybackError.kt                  # 纯 Kotlin：错误分类（纯策略层）
-│   ├── PlaybackErrorMapper.kt            # 纯 Kotlin：错误映射（纯策略层）
-│   ├── RetryPolicy.kt                    # 纯 Kotlin：重试与主备源状态机（纯策略层）
-│   ├── ChannelNavigator.kt               # 纯 Kotlin：扁平列表定位与循环切台（纯策略层）
-│   └── PlayerManager.kt                  # Android/Media3 桥接层
-└── ui/
-    ├── MainBrowseFragment.kt             # Leanback 浏览页（通过 Repository 取数）
-    ├── ChannelCardPresenter.kt           # 频道卡片 Presenter
-    ├── PlayerActivity.kt                 # 播放页（UI + 遥控器按键，不含播放器逻辑）
-    └── mobile/                           # ← 阶段六新增：手机/平板触控端
-        ├── MobileChannelList.kt          # 纯 Kotlin：行序列组装 + 网格列数计算
-        ├── MobileChannelAdapter.kt       # RecyclerView.Adapter（分类标题 + 频道卡片两种 item）
-        └── MobileMainActivity.kt         # 手机端主界面（RecyclerView + GridLayoutManager）
-└── util/
-    └── DeviceUtils.kt                    # ← 阶段六新增：TV / 触控设备形态判定
-└── media/                                # ← 阶段九新增：Media3 请求头作用域隔离
-    └── ScopedHeaderDataSourceFactory.kt  # 按目标 host 过滤请求头的 DataSource.Factory
+│   ├── repository/ChannelCatalogStore.kt # 应用级频道快照（纯 Kotlin，线程安全）
+│   └── stream/                           # 通用播放会话解析（纯 Kotlin）
+├── player/                               # 播放状态机 / 重试 / 切台（纯策略 + PlayerManager 桥接）
+├── ui/                                   # Leanback 浏览页 + 播放页 + 手机端
+└── util/                                 # 设备判定、按键/滚动/焦点/手势等纯策略
 ```
 
-| 类 | 职责 |
-|---|---|
-| `MainActivity` | **阶段六**：设备形态**分流入口**——`DeviceUtils.isTvDevice(this)` 为真则装载 Leanback `MainBrowseFragment`（并强制横屏），否则启动 `MobileMainActivity` 后 `finish()` |
-| `LiveTvApplication`（阶段八） | 全局**订阅**仓库持有者：`by lazy` 装配 `SubscriptionChannelRepository`（内置 JSON + M3U 源、`RemoteM3uFetcher`、`FileSubscriptionStore`）；`channelRepository` 指向它供两端共用；另持有 `subscriptionCoordinator` |
-| `ChannelCatalogStore`（应用级聚合目录） | 纯 Kotlin、线程安全：分别保存「订阅分段」与「补充目录分段（MGTV）」，`getAllCategories()` 合并时订阅分段在前、按分类 id 去重；刷新/清空订阅不会冲掉已加载的 MGTV 分组。由 `LiveTvApplication.catalogStore` 持有，手机首页、TV 首页、播放页抽屉与切台共用 |
-| `MainBrowseFragment` | 浏览页：标题/品牌色，**通过 `ChannelRepository` 取分类列表**并组装 `ListRow`，处理卡片点击跳转播放 |
-| `ChannelCardPresenter` | 渲染 `ImageCardView` 卡片（标题 + 描述） |
-| `PlayerActivity` | 播放页：加载频道、渲染状态与提示、**遥控器按键映射**；不含 ExoPlayer 逻辑 |
-| `Channel`（domain） | 领域模型：`id`、`name`、`description`、`streamUrl`、`backupUrls`、`headers`、`logo`、`epgId`、`enabled` |
-| `ChannelCategory`（domain） | `id`、`name`、`channels`（保证非空） |
-| `ChannelRepository`（domain） | 仓库接口：`getCategories(): List<ChannelCategory>`，**契约是不抛异常** |
-| `ChannelDataSource`（data） | 数据源接口：`loadCategories(): List<ChannelCategory>` |
-| `LocalAssetChannelSource`（data） | 读 `assets/channels.json` → 交给 `ChannelJsonParser` |
-| `LocalM3uChannelSource`（data） | **阶段四**：读 `assets/sample.m3u` → 交给 `M3uPlaylistParser` |
-| `DefaultChannelRepository`（data） | **阶段四**：聚合多个数据源，**按分类名合并同名分类**，单源异常只跳过该源；**阶段五**：加内存缓存（`enableCache` / `refresh()` / `invalidateCache()`） |
-| `ChannelJsonParser`（data） | 纯函数解析 + 校验（URL 协议白名单、必填字段、disabled/空分类过滤） |
-| `M3uPlaylistParser`（data，纯） | 纯函数解析 M3U：`#EXTINF` 属性提取（`tvg-id` / `tvg-logo` / `group-title`）、**引号感知逗号切分**、**`#EXTVLCOPT`/`#KODIPROP` 与行内属性 -> `Channel.headers`**、URL 校验、坏条目跳过 |
-| `ChannelConfigDto` 等（data） | JSON 原始形状的 DTO，只做映射不做业务校验 |
-| `PlaybackState`（player，纯） | 状态：`Idle` / `Loading` / `Buffering` / `Playing` / `Paused` / `Error(error, fatal)` |
-| `PlaybackEvent`（player，纯） | 事件：`Prepare` / `Buffering` / `Ready` / `Playing` / `Paused` / `Failed` / `Fatal` / `ManualReset` / `Released` |
-| `PlaybackReducer`（player，纯） | `reduce(state, event)`：状态转换规则（非法转换保持原状态） |
-| `PlaybackError`（player，纯） | 错误分类：`Network` / `HttpStatus(code)` / `SourceParsing` / `Timeout` / `Unknown` |
-| `PlaybackErrorMapper`（player，纯） | `map(responseCode, causeKind)`：原始字段 → `PlaybackError` |
-| `RetryPolicy`（player，纯） | 重试与主备源状态机：候选源生成、`RetryState`、三种 `RetryOutcome` |
-| `ChannelNavigator`（player，纯） | 扁平频道列表的定位（id → url 回退）与循环切台 |
-| `PlayerManager`（player，桥接） | ExoPlayer 生命周期与复用、DataSource 请求头/超时、重试调度、Media3 事件翻译 |
-| `DeviceUtils`（util） | **阶段六**：TV 形态判定。`isTvDevice(context)` 为 Android 门面；`isTvDevice(uiModeType, hasLeanbackFeature)` 为**纯函数**（可直接 JVM 单测） |
-| `MobileChannelList`（ui/mobile，纯） | **阶段六**：纯函数——`buildRows(categories)` 把分类展开成"标题 + 卡片"行序列（跳过空分类）。**阶段十**：`gridSpanCount(dp)` 改为按 `MIN_CARD_WIDTH_DP=190` 动态算列（上限 5）、不再写死阈值；新增 `buildRailItems()`（左侧分类栏）与 `sanitizeSubtitle()`（过滤技术字段/重复名，无有效信息返回 null） |
-| `MobileChannelAdapter`（ui/mobile） | **阶段六**：`RecyclerView.Adapter`，两种 item（`CategoryHeader` 跨整行 / `ChannelCard` 占一格），点击回调交给 Activity |
-| `MobileMainActivity`（ui/mobile） | **阶段六**：手机/平板主界面；**阶段七**：分类胶囊 + 总频道数；**阶段十**：横屏优先双栏——左侧 `rv_categories` 分类栏（`MobileCategoryRailAdapter`）+ 右侧单行顶栏（`layout_top_header`，滚动时 `translationY` 收起）+ 自适应网格 `rv_channels`；`applyImmersiveSystemBars()` 隐藏状态栏并在 `onResume`/`onWindowFocusChanged` 重入，`applyCutoutSafeInsets()` 只对左右挖孔补 padding；D-Pad 链路：分类项 RIGHT→网格、卡片 UP→`mobile_refresh`（`OnKeyListener` 显式接管，因为 LayoutManager 会先拦截方向键）、卡片 LEFT→分类栏；「上次播放」以 `SharedPreferences("livetv_mobile_ui")` 记忆并在卡片上以强调色描边高亮 |
-| `ChannelDrawerModel`（ui/mobile，纯） | **阶段七**：播放页"频道列表"抽屉的行序列——`buildRows(categories, currentChannelId)` 分组并标记当前频道，`currentRowIndex` / `currentChannelIndex` 供自动滚动定位 |
-| `ChannelDrawerAdapter`（ui/mobile） | **阶段七**：抽屉的 `RecyclerView.Adapter`（分类标题 / 频道条目，当前频道显示"播放中"） |
-| `RemoteM3uFetcher`（data） | **阶段八**：远程 M3U 拉取——仅 `http`/`https`，连接 5000 ms / 读取 8000 ms / 响应上限 2 MB，仅 HTTP 200 成功，UTF-8 解码；失败归一为 `HttpError` / `NetworkError` / `InvalidUrl` / `SizeExceeded` |
-| `SubscriptionStore`（data，纯接口） | **阶段八**：订阅持久化接口——`getUrl()` / `saveUrl()` / `readPlaylist()` / `writePlaylist()` / `clearPlaylist()`；测试用内存 fake |
-| `FileSubscriptionStore`（data） | **阶段八**：URL 存 `SharedPreferences`，播放列表存 `filesDir/remote_playlist.m3u`，临时文件 + rename 原子写 |
-| `SubscriptionCoordinator`（data） | **阶段八**：单线程 `ExecutorService` 串行拉取 + 主线程 `Handler` 回传；不引入 Coroutines |
-| `SubscriptionChannelRepository`（data） | **阶段八**：远程订阅 → 本地有效缓存 → 内置 assets 三级兜底；`@Volatile` 快照 + 写操作加锁；换 URL 作废旧缓存 |
-| `SubscriptionRepository`（domain） | **阶段八**：在 `ChannelRepository` 之上追加 `refreshSubscription()` / `updateSubscriptionUrl()` / `findChannelById()` / `getSubscriptionUrl()` |
-| `RefreshResult`（domain） | **阶段八**：刷新结果——`BuiltinOnly` / `RemoteLoaded` / `FallbackToCache` / `FallbackToBuiltin`，`channelCount` 一律是**频道总数** |
-| `StreamResolver` / `StaticStreamResolver`（domain/stream，纯） | **阶段九**：播放会话解析抽象。静态实现返回 `channel.streamUrl` + `channel.headers`、`expiresAtMs = null`、`allowedHeaderHosts = emptySet()`（普通 IPTV 行为不变） |
-| `ResolvedStream`（domain/stream，纯） | **阶段九**：`url` / `headers` / `expiresAtMs` / `mimeType` / `allowedHeaderHosts` / `definitionLabel`；`DEFAULT_REFRESH_LEAD_MS = 60_000L` |
-| `StreamRefreshCoordinator`（domain/stream，纯） | **阶段九**：临期（< 60 s）主动刷新；403 最多重解析 1 次（`MAX_FORBIDDEN_REFRESH_ATTEMPTS = 1`），再次 403/429 立即 `FastFail`；其他状态码 `DelegateToRetryPolicy` |
-| `HeaderHostPolicy`（domain/stream，纯） | **阶段九**：按 host 精确 / `.` 子域匹配过滤请求头，拦截 `evilmgtv.com` 式后缀伪造；白名单为空表示不限制 |
-| `StreamTypeDetector`（domain/stream，纯） | **阶段九**：`MIME_HLS = "application/x-mpegURL"`；识别无 `.m3u8` 后缀的 HLS 路由/参数，排除 `.mp4/.mkv/.flv/.ts/.mp3/.aac/.webm` |
-| `RoutingStreamResolver`（domain/stream，纯） | **阶段九**：`mgtv:` 前缀 → MGTV 解析器，其余 → 静态解析器 |
-| `MgtvStreamResolver`（data/mgtv） | **阶段九**：`StreamResolver` 实现；`expiresAtMs = clock.nowMs() + urlExpireDuration*1000`；`allowedHeaderHosts = setOf("mgtv.com")`；默认 fetcher 为真实 HTTP 实现 |
-| `MgtvSourceSelector`（data/mgtv，纯） | **阶段九**：白盒筛选 `format=.m3u8` + `isp2p==0` + `hdcp==0` + 合法 `https://`；无合规源返回 `UNSUPPORTED_SOURCE`，**不降级 P2P** |
-| `HttpMgtvSourceFetcher`（data/mgtv） | **阶段九**：无外部合规凭据时**不发任何请求**，直接 `AuthUnavailable`；不实现签名 |
-| `ScopedHeaderDataSourceFactory`（media） | **阶段九**：包装 `HttpDataSource.Factory`，每次 `open(DataSpec)` 按目标 host 过滤请求头（`DataSpec.withAdditionalHeaders`） |
-
-> **纯策略层约束**：`player` 包中除 `PlayerManager.kt` 外的文件**禁止**引用 `android.*` 与
-> `androidx.media3.*`，由 `PlayerLayerPurityTest` 做源码扫描固化（3 个用例）。
 
 ### 3. 数据流向（当前唯一一条链路）
 
@@ -272,11 +185,9 @@ Error(error, fatal=true)  ← 所有候选源耗尽，只能按 OK 手动重置
 - 切台 / 手动重连 / `onStop` 都执行 `retryHandler.removeCallbacksAndMessages(null)`，
   且延迟回调执行前会校验"频道没变"，避免旧任务误伤新频道。
 
-**要点**：仍然**没有网络请求、没有持久化、没有状态管理层**。
-频道内容来自 APK 内的 `assets/channels.json`（6 个 CCTV HLS 源，阶段一硬编码值无损迁移）
-与 `assets/sample.m3u`（阶段四新增的 M3U 示例源，4 个频道 / 2 个分类），两者在仓库层按分类名合并。
-`backupUrls` / `headers` / `logo` / `epgId` 字段中，**`logo` 与 `epgId` 已由 M3U 解析器填充**
-（`tvg-logo` / `tvg-id`），但 Presenter 仍未绑定图标；`backupUrls` / `headers` 的消费方是阶段三的播放器层。
+**要点**：频道内容**只来自 MGTV 公开目录**（`data/mgtv/`），由 `MgtvProvider` 映射为
+`mgtv:<cameraId>` 领域频道；`logo` / `epgId` 由目录字段填充，`streamUrl` 为空，
+播放时由 `MgtvStreamResolver` 解析。内置 assets 与 M3U 订阅管线已移除（见 §8）。
 
 ### 4. `assets/channels.json` Schema
 
@@ -474,56 +385,26 @@ Leanback 的 `ImageCardView` 是**固定尺寸**（`ChannelCardPresenter` 里写
 > 引入图片加载库（Glide/Coil 等）被明确排除，避免为占位图引入重型依赖。
 > TV 分支**只做了代码级保证与触控视图隔离**，未在真实 Android TV 硬件上回归。
 
-### 8. 远程 M3U 订阅与三级兜底（阶段八新增）
-
-仓库的数据来源从"只有内置 assets"扩展为**远程订阅 → 本地有效缓存 → 内置 assets** 三级兜底。
-TV 端与手机端共用同一个 `SubscriptionChannelRepository`，两端都能看到远程频道。
+### 8. 频道数据管线（MGTV-only）
 
 ```
 LiveTvApplication（Application）
- ├─ subscriptionRepository: SubscriptionRepository (by lazy)
- │    └─ SubscriptionChannelRepository(
- │         builtinSources = [LocalAssetChannelSource(assets), LocalM3uChannelSource(assets)],
- │         fetcher = RemoteM3uFetcher(),          ← HttpURLConnection，纯 JDK
- │         store   = FileSubscriptionStore(this))  ← SharedPreferences + filesDir
- ├─ channelRepository: ChannelRepository = subscriptionRepository   ← 两端共用
- ├─ catalogStore: ChannelCatalogStore                                ← 订阅分段 + MGTV 补充分段的聚合快照
- ├─ mgtvCatalogCoordinator: MgtvCatalogCoordinator                   ← 后台拉 MGTV 目录 + 主线程回传
- ├─ streamResolver: StreamResolver                                   ← mgtv: → MGTV，其余 → 静态
- └─ subscriptionCoordinator: SubscriptionCoordinator                ← 后台拉取 + 主线程回传
+ ├─ catalogStore: ChannelCatalogStore               ← 唯一的频道快照（MGTV 分类）
+ ├─ mgtvCatalogCoordinator: MgtvCatalogCoordinator  ← 后台拉目录 + 主线程回传
+ └─ streamResolver: StreamResolver                  ← mgtv: → MGTV，其余 → 静态
 ```
 
-**拉取层 `RemoteM3uFetcher`（纯 Kotlin，无第三方依赖）**：
-
-| 约束 | 值 | 位置 |
-|---|---|---|
-| 允许协议 | 仅 `http` / `https`（忽略大小写） | `RemoteM3uFetcher.fetch()` |
-| 连接超时 | 5000 ms | `CONNECT_TIMEOUT_MS` |
-| 读取超时 | 8000 ms | `READ_TIMEOUT_MS` |
-| 响应体上限 | 2 MB，超出即 `SizeExceeded` | `MAX_RESPONSE_BYTES` |
-| 成功条件 | 仅 HTTP 200，按 UTF-8 解码 | `FetchResult.Success(content)` |
-
-失败被归一为 `HttpError(code)` / `NetworkError(reason)` / `InvalidUrl(reason)` / `SizeExceeded`，
-非法协议（`file://`、`ftp://`、空串）在**建立连接之前**就被拒绝。
-
-**持久化 `FileSubscriptionStore`**：订阅 URL 存 `SharedPreferences("livetv_subscription")`，
-播放列表原文存 `context.filesDir/remote_playlist.m3u`，写入走"临时文件 + rename"保证原子性。
-
-**兜底语义（`SubscriptionChannelRepository.refreshSubscription()`）**：
-
-| 情况 | 结果 | 副作用 |
-|---|---|---|
-| 未配置订阅 URL | `RefreshResult.BuiltinOnly(n)` | 切回内置 assets |
-| 拉取成功且解析出 ≥1 个频道 | `RefreshResult.RemoteLoaded(n)` | 落盘缓存 + 替换快照 |
-| 拉取失败 / 解析为空，但有可解析缓存 | `RefreshResult.FallbackToCache(n, reason)` | 用缓存覆盖快照，**不清空**现有列表 |
-| 拉取失败 / 解析为空，且无缓存 | `RefreshResult.FallbackToBuiltin(n, reason)` | 回退内置 assets |
-
-`n` 一律是**频道总数**（各分类频道数之和），不是分类数。
-HTTP 200 但内容为空/无有效频道时按失败处理——**绝不因为一次坏响应把用户已有列表清空**。
-更换订阅 URL 会立即作废旧缓存（URL 路径大小写敏感，比较时不做大小写折叠）。
-
-**异步**：`SubscriptionCoordinator` 用单线程 `ExecutorService` 串行执行拉取，
-结果经主线程 `Handler` 回传，避免两个刷新交错改快照；不引入 Coroutines。
+- **唯一来源**：`data/mgtv/`（目录接口公开、免签名）；`app/src/main/assets/` 为空，
+  内置频道与 M3U 订阅管线（`LocalAssetChannelSource` / `LocalM3uChannelSource` /
+  `M3uPlaylistParser` / `ChannelJsonParser` / `RemoteM3uFetcher` /
+  `SubscriptionChannelRepository` / `SubscriptionCoordinator` / `FileSubscriptionStore`）
+  已整体移除。
+- **写入方**：手机端 `MobileMainActivity.loadChannels()` / `reloadMgtvCatalog()`、TV 端
+  `MainBrowseFragment.reloadMgtvCatalog()`、播放页 `PlayerActivity.ensureMgtvCatalogLoaded()`
+  （仅在目录为空时兜底）。
+- **读取方**：首页网格/分类条、TV 列表行、播放页抽屉与上下切台，全部读同一份 `catalogStore`。
+- **聚合分类处理**：「热门」不整段展示（避免重复卡片），但**只在「热门」出现的频道会被捞回**
+  并归入「热门」分组（`MgtvProvider.toDomainCategories()`），例如 `344 湖南娱乐`。
 
 ### 9. Debug 明文放行隔离（阶段八新增）
 
@@ -665,7 +546,7 @@ RoutingStreamResolver(
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段九持续扩充** | `app/src/test` 现有 38 个测试类 /**365 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 21 + 阶段八 31 + 阶段九 82，另有外部同步带来的增量） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉、远程拉取、订阅兜底、快速失败、HLS 识别、Host 白名单隔离、MGTV 白盒筛选、签名还原与 fail-closed 已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段九持续扩充** | `app/src/test` 现有 31 个测试类 /**285 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 21 + 阶段八 31 + 阶段九 82，另有外部同步带来的增量） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉、远程拉取、订阅兜底、快速失败、HLS 识别、Host 白名单隔离、MGTV 白盒筛选、签名还原与 fail-closed 已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |

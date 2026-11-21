@@ -5,16 +5,12 @@ import android.content.Intent
 import android.graphics.Rect
 import android.os.Bundle
 import android.text.Editable
-import android.text.InputType
 import android.text.TextWatcher
 import android.view.View
 import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
-import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -29,8 +25,6 @@ import com.livetv.android.data.mgtv.MgtvStreamResolver
 import com.livetv.android.databinding.ActivityMobileMainBinding
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.model.ChannelCategory
-import com.livetv.android.domain.model.RefreshResult
-import com.livetv.android.player.RetryPolicy
 import com.livetv.android.ui.PlayerActivity
 import com.livetv.android.util.HeaderAutoHidePolicy
 
@@ -72,7 +66,6 @@ class MobileMainActivity : AppCompatActivity() {
     private var currentSpanCount = 2
     private var selectedCategoryId: String? = null
     private var accentColors: IntArray = IntArray(0)
-    private var isRefreshing = false
     private var mgtvLoading = false
 
     /** 上次播放的频道 id（用于卡片高亮与蓝点标识）；与播放页双向同步。 */
@@ -135,7 +128,7 @@ class MobileMainActivity : AppCompatActivity() {
         accentColors = loadAccentColors()
 
         setupList()
-        setupSubscriptionActions()
+        setupHeaderActions()
         setupSearchActions()
         loadChannels()
         if (isSearchMode) {
@@ -143,11 +136,6 @@ class MobileMainActivity : AppCompatActivity() {
             restoreSearchUi()
         }
         restorePendingScrollIfNeeded()
-
-        // 仅首次进入时静默刷新（旋转重建不重复拉取）
-        if (savedInstanceState == null && !app.subscriptionRepository.getSubscriptionUrl().isNullOrBlank()) {
-            refreshSubscription(silent = true)
-        }
     }
 
     override fun onResume() {
@@ -252,9 +240,8 @@ class MobileMainActivity : AppCompatActivity() {
     private val app: LiveTvApplication
         get() = application as LiveTvApplication
 
-    private fun setupSubscriptionActions() {
-        binding.mobileRefresh.setOnClickListener { refreshSubscription(silent = false) }
-        binding.mobileSubscription.setOnClickListener { showSubscriptionDialog() }
+    private fun setupHeaderActions() {
+        binding.mobileRefresh.setOnClickListener { reloadMgtvCatalog() }
 
         val expandHeaderOnFocus = View.OnFocusChangeListener { _, hasFocus ->
             if (hasFocus && isFloatingHeaderMode()) {
@@ -263,7 +250,6 @@ class MobileMainActivity : AppCompatActivity() {
         }
         binding.mobileSearch.onFocusChangeListener = expandHeaderOnFocus
         binding.mobileRefresh.onFocusChangeListener = expandHeaderOnFocus
-        binding.mobileSubscription.onFocusChangeListener = expandHeaderOnFocus
     }
 
     // ---------------- 内联实时搜索 ----------------
@@ -332,132 +318,37 @@ class MobileMainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------------- 订阅刷新 ----------------
+    // ---------------- 频道目录刷新（MGTV） ----------------
 
-    private fun setRefreshingState(refreshing: Boolean) {
-        isRefreshing = refreshing
-        binding.mobileRefresh.isEnabled = !refreshing
-        binding.mobileRefresh.alpha = if (refreshing) 0.5f else 1f
+    private fun setReloadingState(reloading: Boolean) {
+        binding.mobileRefresh.isEnabled = !reloading
+        binding.mobileRefresh.alpha = if (reloading) 0.5f else 1f
         binding.mobileRefresh.text = getString(
-            if (refreshing) R.string.mobile_action_refreshing else R.string.mobile_action_refresh,
+            if (reloading) R.string.mobile_action_refreshing else R.string.mobile_action_refresh,
         )
-        binding.mobileSubscription.isEnabled = !refreshing
-        binding.mobileSubscription.alpha = if (refreshing) 0.5f else 1f
     }
 
-    private fun refreshSubscription(silent: Boolean) {
-        if (isRefreshing) {
+    /** 重新拉取 MGTV 目录；失败时保留旧列表。 */
+    private fun reloadMgtvCatalog(silent: Boolean = false) {
+        if (mgtvLoading) {
             if (!silent) toast(getString(R.string.mobile_refresh_busy))
             return
         }
-        setRefreshingState(true)
-
-        app.subscriptionCoordinator.refresh { result ->
-            if (isFinishing || isDestroyed) return@refresh
-            setRefreshingState(false)
-            loadChannels()
-            if (!silent) showRefreshResult(result)
-        }
-    }
-
-    private fun updateSubscriptionUrl(url: String?) {
-        if (isRefreshing) {
-            toast(getString(R.string.mobile_refresh_busy))
-            return
-        }
-        setRefreshingState(true)
-
-        app.subscriptionCoordinator.updateUrl(url) { result ->
-            if (isFinishing || isDestroyed) return@updateUrl
-            setRefreshingState(false)
-            loadChannels()
-            showRefreshResult(result)
-        }
-    }
-
-    private fun showRefreshResult(result: RefreshResult) {
-        val isFallback = result is RefreshResult.FallbackToCache || result is RefreshResult.FallbackToBuiltin
-        toast(describeRefresh(result), longDuration = isFallback)
-    }
-
-    private fun describeRefresh(result: RefreshResult): String {
-        val totalAvailable = app.catalogStore.getAllCategories().sumOf { it.channels.size }
-        return when (result) {
-            is RefreshResult.BuiltinOnly -> getString(R.string.mobile_refresh_builtin, totalAvailable)
-            is RefreshResult.RemoteLoaded -> getString(R.string.mobile_refresh_remote, totalAvailable)
-            is RefreshResult.FallbackToCache ->
-                getString(R.string.mobile_refresh_cache, result.channelCount, result.reason)
-            is RefreshResult.FallbackToBuiltin ->
-                getString(R.string.mobile_refresh_builtin_fallback, totalAvailable, result.reason)
-        }
-    }
-
-    private fun showSubscriptionDialog() {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(10), dp(20), dp(4))
-        }
-
-        val current = app.subscriptionRepository.getSubscriptionUrl()
-        val status = TextView(this).apply {
-            text = if (current.isNullOrBlank()) {
-                getString(R.string.mobile_subscription_none)
-            } else {
-                getString(R.string.mobile_subscription_current, current)
-            }
-            textSize = 13f
-            setTextColor(getColor(R.color.mobile_text_secondary))
-            setPadding(dp(2), 0, dp(2), dp(10))
-        }
-        container.addView(status)
-
-        val input = EditText(this).apply {
-            setText(current.orEmpty())
-            hint = getString(R.string.mobile_subscription_hint)
-            setSingleLine()
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setTextColor(getColor(R.color.mobile_text_primary))
-            setHintTextColor(getColor(R.color.mobile_text_tertiary))
-            minHeight = dp(48)
-        }
-        container.addView(input)
-
-        val builder = AlertDialog.Builder(this)
-            .setTitle(R.string.mobile_subscription_title)
-            .setView(container)
-            .setPositiveButton(R.string.mobile_subscription_save, null)
-            .setNegativeButton(R.string.mobile_subscription_cancel, null)
-
-        if (!current.isNullOrBlank()) {
-            builder.setNeutralButton(R.string.mobile_subscription_reset) { _, _ ->
-                confirmResetSubscription()
+        mgtvLoading = true
+        setReloadingState(true)
+        app.mgtvCatalogCoordinator.load { mgtvCategories ->
+            mgtvLoading = false
+            if (isFinishing || isDestroyed) return@load
+            setReloadingState(false)
+            if (mgtvCategories.isNotEmpty()) {
+                app.catalogStore.update(mgtvCategories)
+                categories = app.catalogStore.getAllCategories()
+                applyCategories()
+                if (!silent) toast(getString(R.string.mobile_refresh_remote, categories.sumOf { it.channels.size }))
+            } else if (!silent) {
+                toast(getString(R.string.mobile_refresh_failed))
             }
         }
-
-        val dialog = builder.create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val url = input.text.toString().trim()
-                if (!RetryPolicy.isValidUrl(url)) {
-                    input.error = getString(R.string.mobile_subscription_invalid_url)
-                    return@setOnClickListener
-                }
-                dialog.dismiss()
-                updateSubscriptionUrl(url)
-            }
-        }
-        dialog.show()
-    }
-
-    private fun confirmResetSubscription() {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.mobile_subscription_reset_confirm_title)
-            .setMessage(R.string.mobile_subscription_reset_confirm_message)
-            .setPositiveButton(R.string.mobile_subscription_reset_confirm_ok) { _, _ ->
-                updateSubscriptionUrl(null)
-            }
-            .setNegativeButton(R.string.mobile_subscription_cancel, null)
-            .show()
     }
 
     private fun toast(message: String, longDuration: Boolean = false) {
@@ -675,10 +566,11 @@ class MobileMainActivity : AppCompatActivity() {
     }
 
     private fun loadChannels() {
-        categories = app.refreshCatalogFromRepository()
-        val needsMgtvLoad = !app.catalogStore.hasSupplementalCategories() && !mgtvLoading
+        categories = app.catalogStore.getAllCategories()
+        val needsMgtvLoad = categories.isEmpty() && !mgtvLoading
         if (needsMgtvLoad) {
             mgtvLoading = true
+            setReloadingState(true)
         }
         applyCategories()
         if (needsMgtvLoad) {
@@ -689,10 +581,11 @@ class MobileMainActivity : AppCompatActivity() {
     private fun fetchMgtvCatalog() {
         app.mgtvCatalogCoordinator.load { mgtvCategories ->
             mgtvLoading = false
-            if (mgtvCategories.isNotEmpty()) {
-                app.catalogStore.updateSupplementalCategories(mgtvCategories)
-            }
             if (isFinishing || isDestroyed) return@load
+            setReloadingState(false)
+            if (mgtvCategories.isNotEmpty()) {
+                app.catalogStore.update(mgtvCategories)
+            }
             categories = app.catalogStore.getAllCategories()
             applyCategories()
         }
@@ -754,7 +647,7 @@ class MobileMainActivity : AppCompatActivity() {
 
         if (rows.isEmpty()) {
             binding.rvChannels.visibility = View.GONE
-            val showLoading = !isSearchMode && (mgtvLoading || isRefreshing) && categories.isEmpty()
+            val showLoading = !isSearchMode && mgtvLoading && categories.isEmpty()
             binding.loadingView.visibility = if (showLoading) View.VISIBLE else View.GONE
             binding.emptyView.visibility = if (showLoading) View.GONE else View.VISIBLE
             binding.emptyView.text = if (isSearchMode && trimmedQuery.isNotEmpty()) {
