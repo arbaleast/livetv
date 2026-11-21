@@ -100,16 +100,25 @@ object MobileChannelList {
     /**
      * 根据可用宽度（dp）计算网格列数：**不再写死阈值**，而是按"单卡最小期望宽度"除出来。
      *
-     * - 单卡最小宽度 [MIN_CARD_WIDTH_DP] = 190dp（横屏常见 780–900dp 可用宽度 → 4 列）
-     * - 下限 2 列（手机竖屏 1 列会让卡片过宽）、上限 5 列（避免超宽屏出现"细条"卡片）
+     * - 单卡最小宽度 [MIN_CARD_WIDTH_DP] = 190dp（横屏常见 780–900dp 可用宽度 → 4 列）；
+     * - 可用宽度 `<` [MIN_TWO_COLUMN_WIDTH_DP]（360dp）时**降为 1 列**：
+     *   360dp 竖屏再扣掉左右 padding 只剩约 340dp，强行 2 列会让每张卡片窄到 ~165dp，
+     *   频道名被徽章/序号挤成十几个像素，属于不可读的"挤压崩坏"；
+     * - 其余宽度下限 2 列、上限 [MAX_SPAN_COUNT] 列（避免超宽屏出现"细条"卡片）。
+     *
+     * 宽度非法（`<= 0`，尚未完成测量）时按最保守的 1 列处理，避免先渲染出被挤压的 2 列再抖动。
      */
     fun gridSpanCount(screenWidthDp: Int): Int {
-        if (screenWidthDp <= 0) return 2
+        if (screenWidthDp <= 0) return 1
+        if (screenWidthDp < MIN_TWO_COLUMN_WIDTH_DP) return 1
         return (screenWidthDp / MIN_CARD_WIDTH_DP).coerceIn(2, MAX_SPAN_COUNT)
     }
 
     /** 单卡最小期望宽度（dp），用于列数计算。 */
     const val MIN_CARD_WIDTH_DP = 190
+
+    /** 仍可容纳两张可读卡片的最小可用宽度（dp）；低于该宽度改为单列。 */
+    const val MIN_TWO_COLUMN_WIDTH_DP = 360
 
     /** 网格列数上限。 */
     const val MAX_SPAN_COUNT = 5
@@ -247,4 +256,99 @@ object MobileChannelList {
 
     /** "全部"导航项的名称。 */
     const val ALL_CATEGORY_NAME = "全部"
+
+    /** 本地收藏虚拟分组 ID 与名称。 */
+    const val FAVORITE_CATEGORY_ID = "__favorites__"
+    const val FAVORITE_CATEGORY_NAME = "收藏"
+
+    /**
+     * 若存在命中的已收藏频道，则在分类列表最前插入虚拟「收藏」分组（按频道 id 去重）；
+     * 若无收藏或收藏均不在当前目录中，则原样返回分类列表。
+     */
+    fun prependFavoritesCategory(
+        categories: List<ChannelCategory>,
+        favoriteIds: Set<String>,
+    ): List<ChannelCategory> {
+        if (favoriteIds.isEmpty()) return categories
+        val seenIds = HashSet<String>()
+        val favorites = mutableListOf<Channel>()
+        categories.forEach { category ->
+            category.channels.forEach { channel ->
+                if (channel.id in favoriteIds && seenIds.add(channel.id)) {
+                    favorites += channel
+                }
+            }
+        }
+        if (favorites.isEmpty()) return categories
+        return listOf(
+            ChannelCategory(
+                id = FAVORITE_CATEGORY_ID,
+                name = FAVORITE_CATEGORY_NAME,
+                channels = favorites,
+            ),
+        ) + categories
+    }
+
+    /**
+     * 按关键词搜索频道（忽略大小写匹配频道名、有效简介或分类名），按频道 id 去重返回平铺卡片列表。
+     * 空白查询返回空列表（调用方应回退到正常分类筛选）。
+     */
+    fun searchRows(
+        categories: List<ChannelCategory>,
+        query: String,
+    ): List<MobileRow> {
+        val keyword = query.trim()
+        if (keyword.isEmpty()) return emptyList()
+        val seenIds = HashSet<String>()
+        val rows = mutableListOf<MobileRow>()
+        categories.forEach { category ->
+            val categoryMatches = category.name.contains(keyword, ignoreCase = true)
+            category.channels.forEach { channel ->
+                val nameMatches = channel.name.contains(keyword, ignoreCase = true)
+                val descMatches = sanitizeSubtitle(channel)?.contains(keyword, ignoreCase = true) == true
+                if ((nameMatches || descMatches || categoryMatches) && seenIds.add(channel.id)) {
+                    rows += MobileRow.ChannelCard(channel, category.id, category.name)
+                }
+            }
+        }
+        return rows
+    }
+
+    /** 启用左侧分类导航栏的最小屏幕宽度（dp）；小于该宽度时降级为顶部横向分类条，避免挤压手机竖屏网格。 */
+    const val LEFT_RAIL_MIN_WIDTH_DP = 600
+
+    /** 手机/平板浏览页的分类导航形态。 */
+    enum class NavigationMode {
+        /** 紧凑竖屏：顶部横向分类条，网格占满整屏宽度。 */
+        TOP_BAR,
+
+        /** 宽屏 / 横屏：左侧纵向分类栏 + 右侧多列网格。 */
+        LEFT_RAIL,
+    }
+
+    /** 按窗口宽度（dp）决定分类导航形态。 */
+    fun resolveNavigationMode(screenWidthDp: Int): NavigationMode =
+        if (screenWidthDp >= LEFT_RAIL_MIN_WIDTH_DP) {
+            NavigationMode.LEFT_RAIL
+        } else {
+            NavigationMode.TOP_BAR
+        }
+
+    /**
+     * 判断给定下标的频道卡片是否位于网格的**首个可聚焦行**。
+     *
+     * 用于 D-Pad UP 拦截：只有在首个可聚焦行按上键时才展开顶栏并移交焦点，
+     * 其余行必须返回 `false` 交还 `GridLayoutManager` 正常向上移动。
+     */
+    fun isInTopGridRow(rows: List<MobileRow>, position: Int, spanCount: Int): Boolean {
+        if (spanCount <= 0 || position !in rows.indices) return false
+        if (rows[position] !is MobileRow.ChannelCard) return false
+        val firstCardIndex = rows.indexOfFirst { it is MobileRow.ChannelCard }
+        if (firstCardIndex < 0 || position < firstCardIndex) return false
+        if (position - firstCardIndex >= spanCount) return false
+        for (index in firstCardIndex until position) {
+            if (rows[index] is MobileRow.CategoryHeader) return false
+        }
+        return true
+    }
 }

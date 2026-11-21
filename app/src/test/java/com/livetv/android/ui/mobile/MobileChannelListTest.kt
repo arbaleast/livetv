@@ -75,11 +75,32 @@ class MobileChannelListTest {
     }
 
     @Test
-    fun `phone width uses at least two columns`() {
-        // 窄屏也必须保证 2 列，避免卡片被拉伸得过宽
+    fun `normal portrait width uses two readable columns`() {
+        // 360dp 是仍能容纳两张可读卡片的下界：360/190=1 → 下限 2 列
         assertEquals(2, MobileChannelList.gridSpanCount(360))
         assertEquals(2, MobileChannelList.gridSpanCount(411))
-        assertEquals(2, MobileChannelList.gridSpanCount(1))
+    }
+
+    @Test
+    fun `narrow screens below 360dp fall back to a single column`() {
+        // 320dp 竖屏 + 左右 padding 后已放不下两张可读卡片，降为 1 列避免频道名被压成十几个像素
+        assertEquals(1, MobileChannelList.gridSpanCount(320))
+        assertEquals(1, MobileChannelList.gridSpanCount(359))
+        // 尚未测量完成（<= 0）时同样按最保守的单列处理，避免先渲染出挤压的 2 列再抖动
+        assertEquals(1, MobileChannelList.gridSpanCount(1))
+        assertEquals(1, MobileChannelList.gridSpanCount(0))
+        assertEquals(1, MobileChannelList.gridSpanCount(-1))
+    }
+
+    @Test
+    fun `column count boundaries around narrow and wide breakpoints`() {
+        // 359→1 列、360→2 列是硬边界；600/900 为横屏常见宽度；1280 为超宽屏封顶
+        assertEquals(1, MobileChannelList.gridSpanCount(359))
+        assertEquals(2, MobileChannelList.gridSpanCount(360))
+        assertEquals(3, MobileChannelList.gridSpanCount(600))
+        assertEquals(4, MobileChannelList.gridSpanCount(900))
+        assertEquals(5, MobileChannelList.gridSpanCount(1280))
+        assertEquals(5, MobileChannelList.gridSpanCount(2000))
     }
 
     @Test
@@ -325,6 +346,136 @@ class MobileChannelListTest {
         assertEquals(2, rail.last().count)
         assertTrue(rail.last().selected)
         assertFalse(rail[0].selected)
+    }
+
+    // ---------------- 响应式导航形态（竖屏顶部条 vs 横屏左侧栏） ----------------
+
+    @Test
+    fun `narrow portrait widths use top bar navigation to preserve grid width`() {
+        assertEquals(MobileChannelList.NavigationMode.TOP_BAR, MobileChannelList.resolveNavigationMode(0))
+        assertEquals(MobileChannelList.NavigationMode.TOP_BAR, MobileChannelList.resolveNavigationMode(360))
+        assertEquals(MobileChannelList.NavigationMode.TOP_BAR, MobileChannelList.resolveNavigationMode(411))
+        assertEquals(MobileChannelList.NavigationMode.TOP_BAR, MobileChannelList.resolveNavigationMode(599))
+    }
+
+    @Test
+    fun `wide landscape and tablet widths use left rail navigation`() {
+        assertEquals(MobileChannelList.NavigationMode.LEFT_RAIL, MobileChannelList.resolveNavigationMode(600))
+        assertEquals(MobileChannelList.NavigationMode.LEFT_RAIL, MobileChannelList.resolveNavigationMode(794))
+        assertEquals(MobileChannelList.NavigationMode.LEFT_RAIL, MobileChannelList.resolveNavigationMode(1280))
+    }
+
+    // ---------------- D-Pad UP 首行边界判定 ----------------
+
+    @Test
+    fun `isInTopGridRow identifies only the first row in filtered flat grid`() {
+        val rows = listOf(
+            MobileRow.ChannelCard(channel("1"), "c", "分类"),
+            MobileRow.ChannelCard(channel("2"), "c", "分类"),
+            MobileRow.ChannelCard(channel("3"), "c", "分类"),
+            MobileRow.ChannelCard(channel("4"), "c", "分类"),
+            MobileRow.ChannelCard(channel("5"), "c", "分类"),
+        )
+
+        assertTrue(MobileChannelList.isInTopGridRow(rows, position = 0, spanCount = 3))
+        assertTrue(MobileChannelList.isInTopGridRow(rows, position = 1, spanCount = 3))
+        assertTrue(MobileChannelList.isInTopGridRow(rows, position = 2, spanCount = 3))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 3, spanCount = 3))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 4, spanCount = 3))
+    }
+
+    @Test
+    fun `isInTopGridRow stops at category boundary in grouped view`() {
+        val rows = MobileChannelList.buildRows(
+            listOf(
+                category("c1", "一", listOf(channel("1"), channel("2"))),
+                category("c2", "二", listOf(channel("3"), channel("4"))),
+            ),
+        )
+        // [H(c1), C(1), C(2), H(c2), C(3), C(4)]，4 列网格下 C(1)、C(2) 在首行，C(3) 属于第二分组不在首行
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 0, spanCount = 4))
+        assertTrue(MobileChannelList.isInTopGridRow(rows, position = 1, spanCount = 4))
+        assertTrue(MobileChannelList.isInTopGridRow(rows, position = 2, spanCount = 4))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 3, spanCount = 4))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 4, spanCount = 4))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 5, spanCount = 4))
+    }
+
+    @Test
+    fun `isInTopGridRow handles grouped category with more cards than spanCount and invalid inputs`() {
+        val rows = MobileChannelList.buildRows(
+            listOf(
+                category("c1", "一", listOf(channel("1"), channel("2"), channel("3"), channel("4"), channel("5"))),
+            ),
+        )
+        // [H(c1), C(1), C(2), C(3), C(4), C(5)]，spanCount = 4 -> 位置 1..4 为首行，位置 5 为第二行
+        assertTrue(MobileChannelList.isInTopGridRow(rows, position = 1, spanCount = 4))
+        assertTrue(MobileChannelList.isInTopGridRow(rows, position = 4, spanCount = 4))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 5, spanCount = 4))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = -1, spanCount = 4))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 6, spanCount = 4))
+        assertFalse(MobileChannelList.isInTopGridRow(rows, position = 1, spanCount = 0))
+        assertFalse(MobileChannelList.isInTopGridRow(emptyList(), position = 0, spanCount = 2))
+    }
+
+    // ---------------- 本地收藏虚拟分组 ----------------
+
+    @Test
+    fun `prependFavoritesCategory inserts deduplicated favorites category first`() {
+        val ch1 = channel("mgtv:1", "金鹰卡通")
+        val ch2 = channel("mgtv:2", "湖南卫视")
+        val categories = listOf(
+            category("hot", "热门", listOf(ch1, ch2)),
+            category("sat", "卫视台", listOf(ch1)), // 与热门重复的频道 id
+        )
+
+        val result = MobileChannelList.prependFavoritesCategory(categories, setOf("mgtv:1"))
+
+        assertEquals(listOf(MobileChannelList.FAVORITE_CATEGORY_ID, "hot", "sat"), result.map { it.id })
+        assertEquals(MobileChannelList.FAVORITE_CATEGORY_NAME, result[0].name)
+        assertEquals(listOf("mgtv:1"), result[0].channels.map { it.id })
+    }
+
+    @Test
+    fun `prependFavoritesCategory keeps categories unchanged when no favorites match`() {
+        val categories = listOf(category("hot", "热门", listOf(channel("c1"))))
+
+        assertEquals(categories, MobileChannelList.prependFavoritesCategory(categories, emptySet()))
+        assertEquals(categories, MobileChannelList.prependFavoritesCategory(categories, setOf("nonexistent")))
+    }
+
+    // ---------------- 实时搜索过滤 ----------------
+
+    @Test
+    fun `searchRows matches channel name, sanitized description, and category name case-insensitively and deduplicates`() {
+        val cctv = Channel(id = "c1", name = "CCTV-5 体育", description = "欧冠精选", streamUrl = "https://a.m3u8")
+        val cartoon = Channel(id = "m1", name = "金鹰卡通", description = "mgtv:287", streamUrl = "")
+        val categories = listOf(
+            category("hot", "热门", listOf(cartoon, cctv)),
+            category("sat", "卫视台", listOf(cartoon)),
+        )
+
+        // 忽略大小写匹配频道名
+        val byName = MobileChannelList.searchRows(categories, "cctv-5")
+        assertEquals(1, byName.size)
+        assertEquals("c1", (byName[0] as MobileRow.ChannelCard).channel.id)
+
+        // 匹配重复出现的频道应按 id 去重
+        val dedup = MobileChannelList.searchRows(categories, "金鹰")
+        assertEquals(1, dedup.size)
+        assertEquals("m1", (dedup[0] as MobileRow.ChannelCard).channel.id)
+
+        // 匹配有效节目描述，但不匹配技术字段 mgtv:287
+        assertEquals(1, MobileChannelList.searchRows(categories, "欧冠").size)
+        assertEquals(emptyList<MobileRow>(), MobileChannelList.searchRows(categories, "mgtv:287"))
+
+        // 匹配分类名
+        val byCat = MobileChannelList.searchRows(categories, "卫视")
+        assertEquals(1, byCat.size)
+        assertEquals("m1", (byCat[0] as MobileRow.ChannelCard).channel.id)
+
+        // 空白搜索词返回空列表
+        assertEquals(emptyList<MobileRow>(), MobileChannelList.searchRows(categories, "   "))
     }
 
 }

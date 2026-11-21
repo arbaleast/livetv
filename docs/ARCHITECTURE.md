@@ -101,6 +101,7 @@ app/src/main/java/com/livetv/android/
 |---|---|
 | `MainActivity` | **阶段六**：设备形态**分流入口**——`DeviceUtils.isTvDevice(this)` 为真则装载 Leanback `MainBrowseFragment`（并强制横屏），否则启动 `MobileMainActivity` 后 `finish()` |
 | `LiveTvApplication`（阶段八） | 全局**订阅**仓库持有者：`by lazy` 装配 `SubscriptionChannelRepository`（内置 JSON + M3U 源、`RemoteM3uFetcher`、`FileSubscriptionStore`）；`channelRepository` 指向它供两端共用；另持有 `subscriptionCoordinator` |
+| `ChannelCatalogStore`（应用级聚合目录） | 纯 Kotlin、线程安全：分别保存「订阅分段」与「补充目录分段（MGTV）」，`getAllCategories()` 合并时订阅分段在前、按分类 id 去重；刷新/清空订阅不会冲掉已加载的 MGTV 分组。由 `LiveTvApplication.catalogStore` 持有，手机首页、TV 首页、播放页抽屉与切台共用 |
 | `MainBrowseFragment` | 浏览页：标题/品牌色，**通过 `ChannelRepository` 取分类列表**并组装 `ListRow`，处理卡片点击跳转播放 |
 | `ChannelCardPresenter` | 渲染 `ImageCardView` 卡片（标题 + 描述） |
 | `PlayerActivity` | 播放页：加载频道、渲染状态与提示、**遥控器按键映射**；不含 ExoPlayer 逻辑 |
@@ -486,6 +487,9 @@ LiveTvApplication（Application）
  │         fetcher = RemoteM3uFetcher(),          ← HttpURLConnection，纯 JDK
  │         store   = FileSubscriptionStore(this))  ← SharedPreferences + filesDir
  ├─ channelRepository: ChannelRepository = subscriptionRepository   ← 两端共用
+ ├─ catalogStore: ChannelCatalogStore                                ← 订阅分段 + MGTV 补充分段的聚合快照
+ ├─ mgtvCatalogCoordinator: MgtvCatalogCoordinator                   ← 后台拉 MGTV 目录 + 主线程回传
+ ├─ streamResolver: StreamResolver                                   ← mgtv: → MGTV，其余 → 静态
  └─ subscriptionCoordinator: SubscriptionCoordinator                ← 后台拉取 + 主线程回传
 ```
 
@@ -649,7 +653,8 @@ RoutingStreamResolver(
 > - **跳转跟随**：`media/ScopedHeaderDataSourceFactory` 自己跟随 3xx（≤5 跳、仅 https、逐跳重过滤请求头），
 >   解决 CDN 边缘调度导致的 302 报错；
 > - **UI 独立分组**：`data/mgtv/MgtvCatalogCoordinator` 后台拉目录 + 主线程回传，
->   手机端把 MGTV 频道作为独立分组追加到列表末尾（TV 端未接入）。
+>   MGTV 频道作为独立分组写入 `LiveTvApplication.catalogStore`；订阅分段在前、MGTV 分段在后，
+>   **手机端与 TV 端首页、播放页抽屉/上下切台共用同一份聚合快照**（不再只有手机端能看到 MGTV 分组）。
 
 ---
 
@@ -660,7 +665,7 @@ RoutingStreamResolver(
 | 1 | ~~业务数据硬编码在 UI 层~~ **阶段二已修复** | 原 `MainBrowseFragment.sampleNewsChannels/sampleSportsChannels` 已删除；现由 `LocalAssetChannelSource` 读 `assets/channels.json` | 数据与 UI 解耦，可换源、可测试 |
 | 2 | ~~播放器生命周期与 API 24+ 推荐模式不一致~~ **阶段一已修复** | `onStart()` 初始化 / `onStop()` 释放，`initializePlayer()` 防重复初始化 | 已对齐 Android API 24+ 推荐模式 |
 | 3 | ~~释放后未断开 PlayerView 绑定~~ **阶段一已修复** | `releasePlayer()` 现先 `binding.playerView.player = null` 再 `release()` | 视图不再持有已释放的 ExoPlayer |
-| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段九持续扩充** | `app/src/test` 现有 34 个测试类 /**319 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 21 + 阶段八 31 + 阶段九 82，另有外部同步带来的增量） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉、远程拉取、订阅兜底、快速失败、HLS 识别、Host 白名单隔离、MGTV 白盒筛选、签名还原与 fail-closed 已可回归 |
+| 4 | ~~无测试基础设施~~ **阶段一已修复，阶段二至阶段九持续扩充** | `app/src/test` 现有 38 个测试类 /**365 个用例**（阶段二 22 + 阶段三 55 + 阶段四 27 + 阶段五 20 + 阶段六 17 + 阶段七 21 + 阶段八 31 + 阶段九 82，另有外部同步带来的增量） | 解析、过滤、重试、切台、状态流转、缓存、请求头、设备判定、网格列数、徽章/副标题/筛选/抽屉、远程拉取、订阅兜底、快速失败、HLS 识别、Host 白名单隔离、MGTV 白盒筛选、签名还原与 fail-closed 已可回归 |
 | 4b | ~~Lint 报错导致构建失败~~ **阶段一已修复** | `PlayerActivity` 加 `@androidx.annotation.OptIn(UnstableApi::class)` | `lintDebug` 可通过 |
 | 5 | ~~硬编码用户可见文案绕过资源系统~~ **阶段三已修复** | 原 `PlayerActivity` 的 `"播放失败: ${error.message}"` 已改为 `strings.xml` 的 `player_error_*` + `player_error_hint` | 可本地化，Lint `SetTextI18n` 已消除 |
 | 6 | **使用已废弃的全屏 API** | `PlayerActivity.hideSystemUi()` 用 `systemUiVisibility`，已 `@Suppress("DEPRECATION")` | API 30+ 沉浸式行为不完整 |

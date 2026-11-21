@@ -1,8 +1,56 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+<!--
+  Android TV 桌面横幅：标准 320dp × 180dp 分层矢量图，替换此前"纯蓝矩形"的空白色块。
+  层次（自下而上）：品牌渐变底板 → 中央柔光晕 → 电视/播放矢量主体 → 底部强调色细条。
+  全部为 shape / vector，不引入外部位图。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:width="320dp"
+    android:height="180dp"
+    tools:ignore="VectorRaster">
+    <!-- VectorRaster 针对图标尺寸优化提示；横幅按 Android TV 规范必须为 320×180dp，
+         且 minSdk=28 不存在低版本矢量兼容问题，这里定向忽略该条误报。 -->
+
+    <!-- 1. 品牌渐变底板（深海军蓝 → 品牌蓝，左上到右下） -->
     <item>
         <shape android:shape="rectangle">
-            <solid android:color="@color/brand_primary" />
+            <gradient
+                android:angle="315"
+                android:endColor="@color/brand_primary"
+                android:startColor="#0B1F38"
+                android:type="linear" />
+        </shape>
+    </item>
+
+    <!-- 2. 中央柔光晕：让主体图标从底板中"浮"起来 -->
+    <item
+        android:width="176dp"
+        android:height="176dp"
+        android:gravity="center">
+        <shape android:shape="oval">
+            <gradient
+                android:endColor="#001565C0"
+                android:gradientRadius="88dp"
+                android:startColor="#553B82F6"
+                android:type="radial" />
+        </shape>
+    </item>
+
+    <!-- 3. 电视 + 播放矢量主体 -->
+    <item
+        android:width="104dp"
+        android:height="104dp"
+        android:drawable="@drawable/ic_banner_tv"
+        android:gravity="center" />
+
+    <!-- 4. 底部强调色细条：与 App 内品牌色呼应 -->
+    <item
+        android:width="320dp"
+        android:height="4dp"
+        android:gravity="bottom">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent" />
         </shape>
     </item>
 </layer-list>

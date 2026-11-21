@@ -161,4 +161,38 @@ class ChannelNavigatorTest {
         assertTrue(navigator.locate("missing", "https://x.invalid/b.m3u8"))
         assertEquals(1, navigator.currentIndex)
     }
+
+    @Test
+    fun `aggregated catalog keeps subscription segment first and navigates across mgtv channels`() {
+        // 播放页的切台序列来自 LiveTvApplication.catalogStore 的聚合目录：
+        // 订阅分段在前、MGTV 分段在后；任意 MGTV 频道都要能定位并在 MGTV 分组内上下切台。
+        val aggregated = listOf(
+            ChannelCategory(
+                id = "sub",
+                name = "订阅",
+                channels = listOf(channel("sub1"), channel("sub2")),
+            ),
+            ChannelCategory(
+                id = "mgtv",
+                name = "芒果 TV",
+                channels = listOf(
+                    Channel(id = "mgtv:1", name = "湖南卫视", description = "", streamUrl = ""),
+                    Channel(id = "mgtv:2", name = "金鹰卡通", description = "", streamUrl = ""),
+                ),
+            ),
+        )
+        val navigator = ChannelNavigator(ChannelNavigator.flatten(aggregated))
+
+        assertEquals(listOf("sub1", "sub2", "mgtv:1", "mgtv:2"), navigator.channels.map { it.id })
+        assertTrue(navigator.locate("mgtv:1", null))
+        assertEquals("mgtv:1", navigator.current()?.id)
+
+        // 上下键在 MGTV 分组内正向/反向切换
+        assertEquals("mgtv:2", navigator.next()?.id)
+        assertEquals("mgtv:1", navigator.previous()?.id)
+        // 反向循环跨回订阅分段（不越出聚合列表）
+        assertEquals("sub2", navigator.previous()?.id)
+        assertEquals("sub1", navigator.previous()?.id)
+        assertEquals("sub2", navigator.next()?.id)
+    }
 }

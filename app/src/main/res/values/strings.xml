@@ -2,15 +2,15 @@
 <resources>
     <string name="app_name">Live TV</string>
     <string name="browse_title">电视节目</string>
-    <string name="channel_selected">已选择：%1$s</string>
     <string name="channel_no_stream_url">「%1$s」暂无可用的播放地址</string>
 
     <!-- TV 端设置与空态 -->
     <string name="tv_row_settings">设置与订阅</string>
     <string name="tv_action_refresh">刷新订阅</string>
     <string name="tv_action_refresh_desc">从远程 M3U 重新拉取频道</string>
+    <string name="tv_action_refreshing">刷新中…</string>
     <string name="tv_action_subscription">配置订阅源</string>
-    <string name="tv_action_subscription_desc">修改地址或恢复内置频道</string>
+    <string name="tv_action_subscription_desc">修改远程 M3U 地址或清除订阅</string>
     <string name="tv_empty_channels">暂无可播放的频道</string>
     <string name="tv_empty_channels_desc">请检查订阅源配置或刷新重试</string>
 
@@ -26,17 +26,26 @@
     <string name="player_error_source">直播源无法解析</string>
     <string name="player_error_timeout">连接超时</string>
     <string name="player_error_unknown">播放失败</string>
-    <string name="player_error_hint">按确认键重试 · 按上下键切换频道</string>
+    <string name="player_error_hint">按确认键重试 · 按上下键切台 · 按左键开频道列表</string>
     <string name="player_error_hint_touch">点按「重试」重新连接 · 用下方按钮切换频道</string>
     <string name="player_switched_to">已切换到：%1$s</string>
     <string name="player_no_channel">没有可播放的频道</string>
 
     <!-- 手机端（MobileMainActivity） -->
-    <string name="mobile_empty_channels">暂无可播放的频道</string>
-    <string name="mobile_total_channels">共 %1$d 个频道</string>
+    <string name="mobile_loading_channels">正在加载频道列表…</string>
+    <string name="mobile_empty_channels">暂无可播放的频道，可点右上角「订阅源」添加 M3U 地址</string>
+    <string name="mobile_total_channels">共 %1$d 台</string>
     <string name="mobile_all_categories">全部</string>
     <string name="mobile_category_count">%1$d 台</string>
-    <string name="mobile_badge_desc">频道徽章</string>
+    <string name="mobile_search_hint">搜索频道名或分类…</string>
+    <string name="mobile_search_clear">清除</string>
+    <string name="mobile_search_cancel">取消</string>
+    <string name="mobile_search_empty">未找到与「%1$s」匹配的频道</string>
+    <string name="mobile_favorite_added">已收藏「%1$s」</string>
+    <string name="mobile_favorite_removed">已取消收藏「%1$s」</string>
+    <!-- 卡片无障碍描述的后缀（TalkBack 朗读，不直接显示） -->
+    <string name="mobile_channel_desc_favorite">%1$s（已收藏）</string>
+    <string name="mobile_channel_desc_last_played">%1$s（上次播放）</string>
 
     <!-- 手机端订阅源（远程 M3U） -->
     <string name="mobile_action_refresh">刷新</string>
@@ -47,25 +56,41 @@
     <string name="mobile_subscription_hint">M3U 播放列表地址（http:// 或 https://）</string>
     <string name="mobile_subscription_invalid_url">请输入以 http:// 或 https:// 开头的有效地址</string>
     <string name="mobile_subscription_save">保存并刷新</string>
-    <string name="mobile_subscription_reset">恢复内置源</string>
-    <string name="mobile_subscription_reset_confirm_title">确认恢复内置源</string>
-    <string name="mobile_subscription_reset_confirm_message">将清除当前订阅地址与本地缓存，确定恢复为内置频道吗？</string>
-    <string name="mobile_subscription_reset_confirm_ok">确认恢复</string>
+    <string name="mobile_subscription_reset">清除订阅源</string>
+    <string name="mobile_subscription_reset_confirm_title">确认清除订阅源</string>
+    <string name="mobile_subscription_reset_confirm_message">将清除当前自定义 M3U 订阅地址与本地缓存（公开频道目录不受影响），确定继续吗？</string>
+    <string name="mobile_subscription_reset_confirm_ok">确认清除</string>
     <string name="mobile_subscription_cancel">取消</string>
     <string name="mobile_subscription_current">当前：%1$s</string>
-    <string name="mobile_subscription_none">未配置订阅源，当前使用内置频道</string>
-    <string name="mobile_refresh_builtin">已切换到内置频道（%1$d 个）</string>
-    <string name="mobile_refresh_remote">订阅已更新（%1$d 个）</string>
+    <string name="mobile_subscription_none">未配置自定义 M3U 订阅源</string>
+    <string name="mobile_refresh_builtin">未配置自定义订阅，当前共 %1$d 个可用频道</string>
+    <string name="mobile_refresh_remote">订阅已更新（共 %1$d 个频道）</string>
     <string name="mobile_refresh_cache">刷新失败，已回退到本地缓存（%1$d 个）：%2$s</string>
-    <string name="mobile_refresh_builtin_fallback">刷新失败，已回退到内置频道（%1$d 个）：%2$s</string>
+    <string name="mobile_refresh_builtin_fallback">订阅刷新失败，当前共 %1$d 个可用频道：%2$s</string>
     <string name="mobile_refresh_busy">正在刷新，请稍候…</string>
 
     <!-- 播放页触控浮层 / 频道抽屉 -->
     <string name="player_touch_prev">上一台</string>
     <string name="player_touch_next">下一台</string>
-    <string name="player_touch_list">频道列表</string>
+    <string name="player_touch_play">播放</string>
+    <string name="player_touch_pause">暂停</string>
+    <string name="player_touch_list">频道</string>
     <string name="player_touch_back">返回</string>
     <string name="player_touch_retry">重试</string>
+    <string name="player_touch_aspect_fit">适应</string>
+    <string name="player_touch_aspect_fill">铺满</string>
+    <string name="player_touch_aspect_zoom">裁剪</string>
+    <string name="player_touch_rotate">横竖屏</string>
+    <string name="player_touch_lock">锁屏</string>
+    <string name="player_touch_unlock">解锁</string>
+    <string name="player_touch_favorite">☆</string>
+    <string name="player_touch_favorited">★</string>
+    <string name="player_touch_favorite_desc">收藏或取消收藏当前频道</string>
+    <string name="player_gesture_brightness">亮度 %1$d%%</string>
+    <string name="player_gesture_volume">音量 %1$d%%</string>
+    <string name="player_gesture_paused">已暂停</string>
+    <string name="player_gesture_resumed">继续播放</string>
+    <string name="player_locked_hint">屏幕已锁定，点击左侧「解锁」恢复操作</string>
     <string name="player_tap_catcher_desc">轻触切换播放控制栏</string>
     <string name="player_drawer_scrim_desc">关闭频道列表</string>
     <string name="player_drawer_title">全部频道</string>

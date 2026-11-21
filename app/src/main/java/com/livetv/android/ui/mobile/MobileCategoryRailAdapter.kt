@@ -3,19 +3,20 @@ package com.livetv.android.ui.mobile
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.livetv.android.R
+import com.livetv.android.databinding.ItemMobileCategoryPillHorizontalBinding
 import com.livetv.android.databinding.ItemMobileCategoryRailBinding
 
 /**
- * 左侧分类导航栏适配器。
+ * 分类导航适配器：同时支持宽屏左侧竖排导航栏（`horizontal = false`）与竖屏顶部横向胶囊条（`horizontal = true`）。
  *
- * 每一项是"分类名 + 数量角标"的竖排胶囊；选中项用 `isSelected` 驱动背景 selector 高亮。
- * 结构上刻意留出扩展位：后续要加"收藏 / 最近播放"时，只要在 [MobileChannelList.RailItem]
- * 里扩展类型即可，不需要动这里的分组逻辑。
+ * 每一项是"分类名 + 数量角标"；选中项用 `isSelected` 驱动背景与文字对比度 selector。
  */
 class MobileCategoryRailAdapter(
     items: List<MobileChannelList.RailItem>,
+    private val horizontal: Boolean = false,
     private val onCategoryClick: (String?) -> Unit,
 ) : RecyclerView.Adapter<MobileCategoryRailAdapter.RailViewHolder>() {
 
@@ -34,31 +35,57 @@ class MobileCategoryRailAdapter(
 
     override fun getItemId(position: Int): Long = items[position].id?.hashCode()?.toLong() ?: 0L
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RailViewHolder =
-        RailViewHolder(
-            ItemMobileCategoryRailBinding.inflate(LayoutInflater.from(parent.context), parent, false),
-            onCategoryClick,
-        )
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RailViewHolder {
+        val inflater = LayoutInflater.from(parent.context)
+        return if (horizontal) {
+            val binding = ItemMobileCategoryPillHorizontalBinding.inflate(inflater, parent, false)
+            RailViewHolder(
+                root = binding.root,
+                nameView = binding.railCategoryName,
+                countView = binding.railCategoryCount,
+                horizontal = true,
+                onCategoryClick = onCategoryClick,
+            )
+        } else {
+            val binding = ItemMobileCategoryRailBinding.inflate(inflater, parent, false)
+            RailViewHolder(
+                root = binding.root,
+                nameView = binding.railCategoryName,
+                countView = binding.railCategoryCount,
+                horizontal = false,
+                onCategoryClick = onCategoryClick,
+            )
+        }
+    }
 
     override fun onBindViewHolder(holder: RailViewHolder, position: Int) {
         holder.bind(items[position])
     }
 
     class RailViewHolder(
-        private val binding: ItemMobileCategoryRailBinding,
+        private val root: View,
+        private val nameView: TextView,
+        private val countView: TextView,
+        private val horizontal: Boolean,
         private val onCategoryClick: (String?) -> Unit,
-    ) : RecyclerView.ViewHolder(binding.root) {
+    ) : RecyclerView.ViewHolder(root) {
 
         fun bind(item: MobileChannelList.RailItem) {
-            binding.railCategoryName.text = item.name
-            binding.railCategoryCount.text = item.count.toString()
-            binding.railCategoryCount.visibility = if (item.count > 0) View.VISIBLE else View.GONE
-            binding.root.isSelected = item.selected
-            binding.railCategoryName.isSelected = item.selected
-            binding.root.contentDescription = "${item.name} ${item.count}"
-            // D-Pad：分类项向右直接进频道网格（否则几何搜索会先命中整宽的顶栏）
-            binding.root.nextFocusRightId = R.id.rv_channels
-            binding.root.setOnClickListener { onCategoryClick(item.id) }
+            nameView.text = item.name
+            countView.text = item.count.toString()
+            countView.visibility = if (item.count > 0) View.VISIBLE else View.GONE
+            root.isSelected = item.selected
+            nameView.isSelected = item.selected
+            countView.isSelected = item.selected
+            root.contentDescription = "${item.name} ${item.count}"
+            if (horizontal) {
+                root.nextFocusUpId = R.id.mobile_refresh
+                root.nextFocusDownId = R.id.rv_channels
+            } else {
+                // D-Pad：左侧分类项向右直接进频道网格（否则几何搜索会先命中整宽的顶栏）
+                root.nextFocusRightId = R.id.rv_channels
+            }
+            root.setOnClickListener { onCategoryClick(item.id) }
         }
     }
 }

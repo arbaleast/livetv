@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机横屏 / 平板主界面（>= 600dp）：左侧分类导航栏 + 右侧"浮动单行顶栏（含内联搜索）+ 自适应多列网格"。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mobile_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/mobile_background"
+    android:orientation="horizontal">
+
+    <!-- 左侧分类导航栏 -->
+    <LinearLayout
+        android:id="@+id/layout_category_rail"
+        android:layout_width="118dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingTop="10dp">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rv_categories"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:nextFocusRight="@id/rv_channels"
+            android:overScrollMode="never"
+            android:paddingTop="2dp"
+            android:paddingBottom="10dp"
+            android:scrollbars="none" />
+    </LinearLayout>
+
+    <View
+        android:id="@+id/category_divider"
+        android:layout_width="1dp"
+        android:layout_height="match_parent"
+        android:background="@color/mobile_card_stroke" />
+
+    <!-- 右侧主内容区 -->
+    <FrameLayout
+        android:id="@+id/layout_content"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rv_channels"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:overScrollMode="never"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="18dp"
+            android:scrollbars="none" />
+
+        <!-- 浮动顶栏组合容器：顶栏本体 + 下缘 16dp 渐变遮罩，整体做 translationY 收展动画 -->
+        <LinearLayout
+            android:id="@+id/layout_top_header_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:orientation="vertical">
+
+            <FrameLayout
+                android:id="@+id/layout_top_header_frame"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:background="@color/mobile_background">
+
+                <LinearLayout
+                    android:id="@+id/layout_top_header"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:background="@color/mobile_background"
+                    android:gravity="center_vertical"
+                    android:nextFocusDown="@id/rv_channels"
+                    android:orientation="horizontal"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="8dp">
+
+                    <TextView
+                        android:id="@+id/top_title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:text="@string/app_name"
+                        android:textColor="@color/mobile_text_primary"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/mobile_total_count"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/bg_mobile_pill_count"
+                        android:paddingStart="8dp"
+                        android:paddingTop="1dp"
+                        android:paddingEnd="8dp"
+                        android:paddingBottom="1dp"
+                        android:textColor="@color/mobile_text_tertiary"
+                        android:textSize="11sp" />
+
+                    <Space
+                        android:layout_width="0dp"
+                        android:layout_height="1dp"
+                        android:layout_weight="1" />
+
+                    <TextView
+                        android:id="@+id/mobile_search"
+                        style="@style/WidgetLiveTvHeaderAction"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:minWidth="48dp"
+                        android:background="@drawable/bg_mobile_action_button"
+                        android:text="@string/mobile_action_search" />
+
+                    <TextView
+                        android:id="@+id/mobile_refresh"
+                        style="@style/WidgetLiveTvHeaderAction"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:minWidth="48dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_mobile_action_button"
+                        android:text="@string/mobile_action_refresh" />
+
+                    <TextView
+                        android:id="@+id/mobile_subscription"
+                        style="@style/WidgetLiveTvHeaderAction"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:minWidth="48dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_mobile_action_button"
+                        android:text="@string/mobile_action_subscription" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/layout_search_bar"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:background="@color/mobile_background"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="8dp"
+                    android:visibility="gone">
+
+                    <EditText
+                        android:id="@+id/edit_search"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:minHeight="48dp"
+                        android:background="@drawable/bg_mobile_action_button"
+                        android:hint="@string/mobile_search_hint"
+                        android:imeOptions="actionSearch"
+                        android:importantForAutofill="no"
+                        android:inputType="text"
+                        android:maxLines="1"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:textColor="@color/mobile_text_primary"
+                        android:textColorHint="@color/mobile_text_tertiary"
+                        android:textSize="13sp" />
+
+                    <TextView
+                        android:id="@+id/btn_search_clear"
+                        style="@style/WidgetLiveTvHeaderAction"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:minWidth="48dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_mobile_action_button"
+                        android:text="@string/mobile_search_clear"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/btn_search_close"
+                        style="@style/WidgetLiveTvHeaderAction"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:minHeight="48dp"
+                        android:minWidth="48dp"
+                        android:layout_marginStart="4dp"
+                        android:background="@drawable/bg_mobile_action_button"
+                        android:text="@string/mobile_search_cancel" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <!-- 顶栏下缘 16dp 渐变遮罩：与顶栏同属一个垂直容器，收起时整体上移，避免卡片边缘硬截断 -->
+            <View
+                android:id="@+id/top_edge_scrim"
+                android:layout_width="match_parent"
+                android:layout_height="16dp"
+                android:background="@drawable/bg_mobile_top_scrim"
+                android:clickable="false"
+                android:focusable="false" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/loading_view"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <ProgressBar
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:indeterminate="true" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="@string/mobile_loading_channels"
+                android:textColor="@color/mobile_text_secondary"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/empty_view"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:text="@string/mobile_empty_channels"
+            android:textColor="@color/mobile_text_tertiary"
+            android:textSize="14sp"
+            android:visibility="gone" />
+    </FrameLayout>
+</LinearLayout>

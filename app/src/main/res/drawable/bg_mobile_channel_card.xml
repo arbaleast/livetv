@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 频道卡片：默认细描边；`state_selected`（上次播放/正在播放）加一条强调色描边 -->
+<!-- 频道卡片：默认细描边；`state_focused` 亮色焦点描边；`state_selected`（上次播放）强调色描边 -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="@color/mobile_card_pressed">
     <item>
         <selector>
+            <item android:state_focused="true">
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/mobile_card_pressed" />
+                    <corners android:radius="14dp" />
+                    <stroke
+                        android:width="2dp"
+                        android:color="@color/mobile_text_primary" />
+                </shape>
+            </item>
             <item android:state_selected="true">
                 <shape android:shape="rectangle">
                     <solid android:color="@color/mobile_card_background" />

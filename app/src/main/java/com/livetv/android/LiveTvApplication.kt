@@ -12,6 +12,7 @@ import com.livetv.android.data.remote.RemoteM3uFetcher
 import com.livetv.android.data.repository.SubscriptionChannelRepository
 import com.livetv.android.data.subscription.FileSubscriptionStore
 import com.livetv.android.domain.model.ChannelCategory
+import com.livetv.android.domain.repository.ChannelCatalogStore
 import com.livetv.android.domain.repository.ChannelRepository
 import com.livetv.android.domain.repository.SubscriptionRepository
 import com.livetv.android.domain.stream.RoutingStreamResolver
@@ -53,6 +54,24 @@ class LiveTvApplication : Application() {
      * 全局频道仓库。TV 与手机端共用同一个实例，避免重复解析。
      */
     val channelRepository: ChannelRepository by lazy { subscriptionRepository }
+
+    /**
+     * 应用级聚合频道目录：统一汇总「自定义 M3U 订阅/缓存」与「MGTV 公开目录」。
+     *
+     * 首页（手机 / TV）与播放页（上下切台 / 抽屉）共用该聚合快照，
+     * 避免刷新订阅冲掉 MGTV 分组或播放页看不到 MGTV 频道。
+     */
+    val catalogStore: ChannelCatalogStore by lazy {
+        ChannelCatalogStore().apply {
+            updateSubscriptionCategories(channelRepository.getCategories())
+        }
+    }
+
+    /** 把仓库中最新的订阅分段同步进聚合目录（保留已加载的 MGTV 分组）。 */
+    fun refreshCatalogFromRepository(): List<ChannelCategory> {
+        catalogStore.updateSubscriptionCategories(channelRepository.getCategories())
+        return catalogStore.getAllCategories()
+    }
 
     /**
      * MGTV 频道目录协调器（**独立分组**，不并入内置频道仓库）。

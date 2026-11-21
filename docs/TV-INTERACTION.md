@@ -7,11 +7,11 @@
 
 | 按键 | KeyEvent | 语义 | 当前实现现状 |
 |---|---|---|---|
-| 上 / 下 | `KEYCODE_DPAD_UP` / `KEYCODE_DPAD_DOWN` | 在行（Row）之间纵向移动焦点 | 浏览页：依赖 Leanback 默认行为（`ListRow` 纵向排列）。**播放页**：阶段三起改为**切上/下一台**（详见 4.1） |
-| 左 / 右 | `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | 在行内卡片之间横向移动焦点；在首列向左且有 Header 时切到 Header 栏 | 依赖 Leanback 默认行为（`headersState = HEADERS_ENABLED`） |
-| OK | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | 激活当前焦点项（= 点击） | 浏览页：Leanback 默认转成点击 → 触发 `MainBrowseFragment.onItemViewClickedListener`。**播放页**：Error 态手动重置，否则呼出/隐藏控制器 |
-| Back | `KEYCODE_BACK` | 逐层返回：先关 Header，再退到上一个 Activity | 浏览页已启用 `isHeadersTransitionOnBackEnabled = true`；**播放页**：控制器显示时先隐藏控制器 |
-| Menu | `KEYCODE_MENU` | 打开应用级菜单 / 设置 | **未实现**：全项目无 `onKeyDown` 处理 Menu 键，无菜单页 |
+| 上 / 下 | `KEYCODE_DPAD_UP` / `KEYCODE_DPAD_DOWN` | 在行（Row）之间纵向移动焦点 | 浏览页：依赖 Leanback 默认行为（`ListRow` 纵向排列）。**播放页**：正常态切上/下一台；侧边选台栏打开时在频道列表中上下移动焦点（详见 4.1） |
+| 左 / 右 | `KEYCODE_DPAD_LEFT` / `KEYCODE_DPAD_RIGHT` | 在行内卡片之间横向移动焦点；在首列向左且有 Header 时切到 Header 栏 | 浏览页：Leanback 默认行为。**播放页**：正常态按左键呼出侧边选台栏；选台栏打开时按右键收起 |
+| OK | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | 激活当前焦点项（= 点击） | 浏览页：触发 `MainBrowseFragment.onItemViewClickedListener`。**播放页**：Error 态手动重置；选台栏打开时选中频道并收起；正常态呼出控制器 |
+| Back | `KEYCODE_BACK` | 逐层返回：先关 Header / 抽屉 / 控制器，再退到上一个 Activity | 浏览页启用 `isHeadersTransitionOnBackEnabled = true`；**播放页**：依次收起侧边选台栏 → 控制器 → 退出播放页 |
+| Menu | `KEYCODE_MENU` | 打开快速选台 / 菜单 | **播放页**：已实现，呼出侧边频道选台栏（与 `KEYCODE_DPAD_LEFT` 一致）；浏览页保留独立「设置与订阅」行 |
 
 补充约定：
 
@@ -24,8 +24,11 @@
 1. **返回后回到原位置**：从浏览页进入播放页再 Back 回来，焦点应落在**进入前的那张卡片**上，
    而不是列表首项。Leanback 依赖 `Row`/Fragment 的视图状态保存来实现这一点，
    因此**不要在 `onItemViewClickedListener` 里重建 adapter 或刷新列表**（重建会丢失焦点位置）。
-2. **刷新列表要保留焦点**：若将来列表来自 Repository 且支持刷新，需在刷新前后记录
-   `selectedPosition` 与焦点卡片 id，刷新后主动恢复（Leanback 提供 `setSelectedPosition`）。
+2. **刷新列表要保留焦点**：刷新前记录当前行的**标识**（分类名 / 「设置与订阅」行名）与行内条目 id，
+   刷新后**优先按标识**找回对应行——分类增删时行号会整体偏移，只按 `selectedPosition` 恢复必然错位；
+   行内条目按频道 id / 动作恢复，标识找不到时退回原行号（有界），最后才落回首行。
+   实现见 `MainBrowseFragment.loadRows(preserveFocus = true)` + `restoreFocus`，
+   焦点标识由 `onItemViewSelectedListener` 维护。
 3. **焦点不得丢失**：任何异步加载完成后，若当前焦点为空或落在已移除的卡片上，
    必须在下一个焦点请求时把焦点放回第一个可见卡片（否则遥控器"没反应"）。
 4. **不劫持方向键**：除"焦点为空时的兜底恢复"外，不要在 `onKeyDown` 里拦截 D-Pad。
@@ -75,12 +78,16 @@
 
 | 按键 | KeyEvent | 控制器**未由用户呼出**时 | 控制器**已由用户呼出**时 |
 |---|---|---|---|
-| 上 | `KEYCODE_DPAD_UP` | **切上一台**（循环：首 → 末），显示"已切换到：xxx" | 交还 `PlayerView`，焦点在控制器内移动 |
+| 上 | `KEYCODE_DPAD_UP` | **切上一台**（循环：首 → 末），显示"已切换到：xxx" | 交还 `PlayerView` 或侧边选台栏，焦点在列表/控制器内移动 |
 | 下 | `KEYCODE_DPAD_DOWN` | **切下一台**（循环：末 → 首），显示"已切换到：xxx" | 同上 |
-| 确认 | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | **Error 态**：手动重置（回主源、计数归零、立即重连）；正常态：呼出控制器并记为"用户呼出" | 交还控制器（按钮操作） |
-| 返回 | `KEYCODE_BACK` | 关闭 Activity（退出播放页） | **仅隐藏控制器**并清除"用户呼出"标记 |
+| 左 / 菜单 | `KEYCODE_DPAD_LEFT` / `KEYCODE_MENU` | **呼出侧边频道选台栏**并自动聚焦当前频道 | 交还控制器或选台栏 |
+| 右 | `KEYCODE_DPAD_RIGHT` | 交回系统默认处理 | 选台栏打开时**收起选台栏**；控制器打开时交还控制器 |
+| 确认 | `KEYCODE_DPAD_CENTER` / `KEYCODE_ENTER` | **Error 态**：手动重置（回主源、计数归零、立即重连）；正常态：呼出控制器并记为"用户呼出" | 选台栏打开时直接切到焦点频道并收起；控制器打开时执行按钮操作 |
+| 返回 | `KEYCODE_BACK` | 关闭 Activity（退出播放页） | 优先**收起侧边选台栏**，其次**隐藏控制器**并清除"用户呼出"标记 |
 
-其它按键（左右、MENU 等）一律交回系统默认处理。
+除上表列出的绑定外，其余按键一律交回系统默认处理：TV 正常播放态的 `KEYCODE_DPAD_RIGHT` 不拦截；
+`KEYCODE_DPAD_LEFT`/`KEYCODE_MENU` 只用于呼出侧边选台栏，选台栏打开时 `KEYCODE_DPAD_RIGHT` 用于收起
+（实现见 `util/PlayerKeyPolicy.kt`）。
 
 **控制器可见性的判定规则（重要）**：
 

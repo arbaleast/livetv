@@ -1,18 +1,21 @@
 package com.livetv.android.ui.mobile
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
-import android.view.Gravity
+import android.text.TextWatcher
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -22,35 +25,34 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
+import com.livetv.android.data.mgtv.MgtvStreamResolver
 import com.livetv.android.databinding.ActivityMobileMainBinding
 import com.livetv.android.domain.model.Channel
-import com.livetv.android.data.mgtv.MgtvStreamResolver
 import com.livetv.android.domain.model.ChannelCategory
 import com.livetv.android.domain.model.RefreshResult
 import com.livetv.android.player.RetryPolicy
 import com.livetv.android.ui.PlayerActivity
+import com.livetv.android.util.HeaderAutoHidePolicy
 
 /**
- * 手机 / 平板端的主界面：标准 `RecyclerView` + `GridLayoutManager` 触控网格。
+ * 手机 / 平板端的主界面：响应式分类导航 + 实时搜索 + 本地收藏 + 自适应触控网格。
  *
- * 与 TV 端完全隔离——TV 端走 `MainActivity` → Leanback `MainBrowseFragment`；
- * 两端共用底层资产：`LiveTvApplication.channelRepository`（数据）、`PlayerActivity`（播放）。
- *
- * 顶部提供可横向滚动的分类胶囊：`全部` 显示分组视图，选中某个分类则过滤为纯网格。
- *
- * 阶段八新增：顶栏的「刷新」与「订阅源」入口。
- * - 数据来源是**三级兜底**：远程订阅 → 本地有效缓存 → 内置 assets；
- * - 拉取在后台线程执行（[com.livetv.android.data.SubscriptionCoordinator]），
- *   结果回主线程刷新列表；
- * - 启动时若已配置订阅源，会在渲染内存快照之后**静默**刷新一次。
+ * - **紧凑竖屏（`< 600dp`）**：顶部横向分类胶囊条 + 满宽自适应网格（可用宽度 < 360dp 时单列）；
+ * - **宽屏 / 横屏（`>= 600dp`）**：左侧竖排分类栏 + 右侧浮动单行顶栏与多列网格；
+ * - 数据统一来自应用级 [com.livetv.android.domain.repository.ChannelCatalogStore]（订阅/缓存 + MGTV 目录）；
+ * - 上次播放频道与收藏列表通过 [MobileUiPreferences] 与 `PlayerActivity` 双向同步。
  */
 class MobileMainActivity : AppCompatActivity() {
 
     companion object {
         private const val STATE_SELECTED_CATEGORY_ID = "selected_category_id"
         private const val STATE_LAST_PLAYED_ID = "last_played_channel_id"
-        private const val PREFS_NAME = "livetv_mobile_ui"
-        private const val KEY_LAST_PLAYED = "last_played_channel_id"
+        private const val STATE_SEARCH_MODE = "search_mode"
+        private const val STATE_SEARCH_QUERY = "search_query"
+
+        /** 列表首个可见位置与偏移：旋转 / 分屏重建后恢复滚动位置（重整布局管理器会清空滚动状态）。 */
+        private const val STATE_SCROLL_POSITION = "scroll_position"
+        private const val STATE_SCROLL_OFFSET = "scroll_offset"
 
         /** 滚动多少像素后才收起顶栏（防抖）。 */
         private const val HEADER_HIDE_THRESHOLD_PX = 24
@@ -63,31 +65,84 @@ class MobileMainActivity : AppCompatActivity() {
     private lateinit var channelAdapter: MobileChannelAdapter
     private lateinit var railAdapter: MobileCategoryRailAdapter
 
+    private var navigationMode = MobileChannelList.NavigationMode.TOP_BAR
     private var categories: List<ChannelCategory> = emptyList()
+    private var displayCategories: List<ChannelCategory> = emptyList()
+    private var currentRows: List<MobileRow> = emptyList()
+    private var currentSpanCount = 2
     private var selectedCategoryId: String? = null
     private var accentColors: IntArray = IntArray(0)
     private var isRefreshing = false
-    private var mgtvLoaded = false
     private var mgtvLoading = false
-    /** 上次播放的频道 id（用于卡片高亮）；随 Activity 状态一起保存。 */
+
+    /** 上次播放的频道 id（用于卡片高亮与蓝点标识）；与播放页双向同步。 */
     private var lastPlayedChannelId: String? = null
+
+    /** 本地收藏频道 id 集合；与播放页双向同步。 */
+    private var favoriteIds: Set<String> = emptySet()
+
+    /** 内联实时搜索状态。 */
+    private var isSearchMode = false
+    private var searchQuery = ""
+
+    /** 待恢复的列表滚动锚点（重建/改变列数时使用）；`NO_POSITION` 表示不需要恢复。 */
+    private var pendingScrollPosition = RecyclerView.NO_POSITION
+    private var pendingScrollOffset = 0
+
+    /** 顶栏组合容器（顶栏 + 下缘渐变遮罩）的总高度（像素，仅 `LEFT_RAIL` 浮动顶栏模式使用）。 */
+    private var headerHeightPx = 0
+
+    /** 顶栏本体高度（像素，不含渐变遮罩）；用于网格顶部预留，避免把 16dp 遮罩也算进 padding。 */
+    private var headerBodyHeightPx = 0
+
+    /** 网格原始顶部 padding（像素）；计算顶栏预留时必须在它之上叠加，不能覆盖。 */
+    private var baseChannelsTopPadding = 0
+
+    /** 顶栏是否处于收起态（仅 `LEFT_RAIL` 浮动顶栏模式有效）。 */
+    private var headerHidden = false
+
+    private var accumulatedDy = 0
+
+    private val searchBackCallback = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            closeSearchMode()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        navigationMode = MobileChannelList.resolveNavigationMode(resources.configuration.screenWidthDp)
         binding = ActivityMobileMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        // 在代码改动任何 padding 之前记录原始值，保证 Insets 回调反复触发时幂等不叠加
+        baseChannelsTopPadding = binding.rvChannels.paddingTop
+
+        onBackPressedDispatcher.addCallback(this, searchBackCallback)
 
         applyImmersiveSystemBars()
         applyCutoutSafeInsets()
 
         selectedCategoryId = savedInstanceState?.getString(STATE_SELECTED_CATEGORY_ID)
         lastPlayedChannelId = savedInstanceState?.getString(STATE_LAST_PLAYED_ID)
-            ?: getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(KEY_LAST_PLAYED, null)
+            ?: MobileUiPreferences.getLastPlayedChannelId(this)
+        favoriteIds = MobileUiPreferences.getFavoriteChannelIds(this)
+        isSearchMode = savedInstanceState?.getBoolean(STATE_SEARCH_MODE, false) ?: false
+        searchQuery = savedInstanceState?.getString(STATE_SEARCH_QUERY).orEmpty()
+        pendingScrollPosition = savedInstanceState?.getInt(STATE_SCROLL_POSITION, RecyclerView.NO_POSITION)
+            ?: RecyclerView.NO_POSITION
+        pendingScrollOffset = savedInstanceState?.getInt(STATE_SCROLL_OFFSET, 0) ?: 0
         accentColors = loadAccentColors()
 
         setupList()
-        loadChannels()
         setupSubscriptionActions()
+        setupSearchActions()
+        loadChannels()
+        if (isSearchMode) {
+            // 先恢复搜索过滤结果，再应用滚动锚点：否则锚点会落到"未过滤前的全部分类"列表上
+            restoreSearchUi()
+        }
+        restorePendingScrollIfNeeded()
 
         // 仅首次进入时静默刷新（旋转重建不重复拉取）
         if (savedInstanceState == null && !app.subscriptionRepository.getSubscriptionUrl().isNullOrBlank()) {
@@ -97,45 +152,71 @@ class MobileMainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 从弹窗/其它页面返回时状态栏可能被系统重新显示，这里再收一次
+        // 从弹窗/播放页返回时收起状态栏，并同步播放页内最新的切台与收藏变更
         applyImmersiveSystemBars()
+        syncPreferencesFromPlayer()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        // 弹窗关闭、通知栏下拉收起等都会触发焦点变化，重新进入沉浸态
         if (hasFocus) applyImmersiveSystemBars()
     }
 
-    /**
-     * 沉浸式系统栏：默认隐藏状态栏，边缘下滑可临时呼出并自动收起。
-     *
-     * 额外在 `onResume` / `onWindowFocusChanged` 里重复调用，避免打开再关闭弹窗后
-     * 状态栏被系统恢复成常驻。
-     */
+    private fun syncPreferencesFromPlayer() {
+        val latestPlayed = MobileUiPreferences.getLastPlayedChannelId(this)
+        if (latestPlayed != lastPlayedChannelId) {
+            lastPlayedChannelId = latestPlayed
+            channelAdapter.setLastPlayedChannelId(latestPlayed)
+        }
+        val latestFavorites = MobileUiPreferences.getFavoriteChannelIds(this)
+        if (latestFavorites != favoriteIds) {
+            favoriteIds = latestFavorites
+            channelAdapter.setFavoriteChannelIds(latestFavorites)
+            applyCategories()
+        }
+    }
+
     private fun applyImmersiveSystemBars() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val controller = WindowCompat.getInsetsController(window, binding.root)
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        // 只隐藏状态栏：底部导航/手势条保留在播放页之外，避免影响返回手势
         controller.hide(WindowInsetsCompat.Type.statusBars())
     }
 
-    /**
-     * 挖孔屏安全区：把 `displayCutout()` 的**左右**安全区加到根容器内边距上。
-     *
-     * - 只在横屏（左右挖孔）时生效，竖屏时不额外加内边距；
-     * - 不叠加状态栏高度（状态栏是隐藏的），避免顶部出现多余空白。
-     */
     private fun applyCutoutSafeInsets() {
+        val baseChannelsBottom = binding.rvChannels.paddingBottom
+        val baseCategoriesBottom = binding.rvCategories.paddingBottom
+
         ViewCompat.setOnApplyWindowInsetsListener(binding.mobileRoot) { view, insets ->
             val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
             val navBar = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
             val applyLeft = maxOf(cutout.left, navBar.left)
             val applyRight = maxOf(cutout.right, navBar.right)
-            if (view.paddingLeft != applyLeft || view.paddingRight != applyRight) {
-                view.setPadding(applyLeft, view.paddingTop, applyRight, view.paddingBottom)
+            val applyTop = cutout.top
+            if (view.paddingLeft != applyLeft || view.paddingTop != applyTop || view.paddingRight != applyRight) {
+                view.setPadding(applyLeft, applyTop, applyRight, 0)
+            }
+
+            val channelsBottom = baseChannelsBottom + navBar.bottom
+            if (binding.rvChannels.paddingBottom != channelsBottom) {
+                binding.rvChannels.setPadding(
+                    binding.rvChannels.paddingStart,
+                    binding.rvChannels.paddingTop,
+                    binding.rvChannels.paddingEnd,
+                    channelsBottom,
+                )
+            }
+            if (navigationMode == MobileChannelList.NavigationMode.LEFT_RAIL) {
+                val categoriesBottom = baseCategoriesBottom + navBar.bottom
+                if (binding.rvCategories.paddingBottom != categoriesBottom) {
+                    binding.rvCategories.setPadding(
+                        binding.rvCategories.paddingStart,
+                        binding.rvCategories.paddingTop,
+                        binding.rvCategories.paddingEnd,
+                        categoriesBottom,
+                    )
+                }
             }
             insets
         }
@@ -146,6 +227,26 @@ class MobileMainActivity : AppCompatActivity() {
         super.onSaveInstanceState(outState)
         outState.putString(STATE_SELECTED_CATEGORY_ID, selectedCategoryId)
         outState.putString(STATE_LAST_PLAYED_ID, lastPlayedChannelId)
+        outState.putBoolean(STATE_SEARCH_MODE, isSearchMode)
+        outState.putString(STATE_SEARCH_QUERY, searchQuery)
+
+        val layoutManager = binding.rvChannels.layoutManager as? LinearLayoutManager
+        val firstVisible = layoutManager?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+        outState.putInt(STATE_SCROLL_POSITION, firstVisible)
+        outState.putInt(
+            STATE_SCROLL_OFFSET,
+            if (firstVisible != RecyclerView.NO_POSITION) {
+                layoutManager?.findViewByPosition(firstVisible)?.top ?: 0
+            } else {
+                0
+            },
+        )
+    }
+
+    override fun onDestroy() {
+        // 规范要求：延时动画必须在 onDestroy 清理，避免 ViewPropertyAnimator 在销毁后继续持有视图
+        binding.layoutTopHeaderContainer.animate().cancel()
+        super.onDestroy()
     }
 
     private val app: LiveTvApplication
@@ -154,7 +255,84 @@ class MobileMainActivity : AppCompatActivity() {
     private fun setupSubscriptionActions() {
         binding.mobileRefresh.setOnClickListener { refreshSubscription(silent = false) }
         binding.mobileSubscription.setOnClickListener { showSubscriptionDialog() }
+
+        val expandHeaderOnFocus = View.OnFocusChangeListener { _, hasFocus ->
+            if (hasFocus && isFloatingHeaderMode()) {
+                showTopHeader(animate = true)
+            }
+        }
+        binding.mobileSearch.onFocusChangeListener = expandHeaderOnFocus
+        binding.mobileRefresh.onFocusChangeListener = expandHeaderOnFocus
+        binding.mobileSubscription.onFocusChangeListener = expandHeaderOnFocus
     }
+
+    // ---------------- 内联实时搜索 ----------------
+
+    private fun setupSearchActions() {
+        binding.mobileSearch.setOnClickListener { openSearchMode() }
+        binding.btnSearchClear.setOnClickListener {
+            binding.editSearch.setText("")
+            binding.editSearch.requestFocus()
+        }
+        binding.btnSearchClose.setOnClickListener { closeSearchMode() }
+        binding.editSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                val next = s?.toString().orEmpty()
+                if (next == searchQuery) return
+                searchQuery = next
+                binding.btnSearchClear.visibility = if (next.isNotEmpty()) View.VISIBLE else View.GONE
+                applyFilter()
+            }
+        })
+    }
+
+    private fun openSearchMode() {
+        isSearchMode = true
+        searchBackCallback.isEnabled = true
+        showTopHeader(animate = false)
+        binding.layoutTopHeader.visibility = View.GONE
+        binding.layoutSearchBar.visibility = View.VISIBLE
+        binding.btnSearchClear.visibility = if (searchQuery.isNotEmpty()) View.VISIBLE else View.GONE
+        binding.editSearch.requestFocus()
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.showSoftInput(binding.editSearch, InputMethodManager.SHOW_IMPLICIT)
+    }
+
+    private fun restoreSearchUi() {
+        searchBackCallback.isEnabled = true
+        binding.layoutTopHeader.visibility = View.GONE
+        binding.layoutSearchBar.visibility = View.VISIBLE
+        binding.editSearch.setText(searchQuery)
+        binding.editSearch.setSelection(searchQuery.length)
+        binding.btnSearchClear.visibility = if (searchQuery.isNotEmpty()) View.VISIBLE else View.GONE
+        applyFilter()
+    }
+
+    /**
+     * 退出内联搜索。
+     *
+     * @param restoreFocusToSearchButton 关闭后是否把焦点还给顶栏「搜索」按钮。
+     *   点「取消」/返回键时为 `true`（避免方向键用户丢失焦点）；
+     *   点分类胶囊导致关闭时为 `false`（不能抢走用户刚点的分类项焦点）。
+     */
+    private fun closeSearchMode(restoreFocusToSearchButton: Boolean = true) {
+        isSearchMode = false
+        searchBackCallback.isEnabled = false
+        searchQuery = ""
+        binding.editSearch.setText("")
+        binding.layoutSearchBar.visibility = View.GONE
+        binding.layoutTopHeader.visibility = View.VISIBLE
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(binding.editSearch.windowToken, 0)
+        applyFilter()
+        if (restoreFocusToSearchButton) {
+            binding.mobileSearch.requestFocus()
+        }
+    }
+
+    // ---------------- 订阅刷新 ----------------
 
     private fun setRefreshingState(refreshing: Boolean) {
         isRefreshing = refreshing
@@ -167,11 +345,6 @@ class MobileMainActivity : AppCompatActivity() {
         binding.mobileSubscription.alpha = if (refreshing) 0.5f else 1f
     }
 
-    /**
-     * 后台刷新订阅源。
-     *
-     * @param silent `true` 时不弹提示（启动时的静默刷新）。
-     */
     private fun refreshSubscription(silent: Boolean) {
         if (isRefreshing) {
             if (!silent) toast(getString(R.string.mobile_refresh_busy))
@@ -207,20 +380,18 @@ class MobileMainActivity : AppCompatActivity() {
         toast(describeRefresh(result), longDuration = isFallback)
     }
 
-    private fun describeRefresh(result: RefreshResult): String = when (result) {
-        is RefreshResult.BuiltinOnly -> getString(R.string.mobile_refresh_builtin, result.channelCount)
-        is RefreshResult.RemoteLoaded -> getString(R.string.mobile_refresh_remote, result.channelCount)
-        is RefreshResult.FallbackToCache ->
-            getString(R.string.mobile_refresh_cache, result.channelCount, result.reason)
-        is RefreshResult.FallbackToBuiltin ->
-            getString(R.string.mobile_refresh_builtin_fallback, result.channelCount, result.reason)
+    private fun describeRefresh(result: RefreshResult): String {
+        val totalAvailable = app.catalogStore.getAllCategories().sumOf { it.channels.size }
+        return when (result) {
+            is RefreshResult.BuiltinOnly -> getString(R.string.mobile_refresh_builtin, totalAvailable)
+            is RefreshResult.RemoteLoaded -> getString(R.string.mobile_refresh_remote, totalAvailable)
+            is RefreshResult.FallbackToCache ->
+                getString(R.string.mobile_refresh_cache, result.channelCount, result.reason)
+            is RefreshResult.FallbackToBuiltin ->
+                getString(R.string.mobile_refresh_builtin_fallback, totalAvailable, result.reason)
+        }
     }
 
-    /**
-     * 订阅源配置对话框：输入 M3U 地址、保存并刷新、恢复内置源（带二次确认）、取消。
-     *
-     * 只允许输入 http(s) 的 M3U 地址；不内置任何"演示源"快捷入口。
-     */
     private fun showSubscriptionDialog() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -294,58 +465,80 @@ class MobileMainActivity : AppCompatActivity() {
         Toast.makeText(this, message, duration).show()
     }
 
+    private fun isFloatingHeaderMode(): Boolean =
+        navigationMode == MobileChannelList.NavigationMode.LEFT_RAIL
+
+    // ---------------- 列表与网格 ----------------
+
     private fun setupList() {
-        // 左侧分类导航栏
-        railAdapter = MobileCategoryRailAdapter(emptyList()) { categoryId -> selectCategory(categoryId) }
-        binding.rvCategories.layoutManager = LinearLayoutManager(this, RecyclerView.VERTICAL, false)
+        val isTopBar = navigationMode == MobileChannelList.NavigationMode.TOP_BAR
+
+        railAdapter = MobileCategoryRailAdapter(
+            items = emptyList(),
+            horizontal = isTopBar,
+            onCategoryClick = ::selectCategory,
+        )
+        binding.rvCategories.layoutManager = LinearLayoutManager(
+            this,
+            if (isTopBar) RecyclerView.HORIZONTAL else RecyclerView.VERTICAL,
+            false,
+        )
         binding.rvCategories.adapter = railAdapter
         binding.rvCategories.setHasFixedSize(false)
         binding.rvCategories.itemAnimator = null
 
-        // 右侧自适应网格
         channelAdapter = MobileChannelAdapter(
             rows = emptyList(),
             accentColors = accentColors,
             onChannelClick = ::openChannel,
             lastPlayedChannelId = lastPlayedChannelId,
-            onDpadUp = {
-                // 网格已在顶部：展开顶栏并把焦点交给刷新按钮（遥控器链路）
-                if (!binding.rvChannels.canScrollVertically(-1)) {
-                    showTopHeader(animate = true)
-                    binding.mobileRefresh.requestFocus()
+            favoriteChannelIds = favoriteIds,
+            onChannelLongClick = ::toggleFavoriteChannel,
+            onDpadUp = { position ->
+                if (!binding.rvChannels.canScrollVertically(-1) &&
+                    MobileChannelList.isInTopGridRow(currentRows, position, currentSpanCount)
+                ) {
+                    if (isTopBar) {
+                        binding.rvCategories.requestFocus()
+                    } else {
+                        showTopHeader(animate = true)
+                        binding.mobileRefresh.requestFocus()
+                    }
+                    true
+                } else {
+                    false
                 }
             },
         )
         binding.rvChannels.adapter = channelAdapter
         binding.rvChannels.itemAnimator = null
         binding.rvChannels.addItemDecoration(GridSpacingDecoration())
-        binding.rvChannels.addOnScrollListener(headerHideOnScrollListener())
+        setGridLayoutManager(currentSpanCount)
+        if (isFloatingHeaderMode()) {
+            binding.rvChannels.addOnScrollListener(headerHideOnScrollListener())
+            binding.layoutTopHeaderContainer.post {
+                // 容器 = 顶栏本体 + 16dp 渐变遮罩：动画整体位移用容器高度，网格预留只算本体高度。
+                // 竖屏（TOP_BAR）布局没有浮动容器，此处不会执行；frame 缺失时退回容器高度。
+                headerHeightPx = binding.layoutTopHeaderContainer.height
+                headerBodyHeightPx =
+                    binding.layoutTopHeaderFrame?.height ?: headerHeightPx
+                updateHeaderPadding()
+            }
+        } else {
+            // 竖屏顶栏在正常流里、不会压住列表；此时渐变遮罩只会把首行卡片顶部压暗，直接隐藏
+            binding.topEdgeScrim.visibility = View.GONE
+        }
         applyGridSpanCount()
 
-        // 顶栏是浮层：给网格留出同样的顶部内边距，并把顶栏高度记下来用于滑动隐藏
-        binding.layoutTopHeader.post {
-            headerHeightPx = binding.layoutTopHeader.height
-            updateHeaderPadding()
-        }
         binding.rvChannels.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            applyGridSpanCount()
+            binding.rvChannels.post { applyGridSpanCount() }
         }
 
-        // D-Pad / 焦点：网格最上一行向上 → 顶栏；最左列向左 → 分类栏
-        binding.rvChannels.nextFocusUpId = R.id.mobile_refresh
-        binding.rvChannels.nextFocusLeftId = R.id.rv_categories
-        binding.layoutTopHeader.setOnFocusChangeListener { _, hasFocus ->
-            if (hasFocus) showTopHeader(animate = true)
+        if (!isTopBar) {
+            binding.rvChannels.nextFocusLeftId = R.id.rv_categories
         }
     }
 
-    /** 顶栏高度（像素）；未测量完成前为 0。 */
-    private var headerHeightPx = 0
-
-    /** 顶栏是否处于收起态。 */
-    private var headerHidden = false
-
-    /** 按网格实测可用宽度重算列数（不写死分辨率/列数）。 */
     private fun applyGridSpanCount() {
         val widthPx = binding.rvChannels.width
         if (widthPx <= 0) return
@@ -357,6 +550,25 @@ class MobileMainActivity : AppCompatActivity() {
         val current = (binding.rvChannels.layoutManager as? GridLayoutManager)?.spanCount
         if (current == spanCount) return
 
+        setGridLayoutManager(spanCount)
+    }
+
+    private fun setGridLayoutManager(spanCount: Int) {
+        // 换 LayoutManager 会丢掉 RecyclerView 的滚动锚点（旋转/分屏改变列数时尤其明显）：
+        // 先记录当前首个可见项与偏移，装好新管理器后立刻回到同一位置。
+        val oldLayoutManager = binding.rvChannels.layoutManager as? LinearLayoutManager
+        // 适配器还没数据时先不消费待恢复锚点：空表布局会把 LinearLayoutManager 的 pending position 清掉
+        val savedPosition = pendingScrollPosition
+            .takeIf { it != RecyclerView.NO_POSITION && channelAdapter.itemCount > 0 }
+        val anchorPosition = savedPosition
+            ?: oldLayoutManager?.findFirstVisibleItemPosition()?.takeIf { it != RecyclerView.NO_POSITION }
+        val anchorOffset = if (savedPosition != null) {
+            pendingScrollOffset
+        } else {
+            anchorPosition?.let { oldLayoutManager?.findViewByPosition(it)?.top } ?: 0
+        }
+
+        currentSpanCount = spanCount
         val layoutManager = GridLayoutManager(this, spanCount)
         layoutManager.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
@@ -365,71 +577,90 @@ class MobileMainActivity : AppCompatActivity() {
             }
         }
         binding.rvChannels.layoutManager = layoutManager
+        if (anchorPosition != null) {
+            layoutManager.scrollToPositionWithOffset(anchorPosition, anchorOffset)
+        }
+        if (savedPosition != null) {
+            pendingScrollPosition = RecyclerView.NO_POSITION
+            pendingScrollOffset = 0
+        }
     }
 
     /**
-     * 滚动隐藏顶栏（不依赖 Material/AppBarLayout：仓库没有引入 `com.google.android.material`，
-     * 用 `OnScrollListener` + `translationY` 实现，零新增依赖）。
+     * 旋转 / 分屏重建后恢复频道网格的滚动位置。
      *
-     * 阈值防抖：累计位移超过 [HEADER_HIDE_THRESHOLD_PX] 才切换，避免手抖导致顶栏闪烁。
+     * 必须等适配器有数据后再调用：空表时的布局会清掉 `LinearLayoutManager` 的待滚动位置。
      */
+    private fun restorePendingScrollIfNeeded() {
+        if (pendingScrollPosition == RecyclerView.NO_POSITION) return
+        if (channelAdapter.itemCount == 0) return
+        val layoutManager = binding.rvChannels.layoutManager as? LinearLayoutManager
+        layoutManager?.scrollToPositionWithOffset(pendingScrollPosition, pendingScrollOffset)
+        pendingScrollPosition = RecyclerView.NO_POSITION
+        pendingScrollOffset = 0
+    }
+
     private fun headerHideOnScrollListener() = object : RecyclerView.OnScrollListener() {
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-            if (headerHeightPx <= 0) return
-            accumulatedDy += dy
-            if (!headerHidden && accumulatedDy > HEADER_HIDE_THRESHOLD_PX && canScroll()) {
-                accumulatedDy = 0
-                hideTopHeader()
-            } else if (headerHidden && accumulatedDy < -HEADER_HIDE_THRESHOLD_PX) {
-                accumulatedDy = 0
-                showTopHeader(animate = true)
-            } else if (!recyclerView.canScrollVertically(-1)) {
-                accumulatedDy = 0
-                if (headerHidden) showTopHeader(animate = true)
+            if (!isFloatingHeaderMode() || isSearchMode || headerHeightPx <= 0) return
+            val result = HeaderAutoHidePolicy.onScroll(
+                accumulatedDy = accumulatedDy,
+                dy = dy,
+                headerHidden = headerHidden,
+                thresholdPx = HEADER_HIDE_THRESHOLD_PX,
+            )
+            accumulatedDy = result.accumulatedDy
+            when (result.action) {
+                HeaderAutoHidePolicy.Action.HIDE ->
+                    if (canScroll()) hideTopHeader() else accumulatedDy = 0
+
+                HeaderAutoHidePolicy.Action.SHOW -> showTopHeader(animate = true)
+
+                HeaderAutoHidePolicy.Action.NONE -> {
+                    // 已经滚到顶部时无条件展开，避免"停在顶部但顶栏还在屏幕外"
+                    if (!recyclerView.canScrollVertically(-1)) {
+                        accumulatedDy = 0
+                        if (headerHidden) showTopHeader(animate = true)
+                    }
+                }
             }
         }
     }
 
-    private var accumulatedDy = 0
-
-    /** 当前分类内容是否足够滚动（不足一屏时不允许收起顶栏，避免回不来）。 */
     private fun canScroll(): Boolean = binding.rvChannels.canScrollVertically(1)
 
     private fun hideTopHeader() {
-        if (headerHidden || headerHeightPx <= 0) return
+        if (!isFloatingHeaderMode() || isSearchMode || headerHidden || headerHeightPx <= 0) return
         headerHidden = true
-        binding.layoutTopHeader.animate()
+        // 顶栏与下缘渐变遮罩在同一个垂直容器里，整体上移即可同时隐藏，避免遮罩单独留在屏幕上
+        binding.layoutTopHeaderContainer.animate()
             .translationY(-headerHeightPx.toFloat())
             .setDuration(HEADER_ANIM_MS)
             .start()
-        binding.topEdgeScrim.animate().alpha(0f).setDuration(HEADER_ANIM_MS).start()
     }
 
     private fun showTopHeader(animate: Boolean) {
-        if (headerHeightPx <= 0) return
+        if (!isFloatingHeaderMode() || headerHeightPx <= 0) return
         headerHidden = false
         accumulatedDy = 0
         if (animate) {
-            binding.layoutTopHeader.animate().translationY(0f).setDuration(HEADER_ANIM_MS).start()
-            binding.topEdgeScrim.animate().alpha(1f).setDuration(HEADER_ANIM_MS).start()
+            binding.layoutTopHeaderContainer.animate().translationY(0f).setDuration(HEADER_ANIM_MS).start()
         } else {
-            binding.layoutTopHeader.translationY = 0f
-            binding.topEdgeScrim.alpha = 1f
+            binding.layoutTopHeaderContainer.translationY = 0f
         }
     }
 
-    /** 顶栏高度 = 网格顶部内边距（收敛为一个来源，避免两处写死）。 */
     private fun updateHeaderPadding() {
-        if (headerHeightPx <= 0) return
+        if (!isFloatingHeaderMode() || headerBodyHeightPx <= 0) return
+        // 只预留顶栏本体高度：16dp 渐变遮罩应压在卡片上方做柔化，而不是把首行推下去
         binding.rvChannels.setPadding(
             binding.rvChannels.paddingStart,
-            headerHeightPx + dp(6),
+            headerBodyHeightPx + baseChannelsTopPadding,
             binding.rvChannels.paddingEnd,
             binding.rvChannels.paddingBottom,
         )
     }
 
-    /** 网格间距：统一由 ItemDecoration 控制，保证左右边缘与行列间距对称。 */
     private inner class GridSpacingDecoration : RecyclerView.ItemDecoration() {
         private val halfGap = dp(4)
 
@@ -444,56 +675,66 @@ class MobileMainActivity : AppCompatActivity() {
     }
 
     private fun loadChannels() {
-        val repository = (application as LiveTvApplication).channelRepository
-        categories = repository.getCategories()
+        categories = app.refreshCatalogFromRepository()
+        val needsMgtvLoad = !app.catalogStore.hasSupplementalCategories() && !mgtvLoading
+        if (needsMgtvLoad) {
+            mgtvLoading = true
+        }
         applyCategories()
-        loadMgtvChannelsIfNeeded()
+        if (needsMgtvLoad) {
+            fetchMgtvCatalog()
+        }
     }
 
-    /**
-     * 加载 MGTV 频道目录并作为**独立分组**追加到列表末尾。
-     *
-     * 只拉一次；失败时保持原列表不变，不影响内置/订阅频道。
-     */
-    private fun loadMgtvChannelsIfNeeded() {
-        if (mgtvLoaded || mgtvLoading) return
-        mgtvLoading = true
+    private fun fetchMgtvCatalog() {
         app.mgtvCatalogCoordinator.load { mgtvCategories ->
             mgtvLoading = false
+            if (mgtvCategories.isNotEmpty()) {
+                app.catalogStore.updateSupplementalCategories(mgtvCategories)
+            }
             if (isFinishing || isDestroyed) return@load
-            if (mgtvCategories.isEmpty()) return@load
-            mgtvLoaded = true
-            // 追加到末尾，避免打乱内置分组的顺序
-            categories = categories + mgtvCategories
+            categories = app.catalogStore.getAllCategories()
             applyCategories()
         }
     }
 
-    /** 按当前分类列表刷新总数、左侧导航栏与网格。 */
     private fun applyCategories() {
-        selectedCategoryId = MobileChannelList.resolveSelectedCategoryId(categories, selectedCategoryId)
+        displayCategories = MobileChannelList.prependFavoritesCategory(categories, favoriteIds)
+        selectedCategoryId = MobileChannelList.resolveSelectedCategoryId(displayCategories, selectedCategoryId)
 
+        // 总台数按基础目录计算，避免“收藏”虚拟分组重复计数
         val totalChannels = categories.sumOf { it.channels.size }
         binding.mobileTotalCount.text = getString(R.string.mobile_total_channels, totalChannels)
 
-        railAdapter.updateItems(MobileChannelList.buildRailItems(categories, selectedCategoryId))
+        railAdapter.updateItems(buildDisplayRailItems())
         scrollRailToSelected()
         applyFilter()
     }
 
+    private fun buildDisplayRailItems(): List<MobileChannelList.RailItem> {
+        val raw = MobileChannelList.buildRailItems(displayCategories, selectedCategoryId)
+        val totalChannels = categories.sumOf { it.channels.size }
+        // 修正“全部”项角标为真实总台数（不含收藏重复计数）
+        return raw.mapIndexed { index, item ->
+            if (index == 0 && item.id == null) item.copy(count = totalChannels) else item
+        }
+    }
+
     private fun selectCategory(categoryId: String?) {
         selectedCategoryId = categoryId
-        railAdapter.updateItems(MobileChannelList.buildRailItems(categories, selectedCategoryId))
+        if (isSearchMode) {
+            // 用户主动点了分类：焦点跟随分类项，不要把焦点抢回搜索按钮
+            closeSearchMode(restoreFocusToSearchButton = false)
+        }
+        railAdapter.updateItems(buildDisplayRailItems())
         scrollRailToSelected()
         applyFilter()
-        // 切换分类必须恢复顶栏：短列表回滑不上去，否则顶栏会永久消失
         showTopHeader(animate = true)
         binding.rvChannels.scrollToPosition(0)
     }
 
     private fun scrollRailToSelected() {
-        val index = MobileChannelList.buildRailItems(categories, selectedCategoryId)
-            .indexOfFirst { it.selected }
+        val index = buildDisplayRailItems().indexOfFirst { it.selected }
         if (index >= 0) {
             (binding.rvCategories.layoutManager as? LinearLayoutManager)
                 ?.scrollToPositionWithOffset(index, dp(4))
@@ -501,33 +742,60 @@ class MobileMainActivity : AppCompatActivity() {
     }
 
     private fun applyFilter() {
-        val rows = MobileChannelList.filterRows(categories, selectedCategoryId)
+        val trimmedQuery = searchQuery.trim()
+        val rows = if (isSearchMode && trimmedQuery.isNotEmpty()) {
+            MobileChannelList.searchRows(categories, trimmedQuery)
+        } else {
+            // 「全部」视图不重复展示“收藏”卡片分段，仅在左侧/顶部「收藏」分组下展示收藏网格
+            val sourceCategories = if (selectedCategoryId == null) categories else displayCategories
+            MobileChannelList.filterRows(sourceCategories, selectedCategoryId)
+        }
+        currentRows = rows
 
         if (rows.isEmpty()) {
             binding.rvChannels.visibility = View.GONE
-            binding.emptyView.visibility = View.VISIBLE
+            val showLoading = !isSearchMode && (mgtvLoading || isRefreshing) && categories.isEmpty()
+            binding.loadingView.visibility = if (showLoading) View.VISIBLE else View.GONE
+            binding.emptyView.visibility = if (showLoading) View.GONE else View.VISIBLE
+            binding.emptyView.text = if (isSearchMode && trimmedQuery.isNotEmpty()) {
+                getString(R.string.mobile_search_empty, trimmedQuery)
+            } else {
+                getString(R.string.mobile_empty_channels)
+            }
             showTopHeader(animate = false)
             return
         }
 
-        binding.rvChannels.visibility = View.VISIBLE
+        binding.loadingView.visibility = View.GONE
         binding.emptyView.visibility = View.GONE
+        binding.rvChannels.visibility = View.VISIBLE
         channelAdapter.updateRows(rows)
-        // 内容变化后（刷新/切分类/追加 MGTV 分组）重新评估：短列表不允许保持收起态
-        binding.rvChannels.post {
-            if (!canScroll()) showTopHeader(animate = true)
+        if (isFloatingHeaderMode()) {
+            binding.rvChannels.post {
+                if (!canScroll()) showTopHeader(animate = true)
+            }
         }
     }
 
+    private fun toggleFavoriteChannel(channel: Channel) {
+        val nowFavorite = MobileUiPreferences.toggleFavoriteChannel(this, channel.id)
+        favoriteIds = MobileUiPreferences.getFavoriteChannelIds(this)
+        channelAdapter.setFavoriteChannelIds(favoriteIds)
+        applyCategories()
+        toast(
+            getString(
+                if (nowFavorite) R.string.mobile_favorite_added else R.string.mobile_favorite_removed,
+                channel.name,
+            ),
+        )
+    }
+
     private fun openChannel(channel: Channel) {
-        // 动态源频道（如 `mgtv:` 前缀）的 streamUrl 本来就是空的：
-        // 真实地址要等播放页里由 StreamResolver 按会话去解析，因此不能按"空地址"拦下。
         val isDynamicSource = channel.id.startsWith(MgtvStreamResolver.CHANNEL_ID_PREFIX)
         if (channel.streamUrl.isEmpty() && !isDynamicSource) {
             toast(getString(R.string.channel_no_stream_url, channel.name))
             return
         }
-        // 播放页双端通用：Extra 与 TV 端 MainBrowseFragment 完全一致
         rememberLastPlayed(channel.id)
         startActivity(
             Intent(this, PlayerActivity::class.java)
@@ -537,14 +805,10 @@ class MobileMainActivity : AppCompatActivity() {
         )
     }
 
-    /** 记住"上次播放"的频道：用于列表卡片的高亮边框（纯本地 UI 状态，不入库）。 */
     private fun rememberLastPlayed(channelId: String) {
         lastPlayedChannelId = channelId
         channelAdapter.setLastPlayedChannelId(channelId)
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            .edit()
-            .putString(KEY_LAST_PLAYED, channelId)
-            .apply()
+        MobileUiPreferences.setLastPlayedChannelId(this, channelId)
     }
 
     private fun loadAccentColors(): IntArray {
@@ -557,10 +821,4 @@ class MobileMainActivity : AppCompatActivity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-    private fun screenWidthDp(): Int {
-        val metrics = resources.displayMetrics
-        // px -> dp 必须除以 density；不能用 TypedValue.applyDimension（那是 dp -> px）
-        return MobileChannelList.pxToDp(metrics.widthPixels, metrics.density)
-    }
 }

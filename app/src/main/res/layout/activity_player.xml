@@ -13,7 +13,7 @@
         app:resize_mode="fit" />
 
     <!--
-        触控设备的"轻触画面"捕获层：TV 设备保持 GONE，不参与任何焦点与按键逻辑。
+        触控设备的点击/双击/亮度/音量手势捕获层：TV 设备保持 GONE，不参与任何焦点与按键逻辑。
     -->
     <View
         android:id="@+id/view_tap_catcher"
@@ -39,22 +39,58 @@
         android:textSize="22sp"
         android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/status_text"
+    <!-- 加载 / 缓冲 / 切台状态胶囊（含转圈指示器） -->
+    <LinearLayout
+        android:id="@+id/status_container"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:layout_marginStart="24dp"
         android:layout_marginEnd="24dp"
-        android:accessibilityLiveRegion="polite"
         android:background="@drawable/bg_player_badge"
-        android:gravity="center"
-        android:paddingStart="18dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
         android:paddingTop="10dp"
         android:paddingEnd="18dp"
         android:paddingBottom="10dp"
+        android:visibility="gone">
+
+        <ProgressBar
+            android:id="@+id/status_progress"
+            style="?android:attr/progressBarStyleSmall"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginEnd="10dp"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/status_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:accessibilityLiveRegion="polite"
+            android:gravity="center"
+            android:textColor="@android:color/white"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+    <!-- 手势调节提示胶囊（亮度 / 音量 / 暂停 / 锁屏） -->
+    <TextView
+        android:id="@+id/gesture_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginBottom="96dp"
+        android:background="@drawable/bg_player_badge"
+        android:gravity="center"
+        android:paddingStart="18dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="8dp"
         android:textColor="@android:color/white"
-        android:textSize="17sp"
+        android:textSize="15sp"
+        android:textStyle="bold"
         android:visibility="gone" />
 
     <TextView
@@ -76,7 +112,7 @@
         android:visibility="gone" />
 
     <!--
-        触控浮层：顶部（返回 / 频道位置 / 频道列表）+ 底部（上一台 / 重试 / 下一台）。
+        触控浮层：顶部（返回 / 频道位置 / 收藏 / 比例 / 频道）+ 底部（上一台 / 暂停 / 重试 / 下一台 / 横竖屏）。
         整个容器不可点击，触摸事件会继续落到下层的 view_tap_catcher 上。
     -->
     <FrameLayout
@@ -93,9 +129,9 @@
             android:background="#99000000"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
+            android:paddingStart="10dp"
             android:paddingTop="10dp"
-            android:paddingEnd="12dp"
+            android:paddingEnd="10dp"
             android:paddingBottom="10dp">
 
             <TextView
@@ -108,9 +144,9 @@
                 android:gravity="center"
                 android:minWidth="48dp"
                 android:minHeight="48dp"
-                android:paddingStart="16dp"
+                android:paddingStart="12dp"
                 android:paddingTop="8dp"
-                android:paddingEnd="16dp"
+                android:paddingEnd="12dp"
                 android:paddingBottom="8dp"
                 android:text="@string/player_touch_back"
                 android:textColor="@color/mobile_text_primary"
@@ -120,7 +156,7 @@
                 android:id="@+id/overlay_channel_info"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="10dp"
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:maxLines="1"
@@ -129,19 +165,58 @@
                 android:textStyle="bold" />
 
             <TextView
-                android:id="@+id/overlay_channel_list"
+                android:id="@+id/overlay_favorite"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_player_touch_button"
+                android:clickable="true"
+                android:contentDescription="@string/player_touch_favorite_desc"
+                android:focusable="true"
+                android:gravity="center"
+                android:minWidth="44dp"
+                android:minHeight="48dp"
+                android:paddingStart="10dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="10dp"
+                android:paddingBottom="8dp"
+                android:text="@string/player_touch_favorite"
+                android:textColor="@color/mobile_text_primary"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/overlay_aspect"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
                 android:minWidth="48dp"
                 android:minHeight="48dp"
-                android:paddingStart="16dp"
+                android:paddingStart="12dp"
                 android:paddingTop="8dp"
-                android:paddingEnd="16dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="8dp"
+                android:text="@string/player_touch_aspect_fit"
+                android:textColor="@color/mobile_text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/overlay_channel_list"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_player_touch_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:paddingStart="12dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="12dp"
                 android:paddingBottom="8dp"
                 android:text="@string/player_touch_list"
                 android:textColor="@color/mobile_text_primary"
@@ -156,9 +231,9 @@
             android:background="#99000000"
             android:gravity="center"
             android:orientation="horizontal"
-            android:paddingStart="12dp"
+            android:paddingStart="10dp"
             android:paddingTop="10dp"
-            android:paddingEnd="12dp"
+            android:paddingEnd="10dp"
             android:paddingBottom="14dp">
 
             <TextView
@@ -171,54 +246,114 @@
                 android:gravity="center"
                 android:minWidth="48dp"
                 android:minHeight="48dp"
-                android:paddingStart="20dp"
-                android:paddingTop="10dp"
-                android:paddingEnd="20dp"
-                android:paddingBottom="10dp"
+                android:paddingStart="14dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="8dp"
                 android:text="@string/player_touch_prev"
                 android:textColor="@color/mobile_text_primary"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
 
             <TextView
-                android:id="@+id/overlay_retry"
+                android:id="@+id/overlay_play_pause"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="8dp"
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
                 android:minWidth="48dp"
                 android:minHeight="48dp"
-                android:paddingStart="20dp"
-                android:paddingTop="10dp"
-                android:paddingEnd="20dp"
-                android:paddingBottom="10dp"
+                android:paddingStart="14dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="8dp"
+                android:text="@string/player_touch_pause"
+                android:textColor="@color/mobile_text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/overlay_retry"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_player_touch_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:paddingStart="14dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="8dp"
                 android:text="@string/player_touch_retry"
                 android:textColor="@color/mobile_accent"
-                android:textSize="14sp"
+                android:textSize="13sp"
                 android:visibility="gone" />
 
             <TextView
                 android:id="@+id/overlay_next"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="8dp"
                 android:background="@drawable/bg_player_touch_button"
                 android:clickable="true"
                 android:focusable="true"
                 android:gravity="center"
                 android:minWidth="48dp"
                 android:minHeight="48dp"
-                android:paddingStart="20dp"
-                android:paddingTop="10dp"
-                android:paddingEnd="20dp"
-                android:paddingBottom="10dp"
+                android:paddingStart="14dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="8dp"
                 android:text="@string/player_touch_next"
                 android:textColor="@color/mobile_text_primary"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/overlay_rotate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/bg_player_touch_button"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:paddingStart="12dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="12dp"
+                android:paddingBottom="8dp"
+                android:text="@string/player_touch_rotate"
+                android:textColor="@color/mobile_text_primary"
+                android:textSize="13sp" />
         </LinearLayout>
     </FrameLayout>
+
+    <!-- 独立防误触锁屏按钮：浮层显示或锁屏后轻触屏幕时出现 -->
+    <TextView
+        android:id="@+id/overlay_lock"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical|start"
+        android:layout_marginStart="16dp"
+        android:background="@drawable/bg_player_touch_button"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:minWidth="48dp"
+        android:minHeight="48dp"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:text="@string/player_touch_lock"
+        android:textColor="@color/mobile_text_primary"
+        android:textSize="12sp"
+        android:visibility="gone" />
 
     <!-- 频道列表抽屉：半透明遮罩 + 右侧滑出面板 -->
     <View
@@ -247,6 +382,7 @@
             android:background="@color/mobile_drawer_edge" />
 
         <LinearLayout
+            android:id="@+id/drawer_content"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:orientation="vertical">

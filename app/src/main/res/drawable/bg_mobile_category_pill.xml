@@ -1,23 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ripple xmlns:android="http://schemas.android.com/apk/res/android"
-    android:color="#26FFFFFF">
-    <item>
-        <selector>
-            <item android:state_selected="true">
-                <shape android:shape="rectangle">
-                    <solid android:color="@color/mobile_accent" />
-                    <corners android:radius="18dp" />
-                </shape>
-            </item>
-            <item>
-                <shape android:shape="rectangle">
-                    <solid android:color="@color/mobile_pill_background" />
-                    <corners android:radius="18dp" />
-                    <stroke
-                        android:width="1dp"
-                        android:color="@color/mobile_card_stroke" />
-                </shape>
-            </item>
-        </selector>
-    </item>
-</ripple>
+<!--
+  分类胶囊 / 左侧导航项背景。
+  选中态改为深蓝底（#1E3A8A）+ 高亮描边：白字对比度约 10.4:1、浅蓝数量字约 4.9:1，
+  修掉旧版 #3B82F6 实心蓝底 + 白字仅约 3.7:1 的低对比问题。
+-->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:insetTop="3dp"
+    android:insetBottom="3dp">
+    <ripple android:color="#26FFFFFF">
+        <item>
+            <selector>
+                <item android:state_focused="true" android:state_selected="true">
+                    <shape android:shape="rectangle">
+                        <solid android:color="@color/mobile_category_selected" />
+                        <corners android:radius="18dp" />
+                        <stroke
+                            android:width="2dp"
+                            android:color="@color/mobile_text_primary" />
+                    </shape>
+                </item>
+                <item android:state_selected="true">
+                    <shape android:shape="rectangle">
+                        <solid android:color="@color/mobile_category_selected" />
+                        <corners android:radius="18dp" />
+                        <stroke
+                            android:width="1dp"
+                            android:color="@color/mobile_accent" />
+                    </shape>
+                </item>
+                <item android:state_focused="true">
+                    <shape android:shape="rectangle">
+                        <solid android:color="@color/mobile_card_pressed" />
+                        <corners android:radius="18dp" />
+                        <stroke
+                            android:width="2dp"
+                            android:color="@color/mobile_accent" />
+                    </shape>
+                </item>
+                <item>
+                    <shape android:shape="rectangle">
+                        <solid android:color="@color/mobile_pill_background" />
+                        <corners android:radius="18dp" />
+                        <stroke
+                            android:width="1dp"
+                            android:color="@color/mobile_card_stroke" />
+                    </shape>
+                </item>
+            </selector>
+        </item>
+    </ripple>
+</inset>

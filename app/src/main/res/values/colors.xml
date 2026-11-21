@@ -15,6 +15,10 @@
     <color name="mobile_text_secondary">#B0BACB</color>
     <color name="mobile_text_tertiary">#8C98AD</color>
     <color name="mobile_accent">#3B82F6</color>
+    <!-- 分类选中态：深蓝底 + 高亮描边。白字对 #1E3A8A 对比度约 10.4:1，
+         浅蓝数量文字约 4.9:1，均满足 WCAG AA 4.5:1；避免此前 #3B82F6 底 + 白字仅 3.7:1 的问题 -->
+    <color name="mobile_category_selected">#1E3A8A</color>
+    <color name="mobile_category_selected_count">#BFDBFE</color>
     <color name="mobile_pill_background">#151A23</color>
     <color name="mobile_drawer_background">#E6111620</color>
     <color name="mobile_drawer_edge">#26FFFFFF</color>

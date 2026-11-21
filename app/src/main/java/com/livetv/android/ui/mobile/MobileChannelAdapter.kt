@@ -22,10 +22,14 @@ class MobileChannelAdapter(
     rows: List<MobileRow>,
     private val accentColors: IntArray,
     private val onChannelClick: (Channel) -> Unit,
-    /** 上次播放的频道 id：用于给卡片加"最近播放"高亮边框。 */
+    /** 上次播放的频道 id：用于给卡片加"最近播放"高亮边框与蓝点。 */
     private var lastPlayedChannelId: String? = null,
-    /** D-Pad UP 回调：网格在顶部时交给 Activity 展开顶栏并转移焦点。 */
-    private val onDpadUp: (() -> Unit)? = null,
+    /** 已收藏的频道 id 集合：用于展示卡片星标。 */
+    private var favoriteChannelIds: Set<String> = emptySet(),
+    /** 长按卡片回调（用于快速收藏/取消收藏）。 */
+    private val onChannelLongClick: ((Channel) -> Unit)? = null,
+    /** D-Pad UP 回调：传入当前卡片适配器位置，仅当确实消费事件（顶部首行跳转顶栏）时返回 `true`。 */
+    private val onDpadUp: ((Int) -> Boolean)? = null,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     private var rows: List<MobileRow> = rows
@@ -40,11 +44,30 @@ class MobileChannelAdapter(
         notifyDataSetChanged()
     }
 
-    /** 更新"上次播放"高亮（只重绘受影响的卡片）。 */
+    /** 更新"上次播放"高亮（仅局部刷新受影响的卡片，避免整表闪烁）。 */
     fun setLastPlayedChannelId(channelId: String?) {
         if (lastPlayedChannelId == channelId) return
+        val previous = lastPlayedChannelId
         lastPlayedChannelId = channelId
-        notifyDataSetChanged()
+        rows.forEachIndexed { index, row ->
+            if (row is MobileRow.ChannelCard &&
+                (row.channel.id == previous || row.channel.id == channelId)
+            ) {
+                notifyItemChanged(index)
+            }
+        }
+    }
+
+    /** 更新本地收藏集合（仅局部刷新收藏态发生变化的卡片）。 */
+    fun setFavoriteChannelIds(ids: Set<String>) {
+        if (favoriteChannelIds == ids) return
+        val changed = (favoriteChannelIds - ids) + (ids - favoriteChannelIds)
+        favoriteChannelIds = ids
+        rows.forEachIndexed { index, row ->
+            if (row is MobileRow.ChannelCard && row.channel.id in changed) {
+                notifyItemChanged(index)
+            }
+        }
     }
 
     private fun buildOrdinals(source: List<MobileRow>): IntArray {
@@ -77,6 +100,7 @@ class MobileChannelAdapter(
                 binding = ItemMobileChannelBinding.inflate(inflater, parent, false),
                 accentColors = accentColors,
                 onChannelClick = onChannelClick,
+                onChannelLongClick = onChannelLongClick,
                 onDpadUp = onDpadUp,
             )
         }
@@ -89,6 +113,7 @@ class MobileChannelAdapter(
                 card = row,
                 ordinal = ordinals[position],
                 isLastPlayed = row.channel.id == lastPlayedChannelId,
+                isFavorite = row.channel.id in favoriteChannelIds,
             )
         }
     }
@@ -108,10 +133,16 @@ class MobileChannelAdapter(
         private val binding: ItemMobileChannelBinding,
         private val accentColors: IntArray,
         private val onChannelClick: (Channel) -> Unit,
-        private val onDpadUp: (() -> Unit)? = null,
+        private val onChannelLongClick: ((Channel) -> Unit)? = null,
+        private val onDpadUp: ((Int) -> Boolean)? = null,
     ) : RecyclerView.ViewHolder(binding.root) {
 
-        fun bind(card: MobileRow.ChannelCard, ordinal: Int, isLastPlayed: Boolean = false) {
+        fun bind(
+            card: MobileRow.ChannelCard,
+            ordinal: Int,
+            isLastPlayed: Boolean = false,
+            isFavorite: Boolean = false,
+        ) {
             val channel = card.channel
             binding.root.isSelected = isLastPlayed
             val accent = accentColorFor(card.categoryName)
@@ -120,6 +151,10 @@ class MobileChannelAdapter(
             applyBadgeStyle(binding.channelBadge, accent)
             binding.channelIndex.text = MobileChannelList.formatChannelIndex(ordinal)
             binding.channelName.text = channel.name
+            binding.channelPlayingDot.visibility =
+                if (isLastPlayed) android.view.View.VISIBLE else android.view.View.GONE
+            binding.channelFavoriteMark.visibility =
+                if (isFavorite) android.view.View.VISIBLE else android.view.View.GONE
 
             // 副标题只展示"用户能看懂"的信息；没有有效简介时整行隐藏，主标题自然垂直居中
             val subtitle = MobileChannelList.sanitizeSubtitle(channel)
@@ -130,23 +165,36 @@ class MobileChannelAdapter(
                 binding.channelDescription.text = subtitle
             }
 
-            binding.root.contentDescription =
-                if (isLastPlayed) "${channel.name}（上次播放）" else channel.name
-            binding.root.nextFocusUpId = R.id.mobile_refresh
-            // D-Pad：网格已在顶部时按 UP → 展开顶栏并把焦点交给刷新按钮。
-            // RecyclerView 的 LayoutManager 会先拦截方向键做内部滚动，所以这里显式接管。
+            // 无障碍描述统一走字符串资源（含状态后缀占位符），避免硬编码文案
+            val context = binding.root.context
+            var contentDescription = channel.name
+            if (isFavorite) {
+                contentDescription = context.getString(R.string.mobile_channel_desc_favorite, contentDescription)
+            }
+            if (isLastPlayed) {
+                contentDescription = context.getString(R.string.mobile_channel_desc_last_played, contentDescription)
+            }
+            binding.root.contentDescription = contentDescription
+            // D-Pad：仅在首个可聚焦行按 UP 且列表无法继续上滚时消费事件并移交顶栏；
+            // 其余行必须返回 false 交还 GridLayoutManager 正常向上移动焦点。
             binding.root.setOnKeyListener { _, keyCode, event ->
                 if (keyCode == android.view.KeyEvent.KEYCODE_DPAD_UP &&
                     event.action == android.view.KeyEvent.ACTION_DOWN &&
                     onDpadUp != null
                 ) {
-                    onDpadUp.invoke()
-                    true
+                    val pos = bindingAdapterPosition
+                    if (pos != RecyclerView.NO_POSITION) onDpadUp.invoke(pos) else false
                 } else {
                     false
                 }
             }
             binding.root.setOnClickListener { onChannelClick(channel) }
+            binding.root.setOnLongClickListener {
+                onChannelLongClick?.let { callback ->
+                    callback.invoke(channel)
+                    true
+                } ?: false
+            }
         }
 
         /**

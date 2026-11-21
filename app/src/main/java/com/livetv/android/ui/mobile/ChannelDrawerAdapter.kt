@@ -14,9 +14,17 @@ import com.livetv.android.domain.model.Channel
  * 当前正在播放的频道会显示"播放中"标记（由纯模型 `ChannelDrawerModel` 决定）。
  */
 class ChannelDrawerAdapter(
-    private val rows: List<ChannelDrawerRow>,
+    rows: List<ChannelDrawerRow> = emptyList(),
     private val onChannelClick: (Channel) -> Unit,
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+
+    private var rows: List<ChannelDrawerRow> = rows
+
+    /** 原地更新抽屉行数据，复用 ViewHolder 池，避免每次打开抽屉重建 Adapter。 */
+    fun updateRows(newRows: List<ChannelDrawerRow>) {
+        rows = newRows
+        notifyDataSetChanged()
+    }
 
     override fun getItemCount(): Int = rows.size
 
