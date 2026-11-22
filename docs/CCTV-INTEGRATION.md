@@ -484,3 +484,27 @@ HLS 模块；解析链路中**不得**为了"看一眼清单"再发一次请求�
 - **后续演进方向**：
   1. 如需进一步削减 ~1s 冷启 TTFF，可独立评估验证全部 17 路官方频道直连 `/live/cctvN/m/` 的可用性与稳定性；
   2. 如需彻底抹平相对原生播放器的 ~266 mW 功耗差与 ~250 MB 渲染进程引擎底噪，唯一治本方向为**「原生 M3U / 局域网 IPTV 源优先、手机端 WebView 兜底」的混合路由**，不再在 WebView 内部继续做边际收益趋零的微调。
+
+---
+
+## 9. 冷启提速与首帧撤幕实证（Commit `aab0ccd` / PKG110 实测）
+
+本轮针对冷启耗时与撤幕视觉衔接做了三项实证与收口（零触碰播放引擎核心与 Android TV 端）：
+
+### 9.1 核心脚本缓存命中验证（跳过冗余缓存桥接）
+通过只读抓取响应头与杀进程二次冷启（`am force-stop`，保留磁盘缓存）实测：
+- **服务端缓存策略**：`js.player.cntv.cn/creator/live.worker.js`（4.87 MB）与 `liveplayer_controls.js`（2.00 MB）均返回 `Cache-Control: max-age=600`、`ETag` 与 `Last-Modified`。
+- **命中实测**：清缓存首次冷启耗时 **2,430 ms / 2,020 ms**；杀进程二次冷启直接命中 WebView 原生磁盘缓存，耗时骤降至 **45 ms / 37 ms**（暖切台 59 ms / 68 ms）。
+- **结论**：WebView 原生磁盘缓存已充分生效，无需在应用层引入额外脚本缓存桥接，避免冗余维护成本。
+
+### 9.2 手机端首页空闲 4 域名预建连（零内存税）
+- **实现机制**：在 `MobileMainActivity` 首屏空闲后（通过 `CctvWebWarmup.scheduleOnIdle()` 注册 `Looper.myQueue().addIdleHandler`，单进程幂等执行一次），后台并发对 4 个官方核心域名（`tv.cctv.com`、`js.player.cntv.cn`、`time.tv.cctv.com`、`vdnx.live.cntv.cn`）执行 DNS + TLS 预建连（单域名超时 1,500 ms，零业务数据拉取，异常静默）。
+- **实测收益**：冷启首跳建连阶段缩短 **140–440 ms**（`/m/` TTFB `242 ms → 75 ms`；`vdnx` 首冷 `820 ms → 547 ms`、二冷 `407 ms → 321 ms`；`time.php` 二冷 `133 ms → 82 ms`）。
+- **架构取舍备忘**：实测在首页提前预加载 WebView 底座（`getDefaultUserAgent` / `CookieManager`）仅缩短 `Displayed` 19–29 ms，却导致首页静置 PSS 暴涨 **+54.1 MB**（81.5 MB → 135.6 MB，主要为只读 `.apk/.so` 代码页映射）。为避免只看原生 Media3 的用户白背内存税，终版已移除底座预加载并由 `CctvWebWarmupTest` / `CctvWebPrototypeGuardTest` 守卫，仅保留 4 域名预建连，维持首页 **~82 MB** 轻内存水位。
+
+### 9.3 黑幕撤除对齐真实首帧（消除提前露馅）
+- **改造前问题**：`STATE_READY` 阶段（`<video>` 刚挂载、尚未出画）即提前撤幕，早于 `requestAudioFocus` 约 **2.69s–3.25s**，暴露官方加载态与控件闪现；且 `OVERLAY_FADE_MS = 250 ms` 淡出偏慢。
+- **优化方案**：
+  - `CctvWebViewportFocusScript` 增加单次 `requestVideoFrameCallback`（不逐帧递归）及 `playing`（`readyState >= 2`）立即置位，首帧瞬间完成纯视频控件隐藏；
+  - `CctvWebPlayerActivity` 将就绪前轮询由 `250 ms` 收紧至 `80 ms`（进入 `playing` 后立即停止保持零空转），淡出时长压至 `120 ms`，撤幕严格对齐 `STATE_PLAYING`（保留 7s 异常超时兜底）。
+- **实测效果**：黑幕开始淡出严格贴合 `requestAudioFocus` 后 **+10 ms ~ +44 ms**（总移除 +144 ms ~ +179 ms，淡出实测 ~130 ms）；撤幕瞬间零白屏、零外围残影、零官方控件闪现。
