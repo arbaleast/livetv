@@ -3,16 +3,15 @@ package com.livetv.android.webplayer
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.text.TextUtils
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -37,95 +36,84 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
+import com.livetv.android.databinding.ViewMobilePlayerChromeBinding
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.model.ChannelCategory
 import com.livetv.android.ui.PlayerActivity
-import com.livetv.android.ui.mobile.ChannelDrawerAdapter
-import com.livetv.android.ui.mobile.ChannelDrawerModel
-import com.livetv.android.ui.mobile.ChannelDrawerRow
+import com.livetv.android.ui.mobile.ChromeBackAction
+import com.livetv.android.ui.mobile.MobilePlayerChromeController
 import com.livetv.android.ui.mobile.MobileUiPreferences
+import com.livetv.android.ui.mobile.PlayerChromeCapabilities
+import com.livetv.android.util.PlayerOrientationPolicy
 import java.io.ByteArrayInputStream
 
 /**
- * CCTV 手机端 WebView 播放页。
+ * CCTV 手机端 WebView 播放页（接入 [MobilePlayerChromeController] 共享手机端外框）。
  *
  * 三阶段体验：
- * 1. **阶段一（视口聚焦 + 黑幕过渡）**：整页加载官方直播页，静态脚本把 `#player` 铺满视口并隐藏外围兄弟；
- *    画面就绪或超时后撤除黑幕，顶栏保持可见、单击透传网页起播，同时左/右半屏上下滑可调亮度与音量；
- * 2. **阶段二（纯视频）**：检测到 `<video>` 实际起播后停止高频轮询，对 `#player` 内部非媒体祖先路径控件
- *    施加 `opacity:0 + pointer-events:none`（**不**用 display:none，不搬移 DOM），顶栏 3.5 秒后自动隐藏，
- *    单击画面呼出/隐藏顶栏；
- * 3. **阶段三（原控切换）**：点击顶栏「原控 / 纯画」可随时显示或隐藏官方网页控制栏；「原控」态保持顶栏常驻，
- *    单击透传网页，垂直滑动仍可调亮度/音量。
+ * 1. **阶段一（视口聚焦 + 首帧对齐黑幕）**：整页加载官方直播页，静态脚本把 `#player` 铺满视口并隐藏外围兄弟；
+ *    严格对齐首帧 `STATE_PLAYING`（80ms 轮询 + 120ms 淡出，7s 异常兜底）撤除黑幕；
+ * 2. **阶段二（纯视频）**：检测到 `<video>` 首帧起播后立即停止轮询，隐藏 `#player` 内部非媒体控制层，
+ *    外框顶/底栏 3.5 秒后自动淡出至 `View.GONE`，单击画面呼出/隐藏；
+ * 3. **阶段三（原控切换）**：点击顶栏「原控 / 纯画」恢复或隐藏官方网页控制栏；「原控」态顶栏常驻、
+ *    底栏自动隐藏避免与网页底栏冲突，单击透传网页，垂直滑动仍可调亮度/音量。
  *
  * 边界约束：
  * - 只注入 [CctvWebViewportFocusScript] 静态常量，不模拟点击、不改播放状态；
- * - 只读访问 `ChannelCatalogStore` 用于右侧原生选台抽屉（不写入目录快照）；
+ * - 只读访问 `ChannelCatalogStore` 用于选台抽屉（不写入目录快照）；
  * - 跨源切台到 MGTV/IPTV 前严格销毁 WebView，防止音轨重叠与内存残留。
  */
 class CctvWebPlayerActivity : AppCompatActivity() {
 
     private lateinit var root: FrameLayout
     private lateinit var touchContainer: CctvTouchContainer
-    private lateinit var topBar: LinearLayout
-    private lateinit var topTitle: TextView
-    private lateinit var controlsButton: TextView
-    private lateinit var hud: TextView
-    private lateinit var drawerScrim: View
-    private lateinit var drawerPanel: FrameLayout
-    private lateinit var drawerContent: LinearLayout
-    private lateinit var drawerList: RecyclerView
-    private lateinit var drawerAdapter: ChannelDrawerAdapter
+    private lateinit var chrome: MobilePlayerChromeController
+    private lateinit var gestureController: CctvWebGestureController
 
     private var webView: WebView? = null
     private var loadingOverlay: FrameLayout? = null
-    private var errorMessageView: TextView? = null
 
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
     private var webChromeClient: WebChromeClient? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private lateinit var gestureController: CctvWebGestureController
-
     private val app: LiveTvApplication get() = application as LiveTvApplication
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
 
     private var currentChannelId: String = DEFAULT_CHANNEL_ID
     private var currentChannelName: String = ""
     private var categories: List<ChannelCategory> = emptyList()
-    private var currentDrawerRows: List<ChannelDrawerRow> = emptyList()
 
     private var revealed = false
     private var startedAt = 0L
     private var isPlaying = false
     private var nativeControlsVisible = false
-    private var isDrawerOpen = false
     private var awaitingPageCommit = false
     private var suspendedInBackground = false
+    private var hasLoadFailure = false
 
     private val backgroundSuspendRunnable = Runnable { suspendWebViewInBackground() }
 
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
-            when {
-                isDrawerOpen -> closeDrawer()
-                customView != null -> webChromeClient?.onHideCustomView()
-                else -> finish()
+            if (::chrome.isInitialized && chrome.handleBackPressed() != ChromeBackAction.PASS_THROUGH) {
+                return
+            }
+            if (customView != null) {
+                webChromeClient?.onHideCustomView()
+            } else {
+                finish()
             }
         }
     }
 
-    private val hideTopBarRunnable = Runnable { hideTopBar() }
     private val revealTimeoutRunnable = Runnable {
         awaitingPageCommit = false
         reveal()
@@ -133,18 +121,6 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             mainHandler.removeCallbacks(pollRunnable)
             mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
         }
-    }
-
-    private val hideHudRunnable = Runnable {
-        hud.animate().cancel()
-        hud.animate()
-            .alpha(0f)
-            .setDuration(HUD_FADE_DURATION_MS)
-            .withEndAction {
-                hud.visibility = View.GONE
-                hud.alpha = 1f
-            }
-            .start()
     }
 
     private val pollRunnable: Runnable = Runnable { pollState() }
@@ -183,8 +159,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        requestedOrientation = PlayerOrientationPolicy.resolveRequestedOrientation(isTvDevice = false)
+        val density = resources.displayMetrics.density
         gestureController = CctvWebGestureController(
             touchSlopPx = ViewConfiguration.get(this).scaledTouchSlop.toFloat(),
+            edgeExclusionPx = CctvWebGestureController.EDGE_EXCLUSION_DP * density,
         )
 
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -193,22 +172,30 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, backCallback)
 
-        val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID) ?: DEFAULT_CHANNEL_ID
-        val pageUrl = CctvWebChannel.liveUrl(channelId)
-        if (pageUrl == null) {
-            showUnavailableMessage(R.string.cctv_web_unsupported)
-            return
-        }
-
         val storeCategories = runCatching { app.catalogStore.getAllCategories() }.getOrDefault(emptyList())
         categories = CctvWebSwitchPolicy.resolveCategories(storeCategories)
+
+        val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID) ?: DEFAULT_CHANNEL_ID
         currentChannelId = channelId
         currentChannelName = CctvWebSwitchPolicy.resolveChannelName(
             channelId = channelId,
             categories = categories,
             fallbackName = intent.getStringExtra(EXTRA_CHANNEL_NAME),
         )
+
+        touchContainer = CctvTouchContainer(this)
+        root.addView(touchContainer, matchParent())
+        mountChrome()
+        applySafeAreaInsets()
+
+        val pageUrl = CctvWebChannel.liveUrl(channelId)
+        if (pageUrl == null) {
+            showUnavailableMessage(R.string.cctv_web_unsupported)
+            return
+        }
+
         MobileUiPreferences.setLastPlayedChannelId(this, channelId)
+        updateFavoriteUi()
 
         val created = runCatching { buildWebView() }.getOrNull()
         if (created == null) {
@@ -216,19 +203,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             return
         }
         webView = created
+        touchContainer.addView(created, matchParent())
 
-        touchContainer = CctvTouchContainer(this).apply {
-            addView(created, matchParent())
-        }
-        root.addView(touchContainer, matchParent())
-
-        buildTopBar()
-        buildHud()
-        buildDrawer()
-        applySafeAreaInsets()
-
-        // 阶段一（待起播）保持顶栏可见，方便随时返回或打开选台抽屉
-        showTopBar(autoHide = false)
+        // 阶段一（待起播）保持控制层可见，方便随时返回或打开选台抽屉
+        chrome.showControls(animate = false)
         showOverlay()
         ensureCatalogLoaded()
 
@@ -242,9 +220,87 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         super.onConfigurationChanged(newConfig)
         applyImmersive()
         ViewCompat.requestApplyInsets(root)
-        if (isDrawerOpen) {
-            scrollDrawerToCurrentChannel()
+        if (::chrome.isInitialized && chrome.isDrawerOpen) {
+            chrome.scrollDrawerToCurrentChannel()
         }
+    }
+
+    // ---------------- 共享外框接入 ----------------
+
+    private fun mountChrome() {
+        val chromeBinding = ViewMobilePlayerChromeBinding.inflate(layoutInflater, root, false)
+        root.addView(chromeBinding.chromeRoot, matchParent())
+        chrome = MobilePlayerChromeController(
+            binding = chromeBinding,
+            capabilities = PlayerChromeCapabilities.CCTV,
+            callbacks = object : MobilePlayerChromeController.Callbacks {
+                override fun onBack() = finish()
+                override fun onToggleFavorite() = toggleCurrentFavorite()
+                override fun onRotate() = toggleOrientation()
+                override fun onChannelPicked(channel: Channel) = handleChannelPicked(channel)
+                override fun onErrorRetry() = retryCurrentChannel()
+                override fun onLockStateChanged(locked: Boolean) {
+                    gestureController.isScreenLocked = locked
+                }
+                override fun onToggleWebControls() = toggleNativeControls()
+                override fun onReload() = retryCurrentChannel()
+            },
+            initialPlaying = false,
+        )
+        chrome.setTitle(currentChannelName)
+        chrome.setCatalog(categories, currentChannelId)
+        updateFavoriteUi()
+    }
+
+    private fun applySafeAreaInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, windowInsets ->
+            chrome.applyCutoutInsets(windowInsets)
+            windowInsets
+        }
+        ViewCompat.requestApplyInsets(root)
+    }
+
+    private fun toggleCurrentFavorite() {
+        val nowFavorite = MobileUiPreferences.toggleFavoriteChannel(this, currentChannelId)
+        updateFavoriteUi()
+        chrome.showHudText(
+            getString(
+                if (nowFavorite) R.string.mobile_favorite_added else R.string.mobile_favorite_removed,
+                currentChannelName,
+            ),
+        )
+    }
+
+    private fun updateFavoriteUi() {
+        val isFavorite = currentChannelId in MobileUiPreferences.getFavoriteChannelIds(this)
+        chrome.updateFavorite(isFavorite)
+    }
+
+    private fun toggleOrientation() {
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        requestedOrientation = if (isLandscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
+    }
+
+    private fun retryCurrentChannel() {
+        val url = CctvWebChannel.liveUrl(currentChannelId)
+        if (url == null) {
+            finish()
+            return
+        }
+        if (webView == null) {
+            val recreated = runCatching { buildWebView() }.getOrNull()
+            if (recreated == null) {
+                showUnavailableMessage(R.string.cctv_web_unavailable)
+                return
+            }
+            webView = recreated
+            touchContainer.addView(recreated, matchParent())
+        }
+        reloadChannel(currentChannelId, currentChannelName, url)
     }
 
     // ---------------- WebView ----------------
@@ -361,7 +417,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             }
         }
 
-        val chrome = object : WebChromeClient() {
+        val chromeClient = object : WebChromeClient() {
             // 官方页若调用 window.close()，默认实现可能连带结束宿主 Activity；这里显式忽略，
             // 退出只允许由用户按返回键触发。
             override fun onCloseWindow(window: WebView) {
@@ -390,8 +446,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 applyImmersive()
             }
         }
-        webChromeClient = chrome
-        view.webChromeClient = chrome
+        webChromeClient = chromeClient
+        view.webChromeClient = chromeClient
         return view
     }
 
@@ -399,8 +455,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     /**
      * 包裹 [WebView] 的原生手势分流容器：
-     * - 垂直滑动超 touchSlop：三态下均拦截并调节亮度（左半屏）或音量（右半屏）；
-     * - 点击：仅在纯视频播放态拦截并切换原生顶栏；待起播或「原控」态透传给 [WebView]。
+     * - 锁屏态：屏蔽亮度/音量滑动并拦截点击，短按短暂浮现解锁按钮；
+     * - 垂直滑动超 touchSlop（避让左右 24dp 边缘）：左半屏调亮度、右半屏调音量；
+     * - 点击：仅在纯视频播放态拦截并切换共享控制层；待起播或「原控」态透传给 [WebView]。
      */
     private inner class CctvTouchContainer(context: Context) : FrameLayout(context) {
 
@@ -411,7 +468,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         }
 
         override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
-            if (isDrawerOpen || loadingOverlay != null) return false
+            if (chrome.isDrawerOpen || loadingOverlay != null) return false
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -482,10 +539,15 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                     when (gestureController.onTouchUp()) {
                         GestureAction.ToggleTopBar -> {
                             performClick()
-                            toggleTopBar()
+                            chrome.toggleControls()
                         }
 
-                        GestureAction.EndAdjustment -> hideHudDelayed()
+                        GestureAction.ToggleLockButton -> {
+                            performClick()
+                            chrome.onSingleTapWhileLocked()
+                        }
+
+                        GestureAction.EndAdjustment -> chrome.hideHudDelayed()
                         else -> Unit
                     }
                     return true
@@ -494,7 +556,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 MotionEvent.ACTION_CANCEL -> {
                     intercepted = false
                     if (gestureController.onTouchCancel() == GestureAction.EndAdjustment) {
-                        hideHudDelayed()
+                        chrome.hideHudDelayed()
                     }
                     return true
                 }
@@ -508,13 +570,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private fun handleAdjustmentAction(action: GestureAction): Boolean = when (action) {
         is GestureAction.AdjustBrightness -> {
             applyBrightness(action.brightness)
-            showHud(getString(R.string.player_gesture_brightness, action.percent))
+            chrome.showHudMeter(MobilePlayerChromeController.HudIcon.BRIGHTNESS, action.percent)
             true
         }
 
         is GestureAction.AdjustVolume -> {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, action.volume, 0)
-            showHud(getString(R.string.player_gesture_volume, action.percent))
+            chrome.showHudMeter(MobilePlayerChromeController.HudIcon.VOLUME, action.percent)
             true
         }
 
@@ -553,7 +615,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         window.attributes = attrs
     }
 
-    // ---------------- 原生轻顶栏、HUD、抽屉、遮罩 ----------------
+    // ---------------- 首帧对齐黑幕 ----------------
 
     private fun matchParent() = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -561,192 +623,6 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     )
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-    private fun buildTopBar() {
-        val topGradient = GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(0xCC000000.toInt(), 0x00000000),
-        )
-        topBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = topGradient
-            setPadding(dp(10), dp(10), dp(10), dp(14))
-            visibility = View.VISIBLE
-        }
-
-        val back = barButton(getString(R.string.cctv_web_back)).apply {
-            setOnClickListener { finish() }
-        }
-        topTitle = TextView(this).apply {
-            text = currentChannelName
-            setTextColor(ContextCompat.getColor(this@CctvWebPlayerActivity, R.color.mobile_text_primary))
-            textSize = 14f
-            paint.isFakeBoldText = true
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = dp(10)
-                marginEnd = dp(8)
-            }
-        }
-        controlsButton = barButton(getString(R.string.cctv_web_control_native)).apply {
-            setOnClickListener { toggleNativeControls() }
-        }
-        val channels = barButton(getString(R.string.cctv_web_channel_drawer)).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply {
-                marginStart = dp(6)
-            }
-            setOnClickListener { openDrawer() }
-        }
-
-        topBar.addView(back)
-        topBar.addView(topTitle)
-        topBar.addView(controlsButton)
-        topBar.addView(channels)
-
-        root.addView(
-            topBar,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP,
-            ),
-        )
-    }
-
-    private fun barButton(label: String): TextView = TextView(this).apply {
-        text = label
-        setTextColor(ContextCompat.getColor(this@CctvWebPlayerActivity, R.color.mobile_text_primary))
-        textSize = 13f
-        gravity = Gravity.CENTER
-        minWidth = dp(48)
-        minHeight = dp(48)
-        setPadding(dp(12), dp(8), dp(12), dp(8))
-        setBackgroundResource(R.drawable.bg_player_touch_button)
-        isClickable = true
-        isFocusable = true
-    }
-
-    private fun buildHud() {
-        hud = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 15f
-            paint.isFakeBoldText = true
-            gravity = Gravity.CENTER
-            setBackgroundResource(R.drawable.bg_player_badge)
-            setPadding(dp(18), dp(8), dp(18), dp(8))
-            visibility = View.GONE
-        }
-        root.addView(
-            hud,
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.CENTER,
-            ),
-        )
-    }
-
-    private fun buildDrawer() {
-        drawerScrim = View(this).apply {
-            setBackgroundColor(ContextCompat.getColor(this@CctvWebPlayerActivity, R.color.mobile_drawer_scrim))
-            isClickable = true
-            isFocusable = false
-            contentDescription = getString(R.string.player_drawer_scrim_desc)
-            visibility = View.GONE
-            setOnClickListener { closeDrawer() }
-        }
-        root.addView(drawerScrim, matchParent())
-
-        drawerPanel = FrameLayout(this).apply {
-            setBackgroundResource(R.drawable.bg_player_drawer)
-            visibility = View.GONE
-        }
-
-        val leftEdge = View(this).apply {
-            setBackgroundColor(ContextCompat.getColor(this@CctvWebPlayerActivity, R.color.mobile_drawer_edge))
-        }
-        drawerPanel.addView(
-            leftEdge,
-            FrameLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START),
-        )
-
-        drawerContent = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        val drawerTitle = TextView(this).apply {
-            text = getString(R.string.player_drawer_title)
-            setTextColor(ContextCompat.getColor(this@CctvWebPlayerActivity, R.color.mobile_text_tertiary))
-            textSize = 12f
-            setPadding(dp(18), dp(18), dp(18), dp(10))
-        }
-        drawerContent.addView(
-            drawerTitle,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-
-        drawerAdapter = ChannelDrawerAdapter { channel -> onChannelPicked(channel) }
-        drawerList = RecyclerView(this).apply {
-            layoutManager = LinearLayoutManager(this@CctvWebPlayerActivity)
-            adapter = drawerAdapter
-            clipToPadding = false
-            setPadding(0, 0, 0, dp(18))
-            isVerticalScrollBarEnabled = false
-        }
-        drawerContent.addView(
-            drawerList,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
-        )
-
-        drawerPanel.addView(drawerContent, matchParent())
-        root.addView(
-            drawerPanel,
-            FrameLayout.LayoutParams(
-                dp(DRAWER_WIDTH_DP),
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                Gravity.END,
-            ),
-        )
-    }
-
-    private fun applySafeAreaInsets() {
-        val topBaseLeft = topBar.paddingLeft
-        val topBaseTop = topBar.paddingTop
-        val topBaseRight = topBar.paddingRight
-        val topBaseBottom = topBar.paddingBottom
-
-        val drawerBaseLeft = drawerContent.paddingLeft
-        val drawerBaseTop = drawerContent.paddingTop
-        val drawerBaseRight = drawerContent.paddingRight
-        val drawerBaseBottom = drawerContent.paddingBottom
-        val stableDrawerBottom = dp(DRAWER_STABLE_BOTTOM_MARGIN_DP)
-
-        ViewCompat.setOnApplyWindowInsetsListener(root) { _, windowInsets ->
-            val cutout = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
-            topBar.setPadding(
-                topBaseLeft + cutout.left,
-                topBaseTop + cutout.top,
-                topBaseRight + cutout.right,
-                topBaseBottom,
-            )
-            drawerContent.setPadding(
-                drawerBaseLeft,
-                drawerBaseTop + cutout.top,
-                drawerBaseRight + cutout.right,
-                drawerBaseBottom + maxOf(cutout.bottom, stableDrawerBottom),
-            )
-            windowInsets
-        }
-        ViewCompat.requestApplyInsets(root)
-    }
 
     private fun showOverlay() {
         loadingOverlay?.let {
@@ -779,13 +655,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         }
         root.addView(box, matchParent())
         loadingOverlay = box
-        // 确保原生顶栏与抽屉始终位于加载黑幕之上，加载期间仍可返回或切台
-        topBar.bringToFront()
-        drawerScrim.bringToFront()
-        drawerPanel.bringToFront()
+        // 确保共享外框（顶栏/抽屉）位于加载黑幕之上，加载期间仍可返回或切台
+        chrome.rootView.bringToFront()
     }
 
-    /** 画面就绪或超时后淡出黑幕；幂等。 */
+    /** 首帧就绪或超时后 120ms 淡出黑幕并移除；幂等。 */
     private fun reveal() {
         mainHandler.removeCallbacks(revealTimeoutRunnable)
         awaitingPageCommit = false
@@ -804,7 +678,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             .start()
     }
 
-    // ---------------- 纯视频 / 原控与顶栏 ----------------
+    // ---------------- 纯视频 / 原控 ----------------
 
     private fun onPlaybackDetected() {
         if (isPlaying) return
@@ -813,67 +687,29 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         mainHandler.removeCallbacks(pollRunnable)
 
         if (!nativeControlsVisible) {
-            controlsButton.text = getString(R.string.cctv_web_control_native)
             webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
-            if (!isDrawerOpen) {
-                showTopBar(autoHide = true)
-            }
+            chrome.setWebNativeControlsVisible(false)
         }
+        chrome.setPlaying(true)
     }
 
     private fun enterPureVideo() {
         nativeControlsVisible = false
         gestureController.isNativeControlsVisible = false
-        controlsButton.text = getString(R.string.cctv_web_control_native)
         webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
-        showTopBar(autoHide = isPlaying)
+        chrome.setWebNativeControlsVisible(false)
     }
 
     private fun exitPureVideo() {
         nativeControlsVisible = true
         gestureController.isNativeControlsVisible = true
-        controlsButton.text = getString(R.string.cctv_web_control_pure)
         webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
-        // 「原控」态保持顶栏可见，方便随时切回「纯画」或选台
-        showTopBar(autoHide = false)
+        // 「原控」态由共享外框保持顶栏常驻、底栏自动隐藏，避免与官方网页底栏重叠
+        chrome.setWebNativeControlsVisible(true)
     }
 
     private fun toggleNativeControls() {
         if (nativeControlsVisible) enterPureVideo() else exitPureVideo()
-    }
-
-    private fun toggleTopBar() {
-        if (topBar.visibility == View.VISIBLE) {
-            hideTopBar()
-        } else {
-            showTopBar(autoHide = true)
-        }
-    }
-
-    private fun showTopBar(autoHide: Boolean) {
-        topBar.visibility = View.VISIBLE
-        mainHandler.removeCallbacks(hideTopBarRunnable)
-        if (autoHide && isPlaying && !nativeControlsVisible && !isDrawerOpen) {
-            mainHandler.postDelayed(hideTopBarRunnable, CctvWebGestureController.TOP_BAR_AUTO_HIDE_MS)
-        }
-    }
-
-    private fun hideTopBar() {
-        mainHandler.removeCallbacks(hideTopBarRunnable)
-        topBar.visibility = View.GONE
-    }
-
-    private fun showHud(text: String) {
-        hud.animate().cancel()
-        hud.text = text
-        hud.alpha = 1f
-        hud.visibility = View.VISIBLE
-        mainHandler.removeCallbacks(hideHudRunnable)
-    }
-
-    private fun hideHudDelayed() {
-        mainHandler.removeCallbacks(hideHudRunnable)
-        mainHandler.postDelayed(hideHudRunnable, CctvWebGestureController.HUD_FADE_DELAY_MS)
     }
 
     // ---------------- 抽屉与切台 ----------------
@@ -888,110 +724,26 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 categories = categories,
                 fallbackName = currentChannelName,
             )
-            topTitle.text = currentChannelName
-            if (isDrawerOpen) {
-                refreshDrawerRows()
-            }
+            chrome.setTitle(currentChannelName)
+            chrome.setCatalog(categories, currentChannelId)
         }
     }
 
-    private fun refreshDrawerRows() {
-        val storeCategories = runCatching { app.catalogStore.getAllCategories() }.getOrDefault(emptyList())
-        categories = CctvWebSwitchPolicy.resolveCategories(storeCategories)
-        val rows = ChannelDrawerModel.buildRows(categories, currentChannelId)
-        currentDrawerRows = rows
-        drawerAdapter.updateRows(rows)
-    }
-
-    private fun openDrawer() {
-        refreshDrawerRows()
-        isDrawerOpen = true
-        hideTopBar()
-
-        drawerScrim.animate().cancel()
-        drawerScrim.alpha = 0f
-        drawerScrim.visibility = View.VISIBLE
-        drawerScrim.animate().alpha(1f).setDuration(DRAWER_ANIM_MS).start()
-
-        drawerPanel.animate().cancel()
-        val slideOffset = if (drawerPanel.width > 0) {
-            drawerPanel.width.toFloat()
-        } else {
-            dp(DRAWER_WIDTH_DP).toFloat()
-        }
-        drawerPanel.translationX = slideOffset
-        drawerPanel.visibility = View.VISIBLE
-        drawerPanel.animate().translationX(0f).setDuration(DRAWER_ANIM_MS).start()
-
-        scrollDrawerToCurrentChannel()
-    }
-
-    private fun scrollDrawerToCurrentChannel() {
-        val currentIndex = ChannelDrawerModel.currentRowIndex(currentDrawerRows)
-        val targetIndex = if (currentIndex >= 0) {
-            currentIndex
-        } else {
-            currentDrawerRows.indexOfFirst { it is ChannelDrawerRow.ChannelItem }
-        }
-        if (targetIndex >= 0) {
-            drawerList.post {
-                val lm = drawerList.layoutManager as? LinearLayoutManager
-                val offset = drawerList.height / 3
-                lm?.scrollToPositionWithOffset(targetIndex, offset)
-                    ?: drawerList.scrollToPosition(targetIndex)
-            }
-        }
-    }
-
-    private fun closeDrawer(restoreTopBar: Boolean = true) {
-        if (!isDrawerOpen) return
-        isDrawerOpen = false
-
-        drawerScrim.animate().cancel()
-        drawerScrim.animate()
-            .alpha(0f)
-            .setDuration(DRAWER_ANIM_MS)
-            .withEndAction {
-                drawerScrim.visibility = View.GONE
-                drawerScrim.alpha = 1f
-            }
-            .start()
-
-        drawerPanel.animate().cancel()
-        val slideOffset = if (drawerPanel.width > 0) {
-            drawerPanel.width.toFloat()
-        } else {
-            dp(DRAWER_WIDTH_DP).toFloat()
-        }
-        drawerPanel.animate()
-            .translationX(slideOffset)
-            .setDuration(DRAWER_ANIM_MS)
-            .withEndAction {
-                drawerPanel.visibility = View.GONE
-                drawerPanel.translationX = 0f
-            }
-            .start()
-
-        if (restoreTopBar && (!isPlaying || nativeControlsVisible)) {
-            showTopBar(autoHide = false)
-        }
-    }
-
-    private fun onChannelPicked(channel: Channel) {
+    private fun handleChannelPicked(channel: Channel) {
         when (val action = CctvWebSwitchPolicy.decide(currentChannelId, channel)) {
-            CctvWebSwitchAction.NoOp -> closeDrawer()
+            CctvWebSwitchAction.NoOp -> chrome.closeDrawer()
 
             CctvWebSwitchAction.UnsupportedToast -> {
                 Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
             }
 
             is CctvWebSwitchAction.ReloadInPlace -> {
-                closeDrawer(restoreTopBar = false)
+                chrome.closeDrawer(restoreControls = false)
                 reloadChannel(action.channelId, action.channelName, action.url)
             }
 
             is CctvWebSwitchAction.SwitchToNativePlayer -> {
-                closeDrawer(restoreTopBar = false)
+                chrome.closeDrawer(restoreControls = false)
                 MobileUiPreferences.setLastPlayedChannelId(this, action.channel.id)
                 destroyWebView()
                 startActivity(
@@ -1005,10 +757,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** 同页复用 WebView 切台：重置到阶段一待起播态并黑幕过渡，不重建 Activity。 */
+    /** 同页复用 WebView 切台或重试：重置到阶段一待起播态并黑幕过渡，不重建 Activity。 */
     private fun reloadChannel(channelId: String, channelName: String, url: String) {
         mainHandler.removeCallbacks(pollRunnable)
-        mainHandler.removeCallbacks(hideTopBarRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
 
         currentChannelId = channelId
@@ -1018,20 +769,23 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             fallbackName = channelName,
         )
         MobileUiPreferences.setLastPlayedChannelId(this, channelId)
-        topTitle.text = currentChannelName
+        chrome.setTitle(currentChannelName)
+        chrome.setCatalog(categories, currentChannelId)
+        updateFavoriteUi()
 
         isPlaying = false
         nativeControlsVisible = false
         revealed = false
+        hasLoadFailure = false
         awaitingPageCommit = true
         startedAt = System.currentTimeMillis()
         gestureController.reset()
-        controlsButton.text = getString(R.string.cctv_web_control_native)
+        chrome.hideError()
+        chrome.setPlaying(false)
+        chrome.setWebNativeControlsVisible(false)
 
-        errorMessageView?.let { root.removeView(it) }
-        errorMessageView = null
         webView?.visibility = View.VISIBLE
-        showTopBar(autoHide = false)
+        chrome.showControls(animate = false)
         showOverlay()
 
         // 先停止旧页并等待新页 onPageCommitVisible 再注入与轮询，避免读到旧页残留的 __livetvPlaying
@@ -1055,34 +809,28 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         mainHandler.removeCallbacksAndMessages(null)
         awaitingPageCommit = false
         suspendedInBackground = false
+        hasLoadFailure = true
         loadingOverlay?.let {
             it.animate().cancel()
             root.removeView(it)
         }
         loadingOverlay = null
         revealed = true
-        hud.visibility = View.GONE
         webView?.visibility = View.GONE
-        showTopBar(autoHide = false)
-        showUnavailableMessage(messageRes)
+        chrome.setPlaying(false)
+        chrome.showError(
+            message = getString(messageRes),
+            showRetry = CctvWebChannel.liveUrl(currentChannelId) != null,
+        )
     }
 
     private fun showUnavailableMessage(messageRes: Int) {
-        errorMessageView?.let { root.removeView(it) }
-        val message = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            text = getString(messageRes)
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setPadding(dp(24), dp(24), dp(24), dp(24))
-        }
-        errorMessageView = message
-        root.addView(message, matchParent())
-        if (::topBar.isInitialized) {
-            topBar.bringToFront()
-            drawerScrim.bringToFront()
-            drawerPanel.bringToFront()
-        }
+        hasLoadFailure = true
+        chrome.setPlaying(false)
+        chrome.showError(
+            message = getString(messageRes),
+            showRetry = false,
+        )
     }
 
     // ---------------- 生命周期 ----------------
@@ -1117,7 +865,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     private fun suspendWebViewInBackground() {
         val view = webView ?: return
-        if (isFinishing || isDestroyed || errorMessageView != null) return
+        if (isFinishing || isDestroyed || hasLoadFailure) return
         suspendedInBackground = true
         mainHandler.removeCallbacks(pollRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
@@ -1130,7 +878,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         mainHandler.removeCallbacks(backgroundSuspendRunnable)
-        if (suspendedInBackground && webView != null && errorMessageView == null) {
+        if (suspendedInBackground && webView != null && !hasLoadFailure) {
             suspendedInBackground = false
             webView?.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
             val pageUrl = CctvWebChannel.liveUrl(currentChannelId)
@@ -1161,7 +909,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (!isChangingConfigurations && !isFinishing && webView != null && errorMessageView == null) {
+        if (!isChangingConfigurations && !isFinishing && webView != null && !hasLoadFailure) {
             mainHandler.removeCallbacks(backgroundSuspendRunnable)
             mainHandler.postDelayed(backgroundSuspendRunnable, BACKGROUND_SUSPEND_DELAY_MS)
         }
@@ -1191,9 +939,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         suspendedInBackground = false
         backCallback.isEnabled = false
         loadingOverlay?.animate()?.cancel()
-        if (::hud.isInitialized) hud.animate().cancel()
-        if (::drawerScrim.isInitialized) drawerScrim.animate().cancel()
-        if (::drawerPanel.isInitialized) drawerPanel.animate().cancel()
+        if (::chrome.isInitialized) chrome.release()
 
         if (customView != null) {
             webChromeClient?.onHideCustomView()
@@ -1227,10 +973,6 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         private const val SLOW_POLL_INTERVAL_MS = 1_000L
         private const val FOCUS_TIMEOUT_MS = 7_000L
         private const val OVERLAY_FADE_MS = 120L
-        private const val HUD_FADE_DURATION_MS = 200L
-        private const val DRAWER_ANIM_MS = 220L
-        private const val DRAWER_WIDTH_DP = 280
-        private const val DRAWER_STABLE_BOTTOM_MARGIN_DP = 8
         private const val TARGET_VIDEO_FRAME_RATE_HZ = 25f
         private const val BACKGROUND_SUSPEND_DELAY_MS = 5_000L
     }

@@ -87,4 +87,74 @@ class ChannelDrawerModelTest {
         assertEquals(-1, ChannelDrawerModel.currentRowIndex(rows))
         assertEquals(-1, ChannelDrawerModel.currentChannelIndex(rows))
     }
+
+    @Test
+    fun `filter chips prepend All and skip empty categories`() {
+        val chips = ChannelDrawerModel.buildFilterChips(
+            categories = listOf(
+                category("empty", "空分组", emptyList()),
+                category("news", "新闻", listOf(channel("n1"))),
+                category("sports", "体育", listOf(channel("s1"))),
+            ),
+            selectedCategoryId = null,
+        )
+
+        assertEquals(3, chips.size)
+        assertEquals(ChannelDrawerFilterChip(null, "全部", selected = true), chips[0])
+        assertEquals(ChannelDrawerFilterChip("news", "新闻", selected = false), chips[1])
+        assertEquals(ChannelDrawerFilterChip("sports", "体育", selected = false), chips[2])
+    }
+
+    @Test
+    fun `filter chips fall back to All when selected category disappears`() {
+        val chips = ChannelDrawerModel.buildFilterChips(
+            categories = categories,
+            selectedCategoryId = "removed",
+        )
+
+        assertTrue(chips.first().selected)
+        assertEquals(null, chips.first().categoryId)
+        assertTrue(chips.drop(1).none { it.selected })
+    }
+
+    @Test
+    fun `filtered rows show single category channels preserving current highlight`() {
+        val rows = ChannelDrawerModel.buildFilteredRows(
+            categories = categories,
+            currentChannelId = "s1",
+            selectedCategoryId = "sports",
+        )
+
+        assertEquals(1, rows.size)
+        assertEquals(ChannelDrawerRow.ChannelItem(channel("s1"), isCurrent = true), rows[0])
+        assertEquals(0, ChannelDrawerModel.currentRowIndex(rows))
+    }
+
+    @Test
+    fun `filtered rows fall back to all grouped rows when selection is null or unknown`() {
+        val allRows = ChannelDrawerModel.buildFilteredRows(
+            categories = categories,
+            currentChannelId = "n2",
+            selectedCategoryId = null,
+        )
+        assertEquals(5, allRows.size)
+        assertEquals(2, ChannelDrawerModel.currentRowIndex(allRows))
+
+        val fallbackRows = ChannelDrawerModel.buildFilteredRows(
+            categories = categories,
+            currentChannelId = "n2",
+            selectedCategoryId = "nonexistent",
+        )
+        assertEquals(allRows, fallbackRows)
+    }
+
+    @Test
+    fun `filtered rows and chips handle completely empty catalog safely`() {
+        val chips = ChannelDrawerModel.buildFilterChips(emptyList(), selectedCategoryId = null)
+        val rows = ChannelDrawerModel.buildFilteredRows(emptyList(), currentChannelId = "n1", selectedCategoryId = null)
+
+        assertEquals(1, chips.size)
+        assertEquals(ChannelDrawerFilterChip(null, "全部", selected = true), chips[0])
+        assertTrue(rows.isEmpty())
+    }
 }

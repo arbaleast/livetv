@@ -105,13 +105,31 @@ class CctvWebPrototypeGuardTest {
         assertTrue("onRenderProcessGone 必须清理子视图", goneBlock.contains("removeAllViews()"))
         assertTrue("onRenderProcessGone 必须调用 destroy() 彻底销毁", goneBlock.contains(".destroy()"))
 
-        // 触控容器拦截、抽屉复用与挖孔安全区
+        // 触控容器拦截、共享外框挂载与挖孔安全区
         assertTrue("应使用 CctvTouchContainer 拦截手势", activity.contains("onInterceptTouchEvent"))
-        assertTrue("抽屉打开时触控容器必须放行不拦截", activity.contains("if (isDrawerOpen"))
-        assertTrue("选台抽屉应作为 root 兄弟视图位于触控容器之上", activity.contains("root.addView(\n            drawerPanel"))
-        assertTrue("选台抽屉应复用 ChannelDrawerModel", activity.contains("ChannelDrawerModel"))
-        assertTrue("选台抽屉应复用 ChannelDrawerAdapter", activity.contains("ChannelDrawerAdapter"))
-        assertTrue("顶栏/抽屉应避让 displayCutout", activity.contains("displayCutout()"))
+        assertTrue("抽屉打开时触控容器必须放行不拦截", activity.contains("if (chrome.isDrawerOpen"))
+        assertTrue(
+            "CCTV 播放页应接入共享 MobilePlayerChromeController",
+            activity.contains("MobilePlayerChromeController") && activity.contains("PlayerChromeCapabilities.CCTV"),
+        )
+        assertTrue("共享外框应作为 root 兄弟视图挂载", activity.contains("root.addView(chromeBinding.chromeRoot"))
+
+        val chromeFile = File("src/main/java/com/livetv/android/ui/mobile/MobilePlayerChromeController.kt")
+        assertTrue("应存在 MobilePlayerChromeController.kt", chromeFile.isFile)
+        val chromeSrc = chromeFile.readText(Charsets.UTF_8)
+        assertTrue("选台抽屉应复用 ChannelDrawerModel", chromeSrc.contains("ChannelDrawerModel"))
+        assertTrue("选台抽屉应复用 ChannelDrawerAdapter", chromeSrc.contains("ChannelDrawerAdapter"))
+        assertTrue("共享外框应避让 displayCutout", chromeSrc.contains("displayCutout()"))
+        assertTrue("所有淡出控件必须在 withEndAction 置 View.GONE", chromeSrc.contains("view.visibility = View.GONE"))
+
+        val manifest = File("src/main/AndroidManifest.xml").readText(Charsets.UTF_8)
+        val cctvActivityIdx = manifest.indexOf(".webplayer.CctvWebPlayerActivity")
+        assertTrue(cctvActivityIdx >= 0)
+        val cctvManifestBlock = manifest.substring(cctvActivityIdx, minOf(manifest.length, cctvActivityIdx + 300))
+        assertTrue(
+            "CctvWebPlayerActivity 应使用 Theme.LiveTv.Player 消除启动灰底闪屏",
+            cctvManifestBlock.contains("@style/Theme.LiveTv.Player"),
+        )
 
         // R3 awaitingPageCommit 异常/超时路径必须复位防卡死
         val errorStart = activity.indexOf("override fun onReceivedError")

@@ -40,7 +40,10 @@ import com.livetv.android.player.PlayerManager
 import com.livetv.android.ui.mobile.ChannelDrawerAdapter
 import com.livetv.android.ui.mobile.ChannelDrawerModel
 import com.livetv.android.ui.mobile.ChannelDrawerRow
+import com.livetv.android.ui.mobile.ChromeBackAction
+import com.livetv.android.ui.mobile.MobilePlayerChromeController
 import com.livetv.android.ui.mobile.MobileUiPreferences
+import com.livetv.android.ui.mobile.PlayerChromeCapabilities
 import com.livetv.android.util.DeviceUtils
 import com.livetv.android.util.PlayerKeyPolicy
 import com.livetv.android.util.PlayerOrientationPolicy
@@ -72,22 +75,10 @@ class PlayerActivity : AppCompatActivity() {
         /** 切台提示自动隐藏的延迟（毫秒）。 */
         const val SWITCH_HINT_AUTO_HIDE_DELAY_MS = 3_000L
 
-        /** 触控浮层自动隐藏的延迟（毫秒）。 */
-        const val TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS = 5_000L
-
-        /** 锁屏态下解锁按钮自动隐藏延迟（毫秒）。 */
-        const val LOCK_BUTTON_AUTO_HIDE_DELAY_MS = 3_000L
-
-        /** 手势调节提示自动隐藏延迟（毫秒）。 */
-        const val GESTURE_HINT_AUTO_HIDE_DELAY_MS = 1_100L
-
         /** TV 端左上角频道名自动隐藏的延迟（毫秒）。 */
         const val CHANNEL_NAME_AUTO_HIDE_DELAY_MS = 4_000L
 
-        /** 触控浮层淡入淡出时长（毫秒）。 */
-        private const val OVERLAY_FADE_MS = 180L
-
-        /** 频道抽屉滑入滑出时长（毫秒）。 */
+        /** TV 端频道抽屉滑入滑出时长（毫秒）。 */
         private const val DRAWER_ANIM_MS = 220L
 
         /** 边缘防误触保留宽度（dp），避让系统侧滑返回手势。 */
@@ -106,6 +97,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var playerManager: PlayerManager
     private lateinit var navigator: ChannelNavigator
     private var drawerAdapter: ChannelDrawerAdapter? = null
+    private var mobileChrome: MobilePlayerChromeController? = null
 
     /** 当前播放的频道。 */
     private var currentChannel: Channel? = null
@@ -125,26 +117,8 @@ class PlayerActivity : AppCompatActivity() {
     /** 触控端防误触锁屏标记。 */
     private var isScreenLocked = false
 
-    /** 触控浮层是否处于可见态（用于避免动画期间状态抖动）。 */
-    private var isTouchOverlayVisible = false
-
     /** "频道列表"抽屉是否处于打开状态。 */
     private var isDrawerOpen = false
-
-    /** 触控浮层的自动隐藏回调。 */
-    private val hideOverlayRunnable = Runnable { hideTouchOverlay() }
-
-    /** 锁屏按钮自动隐藏回调。 */
-    private val hideLockButtonRunnable = Runnable {
-        if (isTouchDevice && isScreenLocked) {
-            fadeOutView(binding.overlayLock)
-        }
-    }
-
-    /** 手势提示胶囊自动隐藏回调。 */
-    private val hideGestureHintRunnable = Runnable {
-        fadeOutView(binding.gestureHint)
-    }
 
     /** TV 端左上角频道名自动隐藏回调。 */
     private val hideChannelNameRunnable = Runnable {
@@ -182,8 +156,6 @@ class PlayerActivity : AppCompatActivity() {
         )
         setContentView(binding.root)
 
-        applySafeAreaInsets()
-
         playerManager = PlayerManager(
             context = this,
             onStateChanged = ::renderState,
@@ -198,6 +170,7 @@ class PlayerActivity : AppCompatActivity() {
 
         setupChannelDrawer()
         setupTouchUi()
+        applySafeAreaInsets()
         resolveInitialChannel(savedInstanceState)
         ensureCatalogLoaded()
         updateOverlayChannelInfo()
@@ -213,7 +186,9 @@ class PlayerActivity : AppCompatActivity() {
         super.onConfigurationChanged(newConfig)
         hideSystemUi()
         ViewCompat.requestApplyInsets(binding.playerRoot)
-        if (isDrawerOpen) {
+        if (isTouchDevice) {
+            mobileChrome?.scrollDrawerToCurrentChannel()
+        } else if (isDrawerOpen) {
             // 旋转后抽屉仍开着：重新居中并保持焦点在抽屉内
             scrollDrawerToCurrentChannel()
         }
@@ -244,13 +219,8 @@ class PlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         switchHintJob?.cancel()
         switchHintJob = null
-        binding.root.removeCallbacks(hideOverlayRunnable)
-        binding.root.removeCallbacks(hideLockButtonRunnable)
-        binding.root.removeCallbacks(hideGestureHintRunnable)
         binding.root.removeCallbacks(hideChannelNameRunnable)
-        binding.touchOverlayContainer.animate().cancel()
-        binding.overlayLock.animate().cancel()
-        binding.gestureHint.animate().cancel()
+        mobileChrome?.release()
         binding.channelDrawer.animate().cancel()
         binding.drawerScrim.animate().cancel()
         binding.playerView.player = null
@@ -300,7 +270,8 @@ class PlayerActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed) return@refresh
             this.categories = categories
             rebuildNavigatorKeepingCurrent()
-            if (isDrawerOpen) refreshDrawerRows()
+            mobileChrome?.setCatalog(categories, currentChannel?.id)
+            if (!isTouchDevice && isDrawerOpen) refreshDrawerRows()
         }
     }
 
@@ -377,9 +348,11 @@ class PlayerActivity : AppCompatActivity() {
                 switchHintJob?.cancel()
                 hideStatus()
                 binding.errorText.visibility = View.GONE
+                mobileChrome?.hideError()
             }
 
             PlaybackState.Loading -> {
+                mobileChrome?.hideError()
                 showStatus(
                     message = getString(R.string.player_loading, currentChannel?.name.orEmpty()),
                     showProgress = true,
@@ -387,6 +360,7 @@ class PlayerActivity : AppCompatActivity() {
             }
 
             PlaybackState.Buffering -> {
+                mobileChrome?.hideError()
                 showStatus(
                     message = getString(R.string.player_buffering),
                     showProgress = true,
@@ -397,35 +371,37 @@ class PlayerActivity : AppCompatActivity() {
                 switchHintJob?.cancel()
                 hideStatus()
                 binding.errorText.visibility = View.GONE
+                mobileChrome?.hideError()
             }
 
             PlaybackState.Paused -> {
                 switchHintJob?.cancel()
                 hideStatus()
                 binding.errorText.visibility = View.GONE
+                mobileChrome?.hideError()
             }
 
             is PlaybackState.Error -> {
                 switchHintJob?.cancel()
                 hideStatus()
-                binding.errorText.visibility = View.VISIBLE
-                binding.errorText.text = buildErrorText(state.error)
-                if (isTouchDevice && !isScreenLocked) showTouchOverlay()
+                if (isTouchDevice) {
+                    binding.errorText.visibility = View.GONE
+                    mobileChrome?.showError(buildErrorDescription(state.error), showRetry = true)
+                } else {
+                    binding.errorText.visibility = View.VISIBLE
+                    binding.errorText.text = buildErrorText(state.error)
+                }
             }
         }
 
         if (isTouchDevice) {
-            binding.overlayRetry.visibility =
-                if (state is PlaybackState.Error) View.VISIBLE else View.GONE
             updatePlayPauseButton(state)
         }
     }
 
     private fun updatePlayPauseButton(state: PlaybackState = playerManager.playbackState) {
         val isPaused = state == PlaybackState.Paused || !playerManager.isPlayWhenReady()
-        binding.overlayPlayPause.text = getString(
-            if (isPaused) R.string.player_touch_play else R.string.player_touch_pause,
-        )
+        mobileChrome?.updatePlayPause(isPaused)
     }
 
     private fun showRetryingHint(retryCount: Int, maxRetries: Int) {
@@ -473,18 +449,20 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun buildErrorText(error: PlaybackError): String {
-        val description = when (error) {
-            PlaybackError.Network -> getString(R.string.player_error_network)
-            is PlaybackError.HttpStatus -> when (error.code) {
-                403 -> getString(R.string.player_error_http_forbidden, error.code)
-                429 -> getString(R.string.player_error_http_rate_limited, error.code)
-                else -> getString(R.string.player_error_http, error.code)
-            }
-            PlaybackError.SourceParsing -> getString(R.string.player_error_source)
-            PlaybackError.Timeout -> getString(R.string.player_error_timeout)
-            is PlaybackError.Unknown -> getString(R.string.player_error_unknown)
+    private fun buildErrorDescription(error: PlaybackError): String = when (error) {
+        PlaybackError.Network -> getString(R.string.player_error_network)
+        is PlaybackError.HttpStatus -> when (error.code) {
+            403 -> getString(R.string.player_error_http_forbidden, error.code)
+            429 -> getString(R.string.player_error_http_rate_limited, error.code)
+            else -> getString(R.string.player_error_http, error.code)
         }
+        PlaybackError.SourceParsing -> getString(R.string.player_error_source)
+        PlaybackError.Timeout -> getString(R.string.player_error_timeout)
+        is PlaybackError.Unknown -> getString(R.string.player_error_unknown)
+    }
+
+    private fun buildErrorText(error: PlaybackError): String {
+        val description = buildErrorDescription(error)
         val hint = getString(
             if (isTouchDevice) R.string.player_error_hint_touch else R.string.player_error_hint,
         )
@@ -544,6 +522,11 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (isTouchDevice) {
+                val action = mobileChrome?.handleBackPressed() ?: ChromeBackAction.PASS_THROUGH
+                if (action != ChromeBackAction.PASS_THROUGH) return true
+                return super.onKeyDown(keyCode, event)
+            }
             when (
                 PlayerKeyPolicy.resolveBackKeyDown(
                     isTouchDevice = isTouchDevice,
@@ -552,12 +535,6 @@ class PlayerActivity : AppCompatActivity() {
                     isControllerVisible = isControllerOpenedByUser || binding.playerView.isControllerFullyVisible,
                 )
             ) {
-                PlayerKeyPolicy.KeyAction.SHOW_LOCKED_HINT -> {
-                    showLockButtonTemporarily()
-                    showGestureHint(getString(R.string.player_locked_hint))
-                    return true
-                }
-
                 PlayerKeyPolicy.KeyAction.CLOSE_DRAWER -> {
                     closeDrawer()
                     return true
@@ -618,25 +595,12 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun applySafeAreaInsets() {
-        val topBaseLeft = binding.overlayTopBar.paddingLeft
-        val topBaseTop = binding.overlayTopBar.paddingTop
-        val topBaseRight = binding.overlayTopBar.paddingRight
-        val topBaseBottom = binding.overlayTopBar.paddingBottom
-
-        val bottomBaseLeft = binding.overlayBottomBar.paddingLeft
-        val bottomBaseTop = binding.overlayBottomBar.paddingTop
-        val bottomBaseRight = binding.overlayBottomBar.paddingRight
-        val bottomBaseBottom = binding.overlayBottomBar.paddingBottom
-
-        // 抽屉安全区必须落在这个内部容器上：直接给 channelDrawer 加 padding 会让
+        // TV 端抽屉安全区必须落在这个内部容器上：直接给 channelDrawer 加 padding 会让
         // drawer_left_edge 竖线跟着内缩，出现上下悬空的断层
         val drawerBaseLeft = binding.drawerContent.paddingLeft
         val drawerBaseTop = binding.drawerContent.paddingTop
         val drawerBaseRight = binding.drawerContent.paddingRight
         val drawerBaseBottom = binding.drawerContent.paddingBottom
-
-        val lockBaseStartMargin = (binding.overlayLock.layoutParams as? android.view.ViewGroup.MarginLayoutParams)
-            ?.marginStart ?: 0
 
         val density = resources.displayMetrics.density
         val stableDrawerBottom = (DRAWER_STABLE_BOTTOM_MARGIN_DP * density).toInt()
@@ -644,36 +608,20 @@ class PlayerActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.playerRoot) { _, windowInsets ->
             // 只跟随 displayCutout：沉浸式下 systemBars 会随"临时呼出"瞬时出现，
             // 若跟着 systemBars 改 padding，顶栏/底栏/抽屉会在手势边缘滑出时反复跳动
-            val cutout = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
-
-            binding.overlayTopBar.setPadding(
-                topBaseLeft + cutout.left,
-                topBaseTop + cutout.top,
-                topBaseRight + cutout.right,
-                topBaseBottom,
-            )
-            val bottomHorizontalSafe = maxOf(cutout.left, cutout.right)
-            binding.overlayBottomBar.setPadding(
-                bottomBaseLeft + bottomHorizontalSafe,
-                bottomBaseTop,
-                bottomBaseRight + bottomHorizontalSafe,
-                bottomBaseBottom + cutout.bottom,
-            )
-            binding.drawerContent.setPadding(
-                drawerBaseLeft,
-                drawerBaseTop + cutout.top,
-                drawerBaseRight + cutout.right,
-                drawerBaseBottom + maxOf(cutout.bottom, stableDrawerBottom),
-            )
-            (binding.overlayLock.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { lp ->
-                val targetStart = lockBaseStartMargin + cutout.left
-                if (lp.marginStart != targetStart) {
-                    lp.marginStart = targetStart
-                    binding.overlayLock.layoutParams = lp
-                }
+            if (isTouchDevice) {
+                mobileChrome?.applyCutoutInsets(windowInsets)
+            } else {
+                val cutout = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
+                binding.drawerContent.setPadding(
+                    drawerBaseLeft,
+                    drawerBaseTop + cutout.top,
+                    drawerBaseRight + cutout.right,
+                    drawerBaseBottom + maxOf(cutout.bottom, stableDrawerBottom),
+                )
             }
             windowInsets
         }
+        ViewCompat.requestApplyInsets(binding.playerRoot)
     }
 
     // ---------------- 频道抽屉（双端共用：触控浮层按钮 / TV 遥控器左键或菜单键） ----------------
@@ -702,7 +650,7 @@ class PlayerActivity : AppCompatActivity() {
      * 再交给 WebView 播放页（TV 端不会走这里）。
      */
     private fun switchToCctvWebPlayer(channel: Channel) {
-        closeDrawer()
+        mobileChrome?.closeDrawer()
         MobileUiPreferences.setLastPlayedChannelId(this, channel.id)
         runCatching {
             playerManager.stop()
@@ -716,52 +664,54 @@ class PlayerActivity : AppCompatActivity() {
         finish()
     }
 
-    // ---------------- 触控浮层与手势（仅触控设备） ----------------
+    // ---------------- 触控浮层与手势（仅触控设备，接入共享 MobilePlayerChromeController） ----------------
 
     private fun setupTouchUi() {
-        if (!isTouchDevice) return
+        if (!isTouchDevice) {
+            binding.mobileChrome.chromeRoot.visibility = View.GONE
+            return
+        }
 
-        // 触控端完全接管播放控制（自定义浮层 + 手势），关闭 Media3 原生控制器，
+        // 触控端完全接管播放控制（共享外框 + 手势），关闭 Media3 原生控制器，
         // 避免确认键/回车把系统控制器叠在自定义浮层上形成双浮层；TV 端保持既有呼出逻辑不变。
         binding.playerView.useController = false
         binding.channelName.visibility = View.GONE
         binding.viewTapCatcher.visibility = View.VISIBLE
+        binding.mobileChrome.chromeRoot.visibility = View.VISIBLE
+
+        mobileChrome = MobilePlayerChromeController(
+            binding = binding.mobileChrome,
+            capabilities = PlayerChromeCapabilities.MGTV,
+            callbacks = object : MobilePlayerChromeController.Callbacks {
+                override fun onBack() = finish()
+                override fun onToggleFavorite() = toggleCurrentFavorite()
+                override fun onRotate() = toggleOrientation()
+                override fun onPrevChannel() = switchChannel(direction = -1)
+                override fun onNextChannel() = switchChannel(direction = 1)
+                override fun onTogglePlayPause() = togglePlayPauseWithFeedback()
+                override fun onCycleAspect() = cycleAspectMode()
+                override fun onErrorRetry() = playerManager.manualReset()
+                override fun onLockStateChanged(locked: Boolean) {
+                    isScreenLocked = locked
+                }
+                override fun onDrawerVisibilityChanged(open: Boolean) {
+                    isDrawerOpen = open
+                }
+                override fun onChannelPicked(channel: Channel) {
+                    if (channel.id.startsWith(CctvWebChannel.CHANNEL_PREFIX)) {
+                        switchToCctvWebPlayer(channel)
+                        return
+                    }
+                    navigator.locate(channel.id, channel.streamUrl)
+                    switchToChannel(channel)
+                    mobileChrome?.closeDrawer()
+                }
+            },
+            initialPlaying = true,
+        )
+
         setupTouchGestures()
-
-        binding.overlayBack.setOnClickListener { finish() }
-        binding.overlayFavorite.setOnClickListener {
-            toggleCurrentFavorite()
-            showTouchOverlay()
-        }
-        binding.overlayAspect.setOnClickListener {
-            cycleAspectMode()
-            showTouchOverlay()
-        }
-        binding.overlayChannelList.setOnClickListener { openDrawer() }
-
-        binding.overlayPrev.setOnClickListener {
-            switchChannel(direction = -1)
-            showTouchOverlay()
-        }
-        binding.overlayPlayPause.setOnClickListener {
-            togglePlayPauseWithFeedback()
-            showTouchOverlay()
-        }
-        binding.overlayNext.setOnClickListener {
-            switchChannel(direction = 1)
-            showTouchOverlay()
-        }
-        binding.overlayRetry.setOnClickListener {
-            playerManager.manualReset()
-            showTouchOverlay()
-        }
-        binding.overlayRotate.setOnClickListener {
-            toggleOrientation()
-            showTouchOverlay()
-        }
-        binding.overlayLock.setOnClickListener { toggleScreenLock() }
-
-        showTouchOverlay(animate = false)
+        mobileChrome?.showControls(animate = false)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -776,11 +726,7 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onDown(e: MotionEvent): Boolean = true
 
                 override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                    if (isScreenLocked) {
-                        toggleLockButtonVisibility()
-                    } else {
-                        toggleTouchOverlay()
-                    }
+                    mobileChrome?.toggleControls()
                     return true
                 }
 
@@ -844,11 +790,9 @@ class PlayerActivity : AppCompatActivity() {
                             val attrs = window.attributes
                             attrs.screenBrightness = next
                             window.attributes = attrs
-                            showGestureHint(
-                                getString(
-                                    R.string.player_gesture_brightness,
-                                    PlayerTouchGestureMath.toPercent(next),
-                                ),
+                            mobileChrome?.showHudMeter(
+                                icon = MobilePlayerChromeController.HudIcon.BRIGHTNESS,
+                                percent = PlayerTouchGestureMath.toPercent(next),
                             )
                         }
 
@@ -862,7 +806,10 @@ class PlayerActivity : AppCompatActivity() {
                                 )
                                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0)
                                 val percent = PlayerTouchGestureMath.toPercent(next.toFloat() / maxVolume)
-                                showGestureHint(getString(R.string.player_gesture_volume, percent))
+                                mobileChrome?.showHudMeter(
+                                    icon = MobilePlayerChromeController.HudIcon.VOLUME,
+                                    percent = percent,
+                                )
                             }
                         }
 
@@ -871,6 +818,9 @@ class PlayerActivity : AppCompatActivity() {
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (dragMode != DragMode.NONE) {
+                        mobileChrome?.hideHudDelayed()
+                    }
                     dragMode = DragMode.NONE
                     dragEligible = false
                 }
@@ -888,7 +838,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun togglePlayPauseWithFeedback() {
         val nowPlaying = playerManager.togglePlayPause()
         updatePlayPauseButton()
-        showGestureHint(
+        mobileChrome?.showHudText(
             getString(if (nowPlaying) R.string.player_gesture_resumed else R.string.player_gesture_paused),
         )
     }
@@ -897,7 +847,7 @@ class PlayerActivity : AppCompatActivity() {
         val channel = currentChannel ?: return
         val nowFavorite = MobileUiPreferences.toggleFavoriteChannel(this, channel.id)
         updateFavoriteButton()
-        showGestureHint(
+        mobileChrome?.showHudText(
             getString(
                 if (nowFavorite) R.string.mobile_favorite_added else R.string.mobile_favorite_removed,
                 channel.name,
@@ -910,10 +860,7 @@ class PlayerActivity : AppCompatActivity() {
         val channelId = currentChannel?.id
         val isFavorite = channelId != null &&
             channelId in MobileUiPreferences.getFavoriteChannelIds(this)
-        binding.overlayFavorite.text = getString(
-            if (isFavorite) R.string.player_touch_favorited else R.string.player_touch_favorite,
-        )
-        binding.overlayFavorite.isSelected = isFavorite
+        mobileChrome?.updateFavorite(isFavorite)
     }
 
     private fun cycleAspectMode() {
@@ -928,8 +875,8 @@ class PlayerActivity : AppCompatActivity() {
         }
         binding.playerView.resizeMode = resizeMode
         val label = getString(labelRes)
-        binding.overlayAspect.text = label
-        showGestureHint(label)
+        mobileChrome?.updateAspectLabel(label)
+        mobileChrome?.showHudText(label)
     }
 
     private fun toggleOrientation() {
@@ -941,119 +888,19 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun toggleScreenLock() {
-        isScreenLocked = !isScreenLocked
-        binding.overlayLock.isSelected = isScreenLocked
-        binding.overlayLock.text = getString(
-            if (isScreenLocked) R.string.player_touch_unlock else R.string.player_touch_lock,
-        )
-        if (isScreenLocked) {
-            hideTouchOverlay(keepLockButton = true)
-            showLockButtonTemporarily()
-            showGestureHint(getString(R.string.player_locked_hint))
-        } else {
-            binding.root.removeCallbacks(hideLockButtonRunnable)
-            showTouchOverlay()
-        }
-    }
-
-    private fun toggleLockButtonVisibility() {
-        if (binding.overlayLock.visibility == View.VISIBLE) {
-            binding.root.removeCallbacks(hideLockButtonRunnable)
-            fadeOutView(binding.overlayLock)
-        } else {
-            showLockButtonTemporarily()
-        }
-    }
-
-    private fun showLockButtonTemporarily() {
-        fadeInView(binding.overlayLock)
-        binding.root.removeCallbacks(hideLockButtonRunnable)
-        binding.root.postDelayed(hideLockButtonRunnable, LOCK_BUTTON_AUTO_HIDE_DELAY_MS)
-    }
-
-    private fun showGestureHint(text: String) {
-        binding.gestureHint.text = text
-        fadeInView(binding.gestureHint)
-        binding.root.removeCallbacks(hideGestureHintRunnable)
-        binding.root.postDelayed(hideGestureHintRunnable, GESTURE_HINT_AUTO_HIDE_DELAY_MS)
-    }
-
-    private fun toggleTouchOverlay() {
-        if (isTouchOverlayVisible) {
-            binding.root.removeCallbacks(hideOverlayRunnable)
-            hideTouchOverlay(force = true)
-        } else {
-            showTouchOverlay()
-        }
-    }
-
-    private fun showTouchOverlay(animate: Boolean = true) {
-        if (!isTouchDevice || isScreenLocked) return
-        isTouchOverlayVisible = true
-        binding.overlayRetry.visibility =
-            if (playerManager.playbackState is PlaybackState.Error) View.VISIBLE else View.GONE
-        updatePlayPauseButton()
-        if (animate) {
-            fadeInView(binding.touchOverlayContainer)
-            fadeInView(binding.overlayLock)
-        } else {
-            binding.touchOverlayContainer.alpha = 1f
-            binding.touchOverlayContainer.visibility = View.VISIBLE
-            binding.overlayLock.alpha = 1f
-            binding.overlayLock.visibility = View.VISIBLE
-        }
-        binding.root.removeCallbacks(hideOverlayRunnable)
-        if (!isDrawerOpen) {
-            binding.root.postDelayed(hideOverlayRunnable, TOUCH_OVERLAY_AUTO_HIDE_DELAY_MS)
-        }
-    }
-
-    private fun hideTouchOverlay(force: Boolean = false, keepLockButton: Boolean = false) {
-        if (!isTouchDevice) return
-        if (!force && !keepLockButton && (playerManager.playbackState is PlaybackState.Error || isDrawerOpen)) {
-            return
-        }
-        isTouchOverlayVisible = false
-        fadeOutView(binding.touchOverlayContainer)
-        if (!keepLockButton) {
-            fadeOutView(binding.overlayLock)
-        }
-    }
-
-    private fun fadeInView(view: View) {
-        view.animate().cancel()
-        if (view.visibility != View.VISIBLE) {
-            view.alpha = 0f
-            view.visibility = View.VISIBLE
-        }
-        view.animate().alpha(1f).setDuration(OVERLAY_FADE_MS).withEndAction(null).start()
-    }
-
-    private fun fadeOutView(view: View) {
-        if (view.visibility != View.VISIBLE) return
-        view.animate().cancel()
-        view.animate()
-            .alpha(0f)
-            .setDuration(OVERLAY_FADE_MS)
-            .withEndAction {
-                view.visibility = View.GONE
-                view.alpha = 1f
-            }
-            .start()
-    }
-
     private fun updateOverlayChannelInfo() {
         if (!isTouchDevice) return
         val channel = currentChannel ?: return
         if (!::navigator.isInitialized) return
         val total = navigator.channels.size
         val position = navigator.currentIndex + 1
-        binding.overlayChannelInfo.text = if (total > 0) {
+        val title = if (total > 0) {
             getString(R.string.player_position_format, channel.name, position, total)
         } else {
             channel.name
         }
+        mobileChrome?.setTitle(title)
+        mobileChrome?.setCatalog(categories, channel.id)
     }
 
     private fun refreshDrawerRows() {
@@ -1065,10 +912,10 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun openDrawer() {
-        binding.root.removeCallbacks(hideOverlayRunnable)
-        // 双端一致：先收起底层浮层/控制器，避免 scrim 下的控件继续留在焦点树里
-        // （触控端曾出现抽屉打开后按 OK 命中"锁屏"按钮的问题，见 review P1-1）
-        hideTouchOverlay(force = true)
+        if (isTouchDevice) {
+            mobileChrome?.openDrawer()
+            return
+        }
         isControllerOpenedByUser = false
         binding.playerView.hideController()
         binding.channelName.visibility = View.GONE
@@ -1090,8 +937,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.channelDrawer.animate().translationX(0f).setDuration(DRAWER_ANIM_MS).start()
         isDrawerOpen = true
 
-        // 双端统一：打开抽屉即把焦点交给抽屉当前播放项（无命中时落到首个频道项），
-        // 否则非 TV 设备按方向键/OK 仍会命中被 scrim 盖住的浮层控件。
+        // TV 端：打开抽屉即把焦点交给抽屉当前播放项（无命中时落到首个频道项）
         scrollDrawerToCurrentChannel()
     }
 
@@ -1121,6 +967,10 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun closeDrawer() {
+        if (isTouchDevice) {
+            mobileChrome?.closeDrawer()
+            return
+        }
         if (!isDrawerOpen) return
         isDrawerOpen = false
         binding.drawerScrim.animate().cancel()
@@ -1145,13 +995,8 @@ class PlayerActivity : AppCompatActivity() {
             .withEndAction {
                 binding.channelDrawer.visibility = View.GONE
                 binding.channelDrawer.translationX = 0f
-                if (!isTouchDevice) {
-                    binding.playerView.requestFocus()
-                }
+                binding.playerView.requestFocus()
             }
             .start()
-        if (isTouchDevice) {
-            showTouchOverlay()
-        }
     }
 }

@@ -25,9 +25,69 @@ sealed class ChannelDrawerRow {
 }
 
 /**
- * 抽屉行序列的组装逻辑（纯函数）。
+ * 选台抽屉顶部的分组筛选胶囊项：`categoryId == null` 表示「全部」。
+ */
+data class ChannelDrawerFilterChip(
+    val categoryId: String?,
+    val label: String,
+    val selected: Boolean,
+)
+
+/**
+ * 抽屉行序列与分组筛选的组装逻辑（纯函数）。
  */
 object ChannelDrawerModel {
+
+    const val DEFAULT_ALL_LABEL = "全部"
+
+    /**
+     * 生成抽屉顶部的分组筛选胶囊列表：「全部」置顶，跳过空分类；
+     * 若 `selectedCategoryId` 已不在有效分类中，自动回退选中「全部」。
+     */
+    fun buildFilterChips(
+        categories: List<ChannelCategory>,
+        selectedCategoryId: String?,
+        allLabel: String = DEFAULT_ALL_LABEL,
+    ): List<ChannelDrawerFilterChip> {
+        val nonEmpty = categories.filter { it.channels.isNotEmpty() }
+        val effectiveSelectedId = selectedCategoryId?.takeIf { id -> nonEmpty.any { it.id == id } }
+        val chips = ArrayList<ChannelDrawerFilterChip>(nonEmpty.size + 1)
+        chips += ChannelDrawerFilterChip(
+            categoryId = null,
+            label = allLabel,
+            selected = effectiveSelectedId == null,
+        )
+        nonEmpty.forEach { category ->
+            chips += ChannelDrawerFilterChip(
+                categoryId = category.id,
+                label = category.name,
+                selected = category.id == effectiveSelectedId,
+            )
+        }
+        return chips
+    }
+
+    /**
+     * 按选中的分组过滤抽屉行：
+     * - `selectedCategoryId == null` 或分组不存在时，返回全部带分类头的行；
+     * - 命中单个分组时，直接返回该分组下的频道条目，并保留当前播放频道高亮。
+     */
+    fun buildFilteredRows(
+        categories: List<ChannelCategory>,
+        currentChannelId: String?,
+        selectedCategoryId: String?,
+    ): List<ChannelDrawerRow> {
+        val target = selectedCategoryId?.let { id ->
+            categories.firstOrNull { it.id == id && it.channels.isNotEmpty() }
+        } ?: return buildRows(categories, currentChannelId)
+
+        return target.channels.map { channel ->
+            ChannelDrawerRow.ChannelItem(
+                channel = channel,
+                isCurrent = currentChannelId != null && channel.id == currentChannelId,
+            )
+        }
+    }
 
     /**
      * 按分类顺序展开成抽屉的行序列。

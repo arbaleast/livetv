@@ -90,5 +90,19 @@
     <string name="player_drawer_title">全部频道</string>
     <string name="player_drawer_empty">没有可播放的频道</string>
     <string name="player_drawer_playing">播放中</string>
+    <string name="player_drawer_all">全部</string>
+    <string name="player_live_badge">LIVE</string>
+    <string name="player_touch_channels">选台</string>
+    <string name="player_touch_refresh">刷新</string>
+    <string name="player_cd_back">返回</string>
+    <string name="player_cd_favorite">收藏或取消收藏当前频道</string>
+    <string name="player_cd_channels">打开选台列表</string>
+    <string name="player_cd_prev">上一台</string>
+    <string name="player_cd_play_pause">播放或暂停</string>
+    <string name="player_cd_next">下一台</string>
+    <string name="player_cd_aspect">切换画面比例</string>
+    <string name="player_cd_rotate">切换横竖屏</string>
+    <string name="player_cd_refresh">刷新当前频道</string>
+    <string name="player_cd_lock">锁定或解锁屏幕</string>
     <string name="player_position_format">%1$s · %2$d/%3$d</string>
 </resources>

@@ -27,14 +27,27 @@
         android:textColor="@color/mobile_text_primary"
         android:textSize="14sp" />
 
-    <TextView
+    <LinearLayout
         android:id="@+id/drawer_channel_playing"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginStart="8dp"
-        android:text="@string/player_drawer_playing"
-        android:textColor="@color/mobile_accent"
-        android:textSize="11sp"
-        android:textStyle="bold"
-        android:visibility="gone" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <View
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:layout_marginEnd="5dp"
+            android:background="@drawable/bg_mobile_playing_dot" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/player_drawer_playing"
+            android:textColor="@color/mobile_accent"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 </LinearLayout>

@@ -41,7 +41,7 @@
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="false"
             android:hardwareAccelerated="true"
-            android:theme="@style/Theme.LiveTv.Mobile" />
+            android:theme="@style/Theme.LiveTv.Player" />
         <activity
             android:name=".ui.PlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"

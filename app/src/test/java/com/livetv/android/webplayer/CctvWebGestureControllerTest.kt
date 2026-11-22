@@ -193,4 +193,51 @@ class CctvWebGestureControllerTest {
         assertEquals(53, v.percent)
         assertEquals(GestureAction.EndAdjustment, controller.onTouchUp())
     }
+
+    @Test
+    fun `edge exclusion zone blocks accidental vertical brightness and volume drags`() {
+        val controller = CctvWebGestureController(touchSlopPx = 24f, edgeExclusionPx = 60f).apply {
+            isPlaying = true
+            isNativeControlsVisible = false
+        }
+
+        // 左边缘 30px（< 60px 防误触区）垂直滑动不触发亮度调节
+        controller.onTouchDown(x = 30f, y = 500f, viewWidthPx = 1000, startBrightness = 0.5f)
+        assertEquals(
+            GestureAction.PassToWebView,
+            controller.onTouchMove(x = 32f, y = 300f, viewHeightPx = 1000),
+        )
+        assertEquals(GestureAction.PassToWebView, controller.onTouchUp())
+
+        // 右边缘 970px（> 1000 - 60）垂直滑动不触发音量调节
+        controller.onTouchDown(x = 970f, y = 500f, viewWidthPx = 1000, startVolume = 5, maxVolume = 15)
+        assertEquals(
+            GestureAction.PassToWebView,
+            controller.onTouchMove(x = 968f, y = 300f, viewHeightPx = 1000),
+        )
+        assertEquals(GestureAction.PassToWebView, controller.onTouchUp())
+    }
+
+    @Test
+    fun `screen lock blocks vertical drags and turns tap into ToggleLockButton`() {
+        val controller = CctvWebGestureController(touchSlopPx = 24f, edgeExclusionPx = 48f).apply {
+            isPlaying = true
+            isNativeControlsVisible = false
+            isScreenLocked = true
+        }
+
+        assertTrue("锁屏态必须拦截单击防止透传网页", controller.shouldCaptureTap())
+
+        // 垂直滑动被锁屏拦截，不调整亮度/音量
+        controller.onTouchDown(x = 250f, y = 500f, viewWidthPx = 1000, startBrightness = 0.5f)
+        assertEquals(
+            GestureAction.PassToWebView,
+            controller.onTouchMove(x = 252f, y = 250f, viewHeightPx = 1000),
+        )
+        assertEquals(GestureAction.PassToWebView, controller.onTouchUp())
+
+        // 短按单击返回 ToggleLockButton，短暂浮现解锁按钮
+        controller.onTouchDown(x = 500f, y = 500f, viewWidthPx = 1000)
+        assertEquals(GestureAction.ToggleLockButton, controller.onTouchUp())
+    }
 }
