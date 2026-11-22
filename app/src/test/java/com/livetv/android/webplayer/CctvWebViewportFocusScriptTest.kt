@@ -74,6 +74,19 @@ class CctvWebViewportFocusScriptTest {
     }
 
     @Test
+    fun `uses one-shot requestVideoFrameCallback for immediate first frame detection`() {
+        assertTrue(
+            "应优先绑定 requestVideoFrameCallback 紧贴真实首帧出画",
+            script.contains("requestVideoFrameCallback"),
+        )
+        val occurrences = Regex("requestVideoFrameCallback").findAll(script).count()
+        assertTrue(
+            "requestVideoFrameCallback 仅允许存在性检测 + 单次注册（禁止逐帧递归空转），实际出现 $occurrences 次",
+            occurrences == 2,
+        )
+    }
+
+    @Test
     fun `prunes outer dom and disconnects observer after playback stabilizes`() {
         assertTrue("应包含外围 DOM 物理剪枝 .remove()", script.contains(".remove()"))
         assertTrue("剪枝后应断开 MutationObserver", script.contains("observer.disconnect()"))

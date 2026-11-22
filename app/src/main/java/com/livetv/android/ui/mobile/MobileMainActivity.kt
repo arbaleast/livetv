@@ -29,6 +29,7 @@ import com.livetv.android.domain.model.ChannelCategory
 import com.livetv.android.ui.PlayerActivity
 import com.livetv.android.webplayer.CctvWebChannel
 import com.livetv.android.webplayer.CctvWebPlayerActivity
+import com.livetv.android.webplayer.CctvWebWarmup
 import com.livetv.android.util.HeaderAutoHidePolicy
 
 /**
@@ -140,6 +141,7 @@ class MobileMainActivity : AppCompatActivity() {
             restoreSearchUi()
         }
         restorePendingScrollIfNeeded()
+        CctvWebWarmup.scheduleOnIdle()
     }
 
     override fun onResume() {

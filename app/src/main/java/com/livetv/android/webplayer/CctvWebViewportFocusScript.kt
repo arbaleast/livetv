@@ -198,8 +198,7 @@ object CctvWebViewportFocusScript {
       if (v.__livetvBound) { continue; }
       v.__livetvBound = true;
       (function (videoEl) {
-        function onProgress() {
-          if (!isVideoPlaying(videoEl)) { return; }
+        function markPlaying() {
           var firstPlaying = !window.__livetvPlaying;
           window.__livetvFocusReady = true;
           window.__livetvPlaying = true;
@@ -209,8 +208,23 @@ object CctvWebViewportFocusScript {
             if (p) { applyPureState(p); }
           }
         }
-        videoEl.addEventListener('playing', onProgress);
+        function onPlaying() {
+          if (!videoEl || videoEl.paused || videoEl.readyState < 2) { return; }
+          markPlaying();
+        }
+        function onProgress() {
+          if (!isVideoPlaying(videoEl)) { return; }
+          markPlaying();
+        }
+        videoEl.addEventListener('playing', onPlaying);
         videoEl.addEventListener('timeupdate', onProgress);
+        if (typeof videoEl.requestVideoFrameCallback === 'function') {
+          videoEl.requestVideoFrameCallback(function () {
+            if (videoEl && !videoEl.paused) {
+              markPlaying();
+            }
+          });
+        }
       })(v);
     }
   }

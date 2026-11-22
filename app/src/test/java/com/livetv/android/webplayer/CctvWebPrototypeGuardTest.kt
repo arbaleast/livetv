@@ -148,11 +148,30 @@ class CctvWebPrototypeGuardTest {
         assertTrue("应保留后台 5s 硬休眠 RENDERER_PRIORITY_WAIVED", activity.contains("RENDERER_PRIORITY_WAIVED"))
         assertTrue("onDestroy 应取消后台休眠回调", activity.contains("backgroundSuspendRunnable"))
 
+        // 黑幕撤除对齐首帧守卫：短轮询 + 120ms 淡出 + STATE_READY 不提前撤幕
+        assertTrue("就绪前轮询间隔应收紧至 80ms", activity.contains("POLL_INTERVAL_MS = 80L"))
+        assertTrue("黑幕淡出动画时长应压缩至 120ms", activity.contains("OVERLAY_FADE_MS = 120L"))
+        val readyBranchStart = activity.indexOf("STATE_READY -> {")
+        assertTrue("pollState 应包含 STATE_READY 分支", readyBranchStart >= 0)
+        val readyBranchEnd = activity.indexOf("else -> {", readyBranchStart)
+        assertTrue("pollState 应包含 else 分支", readyBranchEnd > readyBranchStart)
+        assertFalse(
+            "STATE_READY 分支不得提前调用 reveal() 暴露未出画加载态",
+            activity.substring(readyBranchStart, readyBranchEnd).contains("reveal()"),
+        )
+
         val blockerFile = File(dir, "CctvWebResourceBlocker.kt")
         assertTrue("应存在 CctvWebResourceBlocker.kt", blockerFile.isFile)
         val blocker = blockerFile.readText(Charsets.UTF_8)
         assertFalse("CctvWebResourceBlocker 严禁拦截或引用 cntv_Advertise.js", blocker.contains("cntv_Advertise", ignoreCase = true))
         assertFalse("CctvWebResourceBlocker 严禁伪造 window.wx 等 JS 桩对象", blocker.contains("window.wx", ignoreCase = true))
+
+        val warmupFile = File(dir, "CctvWebWarmup.kt")
+        assertTrue("应存在 CctvWebWarmup.kt", warmupFile.isFile)
+        val warmup = warmupFile.readText(Charsets.UTF_8)
+        assertFalse("CctvWebWarmup 严禁调用 WebSettings.getDefaultUserAgent", warmup.contains("WebSettings.getDefaultUserAgent"))
+        assertFalse("CctvWebWarmup 严禁调用 CookieManager.getInstance", warmup.contains("CookieManager.getInstance"))
+        assertFalse("CctvWebWarmup 严禁构造 WebView 实例", warmup.contains("WebView("))
     }
 
     @Test

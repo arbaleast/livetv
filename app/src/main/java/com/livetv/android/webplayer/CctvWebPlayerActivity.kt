@@ -163,12 +163,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             if (isFinishing || isDestroyed || isPlaying || awaitingPageCommit) return@evaluateJavascript
             when (raw?.trim()?.trim('"')) {
                 STATE_PLAYING -> {
-                    reveal()
                     onPlaybackDetected()
+                    reveal()
                 }
 
                 STATE_READY -> {
-                    reveal()
+                    // 视频元素已就位但首帧尚未起播：继续保留黑幕直到首帧播放或超时兜底，
+                    // 避免提前撤幕暴露官方加载态与控制栏残影。
                     mainHandler.postDelayed(pollRunnable, nextDelay)
                 }
 
@@ -792,11 +793,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         revealed = true
         val box = loadingOverlay ?: return
         loadingOverlay = null
+        Log.i(TAG, "overlay reveal start playing=$isPlaying")
         box.animate()
             .alpha(0f)
             .setDuration(OVERLAY_FADE_MS)
             .withEndAction {
                 root.removeView(box)
+                Log.i(TAG, "overlay reveal end")
             }
             .start()
     }
@@ -1219,11 +1222,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         private const val STATE_PLAYING = "playing"
         private const val STATE_READY = "ready"
 
-        private const val POLL_INTERVAL_MS = 250L
+        private const val POLL_INTERVAL_MS = 80L
         private const val SLOW_POLL_AFTER_MS = 15_000L
         private const val SLOW_POLL_INTERVAL_MS = 1_000L
         private const val FOCUS_TIMEOUT_MS = 7_000L
-        private const val OVERLAY_FADE_MS = 250L
+        private const val OVERLAY_FADE_MS = 120L
         private const val HUD_FADE_DURATION_MS = 200L
         private const val DRAWER_ANIM_MS = 220L
         private const val DRAWER_WIDTH_DP = 280
