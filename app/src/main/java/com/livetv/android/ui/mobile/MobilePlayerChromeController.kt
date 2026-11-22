@@ -279,8 +279,8 @@ internal class MobilePlayerChromeController(
         rescheduleAutoHideIfNeeded()
     }
 
-    fun setWebNativeControlsVisible(nativeVisible: Boolean) {
-        val next = stateMachine.setWebNativeControlsVisible(nativeVisible)
+    fun setWebNativeControlsVisible(nativeVisible: Boolean, revealTopBar: Boolean = true) {
+        val next = stateMachine.setWebNativeControlsVisible(nativeVisible, revealTopBar = revealTopBar)
         val ctx = binding.chromeRoot.context
         binding.chromeWebControls.isSelected = next.isWebNativeControlsVisible
         binding.chromeWebControls.setText(
@@ -297,8 +297,35 @@ internal class MobilePlayerChromeController(
                 R.string.cctv_web_control_native_desc
             },
         )
-        syncBarVisibility(animate = true)
+        if (revealTopBar) {
+            syncBarVisibility(animate = true)
+        } else {
+            syncBarVisibility(animate = false)
+        }
         rescheduleAutoHideIfNeeded()
+    }
+
+    /**
+     * 同步取消抽屉与顶/底栏/锁屏/HUD 全部属性动画并立即置 View.GONE，
+     * 用于 PixelCopy 截取上一台纯净尾帧前消除任何残留浮层。
+     */
+    fun dismissAllImmediately() {
+        handler.removeCallbacks(autoHideControlsRunnable)
+        handler.removeCallbacks(autoHideLockRunnable)
+        handler.removeCallbacks(autoHideHudRunnable)
+        val wasDrawerOpen = stateMachine.state.isDrawerOpen
+        if (wasDrawerOpen) {
+            stateMachine.setDrawerOpen(false)
+            callbacks.onDrawerVisibilityChanged(false)
+        }
+        stateMachine.hideControls(force = true)
+        hideViewImmediately(binding.chromeTopBar)
+        hideViewImmediately(binding.chromeBottomBar)
+        hideViewImmediately(binding.chromeLock)
+        hideViewImmediately(binding.chromeHud)
+        hideViewImmediately(binding.chromeDrawerScrim)
+        hideViewImmediately(binding.chromeDrawerPanel)
+        binding.chromeDrawerPanel.translationX = 0f
     }
 
     fun setCatalog(categories: List<ChannelCategory>, currentChannelId: String?) {

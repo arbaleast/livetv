@@ -5,6 +5,7 @@ import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Build
 import java.lang.ref.WeakReference
 
@@ -20,6 +21,41 @@ internal object MobilePlayerTransitionHelper {
 
     private var activePlayerRef: WeakReference<Activity>? = null
     private var activeDismissAction: (() -> Unit)? = null
+    private var stashedLastFrameBitmap: Bitmap? = null
+
+    /**
+     * 跨引擎（MGTV ↔ CCTV）切台前暂存已截取的上一台纯净尾帧 Bitmap；
+     * 若存在未消费的旧位图则立即回收，防止内存泄漏。
+     */
+    @Synchronized
+    fun stashCrossEngineLastFrame(bitmap: Bitmap?) {
+        val old = stashedLastFrameBitmap
+        if (old != null && old !== bitmap && !old.isRecycled) {
+            old.recycle()
+        }
+        stashedLastFrameBitmap = bitmap?.takeIf { !it.isRecycled }
+    }
+
+    /**
+     * 目标播放页（onCreate / onNewIntent）消费跨引擎尾帧（单次取走即置空，所有权移交目标页在撤幕时回收）。
+     */
+    @Synchronized
+    fun consumeCrossEngineLastFrame(intent: Intent?): Bitmap? {
+        val fromCross = intent?.getBooleanExtra(PlayerTransitionAndPipPolicy.EXTRA_FROM_CROSS_SWITCH, false) == true
+        val bmp = stashedLastFrameBitmap
+        stashedLastFrameBitmap = null
+        if (!fromCross) {
+            if (bmp != null && !bmp.isRecycled) bmp.recycle()
+            return null
+        }
+        return bmp?.takeIf { !it.isRecycled }
+    }
+
+    @Synchronized
+    fun clearStashedCrossEngineLastFrame() {
+        stashedLastFrameBitmap?.let { if (!it.isRecycled) it.recycle() }
+        stashedLastFrameBitmap = null
+    }
 
     fun supportsPictureInPicture(context: Context): Boolean =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
@@ -82,6 +118,7 @@ internal object MobilePlayerTransitionHelper {
      * 避免同 affinity 下的 `singleTask` 复用旧 pinned Task 导致新频道被迫缩在小窗内启动。
      */
     fun dismissOtherEngineBeforeLaunch(targetActivityClass: Class<out Activity>) {
+        clearStashedCrossEngineLastFrame()
         val current = activePlayerRef?.get() ?: return
         if (current::class.java == targetActivityClass) return
         if (current.isFinishing || current.isDestroyed) {

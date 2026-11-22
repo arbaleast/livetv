@@ -1,5 +1,6 @@
 package com.livetv.android.webplayer
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -240,9 +241,9 @@ class CctvWebPrototypeGuardTest {
         assertTrue("应保留后台 5s 硬休眠 RENDERER_PRIORITY_WAIVED", activity.contains("RENDERER_PRIORITY_WAIVED"))
         assertTrue("onDestroy 应取消后台休眠回调", activity.contains("backgroundSuspendRunnable"))
 
-        // 黑幕撤除对齐首帧守卫：短轮询 + 120ms 淡出 + STATE_READY 不提前撤幕 + 分模式兜底超时
+        // 黑幕撤除对齐首帧守卫：短轮询 + 150ms 淡出 + STATE_READY 不提前撤幕 + 分模式兜底超时
         assertTrue("就绪前轮询间隔应收紧至 80ms", activity.contains("POLL_INTERVAL_MS = 80L"))
-        assertTrue("黑幕淡出动画时长应压缩至 120ms", activity.contains("OVERLAY_FADE_MS = 120L"))
+        assertTrue("尾帧与加载胶囊淡出动画时长应为 150ms", activity.contains("OVERLAY_FADE_MS = 150L"))
         assertTrue("黑幕超时兜底应通过 CctvWebChannel.focusTimeoutMs 分流（直播 7s / 4K 点播 12s）", activity.contains("CctvWebChannel.focusTimeoutMs("))
         val readyBranchStart = activity.indexOf("STATE_READY -> {")
         assertTrue("pollState 应包含 STATE_READY 分支", readyBranchStart >= 0)
@@ -265,6 +266,67 @@ class CctvWebPrototypeGuardTest {
         assertFalse("CctvWebWarmup 严禁调用 WebSettings.getDefaultUserAgent", warmup.contains("WebSettings.getDefaultUserAgent"))
         assertFalse("CctvWebWarmup 严禁调用 CookieManager.getInstance", warmup.contains("CookieManager.getInstance"))
         assertFalse("CctvWebWarmup 严禁构造 WebView 实例", warmup.contains("WebView("))
+
+        // switchGeneration 防竞态 + PixelCopy 2-Vsync 纯净尾帧虚化 + 磨砂加载胶囊与暗黑抽屉配色守卫
+        assertTrue("CctvWebPlayerActivity 应使用 CctvWebSwitchGeneration 防竞态", activity.contains("CctvWebSwitchGeneration"))
+        assertTrue("切台时应递增 switchGeneration", activity.contains("switchGeneration.nextGeneration()"))
+        assertTrue("异步回调应校验 switchGeneration.isCurrent", activity.contains("switchGeneration.isCurrent("))
+        assertTrue("同页切台应使用 PixelCopy.request 捕获尾帧", activity.contains("PixelCopy.request("))
+        assertTrue("PixelCopy 捕获前应同步隐藏全部外框与抽屉", activity.contains("chrome.dismissAllImmediately()"))
+        assertTrue("PixelCopy 捕获前应将 chrome.rootView 同步置 View.GONE", activity.contains("chrome.rootView.visibility = View.GONE"))
+        assertTrue("PixelCopy 捕获前应使用 Choreographer 连续等待 2 个 Vsync 帧", activity.contains("Choreographer.getInstance().postFrameCallback"))
+        assertFalse(
+            "reloadChannel 切台加载态不得主动弹出顶/底栏控制条与加载胶囊重叠",
+            activity.substring(reloadStart, reloadEnd).contains("chrome.showControls("),
+        )
+        assertTrue("API 31+ 尾帧应施加轻量高斯模糊 RenderEffect", activity.contains("RenderEffect.createBlurEffect("))
+        assertTrue("尾帧淡出清理必须释放 RenderEffect", activity.contains("lastFrameImageView.setRenderEffect(null)"))
+        assertTrue("尾帧视图撤幕后必须置 View.GONE", activity.contains("lastFrameImageView.visibility = View.GONE"))
+        assertTrue("尾帧视图清理时必须置空图片引用防止 Bitmap 泄漏", activity.contains("lastFrameImageView.setImageDrawable(null)"))
+        assertTrue("尾帧清理必须回收或释放旧 Bitmap 引用", activity.contains("lastFrameBitmap"))
+        assertTrue("加载遮罩应使用磨砂胶囊背景与切换文案", activity.contains("R.drawable.bg_player_loading_capsule") && activity.contains("R.string.cctv_web_switching_to"))
+        assertEquals(
+            "严禁引入双 WebView（仅允许 buildWebView 一处构造 WebView(this)）",
+            1,
+            Regex("WebView\\(this\\)").findAll(activity).count(),
+        )
+
+        val capsuleFile = File("src/main/res/drawable/bg_player_loading_capsule.xml")
+        assertTrue("应存在磨砂加载胶囊 drawable", capsuleFile.isFile)
+        val capsuleXml = capsuleFile.readText(Charsets.UTF_8)
+        assertTrue("磨砂加载胶囊底色应为 #BF0E1117", capsuleXml.contains("#BF0E1117", ignoreCase = true))
+        assertTrue("磨砂加载胶囊描边应为 #24FFFFFF", capsuleXml.contains("#24FFFFFF", ignoreCase = true))
+
+        val colorsXml = File("src/main/res/values/colors.xml").readText(Charsets.UTF_8)
+        assertTrue("抽屉底板应为 #E60B0D12", colorsXml.contains("#E60B0D12", ignoreCase = true))
+        assertTrue("抽屉左侧细边应为 #1FFFFFFF", colorsXml.contains("#1FFFFFFF", ignoreCase = true))
+        assertTrue("抽屉普通卡片底色应为 #0DFFFFFF", colorsXml.contains("#0DFFFFFF", ignoreCase = true))
+        assertTrue("抽屉播放中卡片底色应为 #1F4DA3FF", colorsXml.contains("#1F4DA3FF", ignoreCase = true))
+        assertTrue("抽屉播放中卡片细边应为 #594DA3FF", colorsXml.contains("#594DA3FF", ignoreCase = true))
+        assertTrue("抽屉播放中柔和点缀应为 #7CC0FF", colorsXml.contains("#7CC0FF", ignoreCase = true))
+
+        val chipXml = File("src/main/res/drawable/bg_player_filter_chip.xml").readText(Charsets.UTF_8)
+        assertFalse("顶部分类胶囊选中态不得使用刺眼纯白 #FFFFFF 底", chipXml.contains("\"#FFFFFF\"", ignoreCase = true))
+        assertTrue("顶部分类胶囊选中态应使用 #2EFFFFFF 底", chipXml.contains("#2EFFFFFF", ignoreCase = true))
+        assertTrue("顶部分类胶囊选中态应使用 #59FFFFFF 描边", chipXml.contains("#59FFFFFF", ignoreCase = true))
+        assertTrue("顶部分类胶囊未选中态应使用 #12FFFFFF 底", chipXml.contains("#12FFFFFF", ignoreCase = true))
+
+        // MGTV 手机端加载过渡与 CCTV 保持视觉与动效 100% 一致守卫
+        val mobileOverlayFile = File("src/main/java/com/livetv/android/ui/mobile/MobilePlayerLoadingOverlay.kt")
+        assertTrue("应存在 MGTV 手机端统一加载过渡控制器 MobilePlayerLoadingOverlay.kt", mobileOverlayFile.isFile)
+        val mobileOverlay = mobileOverlayFile.readText(Charsets.UTF_8)
+        assertTrue("MGTV 手机端加载胶囊应复用 bg_player_loading_capsule", mobileOverlay.contains("R.drawable.bg_player_loading_capsule"))
+        assertTrue("MGTV 手机端切台尾帧应使用 RenderEffect(24f) 模糊与 150ms 淡出", mobileOverlay.contains("OVERLAY_FADE_MS = 150L") && mobileOverlay.contains("RenderEffect.createBlurEffect("))
+        assertTrue("MGTV 手机端撤幕必须清除 RenderEffect 并置 View.GONE 释放 Bitmap", mobileOverlay.contains("setRenderEffect(null)") && mobileOverlay.contains("lastFrameImageView.visibility = View.GONE") && mobileOverlay.contains("lastFrameBitmap"))
+        val playerActivitySrc = File("src/main/java/com/livetv/android/ui/PlayerActivity.kt").readText(Charsets.UTF_8)
+        assertTrue("PlayerActivity 手机触控分支应挂载 MobilePlayerLoadingOverlay 统一加载体验", playerActivitySrc.contains("MobilePlayerLoadingOverlay("))
+        assertTrue(
+            "MGTV <-> CCTV 跨引擎切台应通过 stashCrossEngineLastFrame / consumeCrossEngineLastFrame 移交上一台虚化尾帧",
+            playerActivitySrc.contains("stashCrossEngineLastFrame(") &&
+                playerActivitySrc.contains("consumeCrossEngineLastFrame(") &&
+                activity.contains("stashCrossEngineLastFrame(") &&
+                activity.contains("consumeCrossEngineLastFrame("),
+        )
     }
 
     @Test

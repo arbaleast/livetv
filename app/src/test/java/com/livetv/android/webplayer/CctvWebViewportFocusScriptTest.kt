@@ -79,6 +79,14 @@ class CctvWebViewportFocusScriptTest {
         val pureRuleLine = script.lines().firstOrNull { it.contains("livetv-pure-control-hidden") && it.contains("opacity") }
         assertTrue("应存在纯视频内部控制层隐藏 CSS 规则", pureRuleLine != null)
         assertFalse("纯视频内部控制层规则严禁使用 display:none", pureRuleLine!!.contains("display:none"))
+
+        // 官方加载遮罩层在纯视频态（原控态除外）应被强制 display:none !important，覆盖 #player 与 #myPlayer
+        val loadingMaskLine = script.lines().firstOrNull { it.contains("livetv-loading-mask-hidden") && it.contains("display:none") }
+        assertTrue("应存在 #player/#myPlayer 官方加载遮罩层隐藏 CSS 规则", loadingMaskLine != null)
+        assertTrue("加载遮罩规则必须受 html.livetv-pure-video 门控（原控态除外）", loadingMaskLine!!.contains("html.livetv-pure-video"))
+        assertTrue("加载遮罩规则必须覆盖 #player", loadingMaskLine.contains("#player"))
+        assertTrue("加载遮罩规则必须覆盖 #myPlayer", loadingMaskLine.contains("#myPlayer"))
+        assertTrue("加载遮罩规则必须强制 display:none !important", loadingMaskLine.contains("display:none !important"))
     }
 
     @Test
@@ -86,6 +94,10 @@ class CctvWebViewportFocusScriptTest {
         assertTrue(
             "应优先绑定 requestVideoFrameCallback 紧贴真实首帧出画",
             script.contains("requestVideoFrameCallback"),
+        )
+        assertTrue(
+            "requestVideoFrameCallback 应写入 __livetvFirstFrameRendered 真首帧标记",
+            script.contains("__livetvFirstFrameRendered"),
         )
         val occurrences = Regex("requestVideoFrameCallback").findAll(script).count()
         assertTrue(
@@ -111,9 +123,11 @@ class CctvWebViewportFocusScriptTest {
         assertTrue(offScript.contains("livetv-pure-video"))
         assertTrue(offScript.contains("remove"))
         assertTrue("应监听 video ended 事件支持 4K 点播自动轮播下一期", script.contains("'ended'"))
-        assertEqualsIgnoringSpace(
-            "(window.__livetvEnded?'ended':(window.__livetvPlaying?'playing':(window.__livetvFocusReady?'ready':'loading')))",
-            stateScript,
+        assertTrue("状态探针必须校验 videoWidth > 0", stateScript.contains("videoWidth>0"))
+        assertTrue("状态探针必须优先认可 __livetvFirstFrameRendered 真首帧标记", stateScript.contains("__livetvFirstFrameRendered"))
+        assertTrue(
+            "状态探针必须保留 readyState >= 2 && currentTime > 0.05 回退条件",
+            stateScript.contains("readyState>=2") && stateScript.contains("currentTime>0.05"),
         )
         assertTrue(stateScript.contains("__livetvEnded"))
         assertTrue(stateScript.contains("__livetvPlaying"))

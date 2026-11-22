@@ -1,5 +1,6 @@
 package com.livetv.android.ui.mobile
 
+import android.graphics.Typeface
 import android.view.LayoutInflater
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
@@ -42,6 +43,7 @@ internal class ChannelDrawerFilterAdapter(
         fun bind(chip: ChannelDrawerFilterChip) {
             binding.drawerFilterChip.text = chip.label
             binding.drawerFilterChip.isSelected = chip.selected
+            binding.drawerFilterChip.typeface = if (chip.selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
             binding.drawerFilterChip.setOnClickListener { onChipClick(chip.categoryId) }
         }
     }

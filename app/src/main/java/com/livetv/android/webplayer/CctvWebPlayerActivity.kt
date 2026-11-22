@@ -5,18 +5,26 @@ import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Rect
+import android.graphics.RenderEffect
+import android.graphics.Shader
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.text.TextUtils
 import android.util.Log
 import android.util.Rational
+import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.PixelCopy
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -32,6 +40,7 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -55,6 +64,7 @@ import com.livetv.android.ui.mobile.MobileUiPreferences
 import com.livetv.android.ui.mobile.PlayerChromeCapabilities
 import com.livetv.android.ui.mobile.PlayerTransitionAndPipPolicy
 import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * CCTV 手机端 WebView 播放页（接入 [MobilePlayerChromeController] 共享手机端外框）。
@@ -76,11 +86,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     private lateinit var root: FrameLayout
     private lateinit var touchContainer: CctvTouchContainer
+    private lateinit var lastFrameImageView: ImageView
     private lateinit var chrome: MobilePlayerChromeController
     private lateinit var gestureController: CctvWebGestureController
 
     private var webView: WebView? = null
     private var loadingOverlay: FrameLayout? = null
+    private var lastFrameBitmap: Bitmap? = null
 
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
@@ -89,6 +101,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val app: LiveTvApplication get() = application as LiveTvApplication
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
+    private val switchGeneration = CctvWebSwitchGeneration()
 
     private var currentChannelId: String = DEFAULT_CHANNEL_ID
     private var currentChannelName: String = ""
@@ -97,6 +110,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private var currentVodUrl: String? = null
     private var currentVodTitle: String? = null
     private val vod4kPool: List<Cctv4kVodItem> by lazy { loadVod4kPool() }
+
+    private var webViewNavigationGeneration: Long = 0L
+    private var activeTimeoutGeneration: Long = 0L
+    private var activePollGeneration: Long = 0L
+    private var activeVodEndedGeneration: Long = 0L
+    private var pixelCopyTimeoutRunnable: Runnable? = null
+    private var pendingChoreographerCallback: Choreographer.FrameCallback? = null
 
     private var revealed = false
     private var startedAt = 0L
@@ -125,43 +145,54 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     }
 
     private val revealTimeoutRunnable = Runnable {
+        val gen = activeTimeoutGeneration
+        if (!switchGeneration.isCurrent(gen)) return@Runnable
         awaitingPageCommit = false
-        reveal()
+        reveal(gen)
         if (!isPlaying && webView != null) {
-            mainHandler.removeCallbacks(pollRunnable)
-            mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
+            schedulePoll(gen, POLL_INTERVAL_MS)
         }
     }
 
     private val pollRunnable: Runnable = Runnable { pollState() }
 
+    private fun schedulePoll(generation: Long, delayMs: Long) {
+        if (!switchGeneration.isCurrent(generation)) return
+        activePollGeneration = generation
+        mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.postDelayed(pollRunnable, delayMs)
+    }
+
     private fun pollState() {
         val view = webView ?: return
+        val generation = activePollGeneration
+        if (!switchGeneration.isCurrent(generation)) return
         if (isPlaying || awaitingPageCommit) return
 
         val elapsed = System.currentTimeMillis() - startedAt
         val focusTimeoutMs = CctvWebChannel.focusTimeoutMs(currentChannelId)
         if (!revealed && elapsed >= focusTimeoutMs) {
-            reveal()
+            reveal(generation)
         }
         val nextDelay = if (elapsed >= SLOW_POLL_AFTER_MS) SLOW_POLL_INTERVAL_MS else POLL_INTERVAL_MS
 
         view.evaluateJavascript(CctvWebViewportFocusScript.CHECK_STATE_SCRIPT) { raw ->
+            if (!switchGeneration.isCurrent(generation)) return@evaluateJavascript
             if (isFinishing || isDestroyed || isPlaying || awaitingPageCommit) return@evaluateJavascript
             when (raw?.trim()?.trim('"')) {
                 STATE_PLAYING -> {
-                    onPlaybackDetected()
-                    reveal()
+                    onPlaybackDetected(generation)
+                    reveal(generation)
                 }
 
                 STATE_READY -> {
-                    // 视频元素已就位但首帧尚未起播：继续保留黑幕直到首帧播放或超时兜底，
+                    // 视频元素已就位但首帧尚未起播：继续保留黑幕/尾帧直到真首帧播放或超时兜底，
                     // 避免提前撤幕暴露官方加载态与控制栏残影。
-                    mainHandler.postDelayed(pollRunnable, nextDelay)
+                    schedulePoll(generation, nextDelay)
                 }
 
                 else -> {
-                    mainHandler.postDelayed(pollRunnable, nextDelay)
+                    schedulePoll(generation, nextDelay)
                 }
             }
         }
@@ -211,6 +242,12 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
         touchContainer = CctvTouchContainer(this)
         root.addView(touchContainer, matchParent())
+        lastFrameImageView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_XY
+            setBackgroundColor(Color.BLACK)
+            visibility = View.GONE
+        }
+        root.addView(lastFrameImageView, matchParent())
         mountChrome()
         applySafeAreaInsets()
 
@@ -233,15 +270,20 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         applyUserAgentForChannel(created, channelId)
         touchContainer.addView(created, matchParent())
 
-        // 阶段一（待起播）保持控制层可见，方便随时返回或打开选台抽屉
-        chrome.showControls(animate = false)
-        showOverlay()
+        // 阶段一（待起播）默认隐藏外框仅展示居中加载胶囊；若从 MGTV 跨引擎切入则无缝承接上一台虚化尾帧
+        val generation = switchGeneration.nextGeneration()
+        chrome.dismissAllImmediately()
+        val crossBitmap = MobilePlayerTransitionHelper.consumeCrossEngineLastFrame(intent)
+        if (crossBitmap != null) {
+            applyLastFrameBitmapToView(crossBitmap)
+            showOverlay(translucentForLastFrame = true)
+        } else {
+            showOverlay(translucentForLastFrame = false)
+        }
         ensureCatalogLoaded()
 
-        startedAt = System.currentTimeMillis()
         awaitingPageCommit = true
-        mainHandler.postDelayed(revealTimeoutRunnable, CctvWebChannel.focusTimeoutMs(channelId))
-        created.loadUrl(pageUrl)
+        beginWebViewLoad(created, channelId, pageUrl, generation)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -380,9 +422,12 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     private fun pollVodEndedState() {
         val view = webView ?: return
+        val generation = activeVodEndedGeneration
+        if (!switchGeneration.isCurrent(generation)) return
         if (!isPlaying || !CctvWebChannel.isVodPoolChannel(currentChannelId)) return
         if (isFinishing || isDestroyed || suspendedInBackground || hasLoadFailure) return
         view.evaluateJavascript(CctvWebViewportFocusScript.CHECK_STATE_SCRIPT) { raw ->
+            if (!switchGeneration.isCurrent(generation)) return@evaluateJavascript
             if (!isPlaying || !CctvWebChannel.isVodPoolChannel(currentChannelId)) return@evaluateJavascript
             if (isFinishing || isDestroyed || suspendedInBackground) return@evaluateJavascript
             if (raw?.trim()?.trim('"') == STATE_ENDED) {
@@ -459,12 +504,16 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
             override fun onPageCommitVisible(view: WebView, url: String) {
                 if (url == ABOUT_BLANK) return
-                injectFocusScript(view)
+                val navGen = webViewNavigationGeneration
+                if (!switchGeneration.isCurrent(navGen)) return
+                injectFocusScript(view, navGen)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
                 if (url == ABOUT_BLANK) return
-                injectFocusScript(view)
+                val navGen = webViewNavigationGeneration
+                if (!switchGeneration.isCurrent(navGen)) return
+                injectFocusScript(view, navGen)
             }
 
             override fun onReceivedError(
@@ -473,9 +522,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 error: WebResourceError,
             ) {
                 if (!request.isForMainFrame) return
+                val navGen = webViewNavigationGeneration
+                if (!switchGeneration.isCurrent(navGen)) return
                 awaitingPageCommit = false
-                Log.w(TAG, "main frame error: " + error.errorCode)
-                showLoadFailure(R.string.cctv_web_load_failed)
+                Log.w(TAG, "main frame error: " + error.errorCode + " gen=" + navGen)
+                showLoadFailure(R.string.cctv_web_load_failed, navGen)
             }
 
             override fun onReceivedHttpError(
@@ -484,9 +535,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 errorResponse: WebResourceResponse,
             ) {
                 if (!request.isForMainFrame) return
+                val navGen = webViewNavigationGeneration
+                if (!switchGeneration.isCurrent(navGen)) return
                 awaitingPageCommit = false
-                Log.w(TAG, "main frame http: " + errorResponse.statusCode)
-                showLoadFailure(R.string.cctv_web_load_failed)
+                Log.w(TAG, "main frame http: " + errorResponse.statusCode + " gen=" + navGen)
+                showLoadFailure(R.string.cctv_web_load_failed, navGen)
             }
 
             override fun onRenderProcessGone(
@@ -498,6 +551,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                     "renderer gone: crash=" + detail.didCrash() +
                         " priority=" + detail.rendererPriorityAtExit(),
                 )
+                cancelPendingPixelCopy()
+                clearLastFrameView()
                 (view.parent as? ViewGroup)?.removeView(view)
                 view.webChromeClient = null
                 webChromeClient = null
@@ -506,7 +561,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 if (webView === view) webView = null
                 suspendedInBackground = false
                 mainHandler.removeCallbacks(backgroundSuspendRunnable)
-                showLoadFailure(R.string.cctv_web_renderer_gone)
+                showLoadFailure(R.string.cctv_web_renderer_gone, switchGeneration.current)
                 return true
             }
         }
@@ -709,7 +764,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         window.attributes = attrs
     }
 
-    // ---------------- 首帧对齐黑幕 ----------------
+    // ---------------- 首帧对齐黑幕与尾帧冻结 ----------------
 
     private fun matchParent() = FrameLayout.LayoutParams(
         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -718,63 +773,348 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
-    private fun showOverlay() {
+    private fun restoreChromeVisibility() {
+        if (::chrome.isInitialized && chrome.rootView.visibility != View.VISIBLE) {
+            chrome.rootView.visibility = View.VISIBLE
+        }
+    }
+
+    private fun cancelPendingPixelCopy() {
+        pixelCopyTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
+        pixelCopyTimeoutRunnable = null
+        pendingChoreographerCallback?.let { cb ->
+            runCatching { Choreographer.getInstance().removeFrameCallback(cb) }
+        }
+        pendingChoreographerCallback = null
+        restoreChromeVisibility()
+    }
+
+    private fun applyLastFrameBitmapToView(bitmap: Bitmap) {
+        clearLastFrameView()
+        lastFrameBitmap = bitmap
+        lastFrameImageView.setImageBitmap(bitmap)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            lastFrameImageView.setRenderEffect(
+                RenderEffect.createBlurEffect(
+                    LAST_FRAME_BLUR_RADIUS_PX,
+                    LAST_FRAME_BLUR_RADIUS_PX,
+                    Shader.TileMode.CLAMP,
+                ),
+            )
+        }
+        lastFrameImageView.alpha = 1f
+        lastFrameImageView.visibility = View.VISIBLE
+    }
+
+    private fun clearLastFrameView() {
+        if (::lastFrameImageView.isInitialized) {
+            lastFrameImageView.animate().cancel()
+            lastFrameImageView.alpha = 1f
+            lastFrameImageView.visibility = View.GONE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                lastFrameImageView.setRenderEffect(null)
+            }
+            lastFrameImageView.setImageDrawable(null)
+        }
+        lastFrameBitmap?.let { bmp ->
+            if (!bmp.isRecycled) bmp.recycle()
+        }
+        lastFrameBitmap = null
+    }
+
+    private fun hasVisibleLastFrame(): Boolean =
+        ::lastFrameImageView.isInitialized &&
+            lastFrameImageView.visibility == View.VISIBLE &&
+            lastFrameBitmap?.let { !it.isRecycled } == true
+
+    private fun switchingDisplayName(): String =
+        currentChannelName.ifBlank { currentChannelId }
+
+    private fun showOverlay(translucentForLastFrame: Boolean = false) {
+        restoreChromeVisibility()
         loadingOverlay?.let {
             it.animate().cancel()
             root.removeView(it)
         }
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            addView(ProgressBar(this@CctvWebPlayerActivity).apply { isIndeterminate = true })
+        if (!translucentForLastFrame) {
+            clearLastFrameView()
+        }
+        val scrimColor = when {
+            !translucentForLastFrame -> Color.BLACK
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> LAST_FRAME_SCRIM_BLUR_COLOR
+            else -> LAST_FRAME_SCRIM_FALLBACK_COLOR
+        }
+        val spinnerSize = dp(20)
+        val spinner = ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            isIndeterminate = true
+            indeterminateTintList = ColorStateList.valueOf(LOADING_CAPSULE_TINT_COLOR)
+        }
+        val statusText = TextView(this).apply {
+            text = getString(R.string.cctv_web_switching_to, switchingDisplayName())
+            setTextColor(LOADING_CAPSULE_TINT_COLOR)
+            textSize = 13f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        val capsule = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundResource(R.drawable.bg_player_loading_capsule)
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            addView(spinner, LinearLayout.LayoutParams(spinnerSize, spinnerSize))
             addView(
-                TextView(this@CctvWebPlayerActivity).apply {
-                    text = getString(R.string.cctv_web_loading)
-                    setTextColor(Color.WHITE)
-                    textSize = 14f
-                    setPadding(0, dp(12), 0, 0)
+                statusText,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    marginStart = dp(10)
                 },
             )
         }
         val box = FrameLayout(this).apply {
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(scrimColor)
+            isClickable = true
+            setOnClickListener {
+                if (!chrome.isDrawerOpen) {
+                    chrome.toggleControls()
+                }
+            }
             addView(
-                column,
+                capsule,
                 FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     Gravity.CENTER,
-                ),
+                ).apply {
+                    marginStart = dp(24)
+                    marginEnd = dp(24)
+                },
             )
         }
         root.addView(box, matchParent())
         loadingOverlay = box
-        // 确保共享外框（顶栏/抽屉）位于加载黑幕之上，加载期间仍可返回或切台
+        // 确保共享外框位于遮罩之上：默认隐藏，用户主动轻点遮罩时可唤出顶/底栏或选台抽屉
         chrome.rootView.bringToFront()
     }
 
-    /** 首帧就绪或超时后 120ms 淡出黑幕并移除；幂等。 */
-    private fun reveal() {
+    /** 真首帧就绪或超时后 120ms 淡出黑幕/尾帧层并置 View.GONE 释放 Bitmap；按代次严格防竞态。 */
+    private fun reveal(generation: Long) {
+        if (!switchGeneration.isCurrent(generation)) return
         mainHandler.removeCallbacks(revealTimeoutRunnable)
         awaitingPageCommit = false
+        restoreChromeVisibility()
         if (revealed) return
         revealed = true
-        val box = loadingOverlay ?: return
+        val box = loadingOverlay
         loadingOverlay = null
-        Log.i(TAG, "overlay reveal start playing=$isPlaying")
-        box.animate()
-            .alpha(0f)
-            .setDuration(OVERLAY_FADE_MS)
-            .withEndAction {
-                root.removeView(box)
-                Log.i(TAG, "overlay reveal end")
+        val fadeLastFrame = ::lastFrameImageView.isInitialized && lastFrameImageView.visibility == View.VISIBLE
+        if (box == null && !fadeLastFrame) return
+        Log.i(TAG, "overlay reveal start gen=$generation playing=$isPlaying lastFrame=$fadeLastFrame")
+        if (fadeLastFrame) {
+            lastFrameImageView.animate().cancel()
+            lastFrameImageView.animate()
+                .alpha(0f)
+                .setDuration(OVERLAY_FADE_MS)
+                .withEndAction {
+                    if (switchGeneration.isCurrent(generation)) {
+                        clearLastFrameView()
+                    }
+                    if (box == null) {
+                        Log.i(TAG, "overlay reveal end gen=$generation")
+                    }
+                }
+                .start()
+        }
+        if (box != null) {
+            box.animate().cancel()
+            box.animate()
+                .alpha(0f)
+                .setDuration(OVERLAY_FADE_MS)
+                .withEndAction {
+                    root.removeView(box)
+                    if (switchGeneration.isCurrent(generation) && !fadeLastFrame) {
+                        clearLastFrameView()
+                    }
+                    Log.i(TAG, "overlay reveal end gen=$generation")
+                }
+                .start()
+        }
+    }
+
+    private fun beginWebViewLoad(view: WebView, channelId: String, url: String, generation: Long) {
+        if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) return
+        webViewNavigationGeneration = generation
+        activeTimeoutGeneration = generation
+        startedAt = System.currentTimeMillis()
+        mainHandler.removeCallbacks(revealTimeoutRunnable)
+        mainHandler.postDelayed(revealTimeoutRunnable, CctvWebChannel.focusTimeoutMs(channelId))
+        applyUserAgentForChannel(view, channelId)
+        view.stopLoading()
+        view.loadUrl(url)
+    }
+
+    private fun captureLastFrameAndLoad(view: WebView, channelId: String, url: String, generation: Long) {
+        val decor = window?.decorView
+        if (decor == null || !decor.isAttachedToWindow || view.width <= 0 || view.height <= 0) {
+            showOverlay(translucentForLastFrame = false)
+            beginWebViewLoad(view, channelId, url, generation)
+            return
+        }
+        // 同步取消全部外框/抽屉动画并将整个 chrome 浮层置 View.GONE，
+        // 通过 Choreographer 连续等待 2 个 Vsync 帧确保 RenderThread 已向 SurfaceFlinger 提交纯净视频帧
+        chrome.dismissAllImmediately()
+        chrome.rootView.visibility = View.GONE
+        val secondVsyncCallback = Choreographer.FrameCallback {
+            pendingChoreographerCallback = null
+            if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
+                restoreChromeVisibility()
+                return@FrameCallback
             }
-            .start()
+            requestPixelCopyForLastFrame(view, channelId, url, generation)
+        }
+        val firstVsyncCallback = Choreographer.FrameCallback {
+            if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
+                pendingChoreographerCallback = null
+                restoreChromeVisibility()
+                return@FrameCallback
+            }
+            pendingChoreographerCallback = secondVsyncCallback
+            Choreographer.getInstance().postFrameCallback(secondVsyncCallback)
+        }
+        pendingChoreographerCallback = firstVsyncCallback
+        Choreographer.getInstance().postFrameCallback(firstVsyncCallback)
+    }
+
+    private fun requestPixelCopyForLastFrame(
+        view: WebView,
+        channelId: String,
+        url: String,
+        generation: Long,
+    ) {
+        val decor = window?.decorView
+        val loc = IntArray(2)
+        view.getLocationInWindow(loc)
+        val decorW = decor?.width ?: 0
+        val decorH = decor?.height ?: 0
+        val left = loc[0].coerceIn(0, decorW)
+        val top = loc[1].coerceIn(0, decorH)
+        val right = (loc[0] + view.width).coerceIn(left, decorW)
+        val bottom = (loc[1] + view.height).coerceIn(top, decorH)
+        val rectW = right - left
+        val rectH = bottom - top
+        if (rectW <= 0 || rectH <= 0) {
+            showOverlay(translucentForLastFrame = false)
+            beginWebViewLoad(view, channelId, url, generation)
+            return
+        }
+
+        val scale = minOf(1f, MAX_LAST_FRAME_EDGE_PX.toFloat() / maxOf(rectW, rectH).toFloat())
+        val dstW = maxOf(1, (rectW * scale).toInt())
+        val dstH = maxOf(1, (rectH * scale).toInt())
+        val bitmap = runCatching {
+            Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
+        }.getOrNull()
+        if (bitmap == null) {
+            showOverlay(translucentForLastFrame = false)
+            beginWebViewLoad(view, channelId, url, generation)
+            return
+        }
+
+        val completed = AtomicBoolean(false)
+        val startNs = System.nanoTime()
+        val timeoutTask = Runnable {
+            if (!completed.compareAndSet(false, true)) return@Runnable
+            pixelCopyTimeoutRunnable = null
+            if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
+                restoreChromeVisibility()
+                return@Runnable
+            }
+            Log.w(TAG, "pixelCopy timeout gen=$generation -> fallback black overlay")
+            showOverlay(translucentForLastFrame = false)
+            beginWebViewLoad(view, channelId, url, generation)
+        }
+        pixelCopyTimeoutRunnable = timeoutTask
+        mainHandler.postDelayed(timeoutTask, PIXEL_COPY_TIMEOUT_MS)
+
+        val srcRect = Rect(left, top, right, bottom)
+        val requested = runCatching {
+            PixelCopy.request(
+                window,
+                srcRect,
+                bitmap,
+                { copyResult ->
+                    if (!completed.compareAndSet(false, true)) {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                        return@request
+                    }
+                    mainHandler.removeCallbacks(timeoutTask)
+                    if (pixelCopyTimeoutRunnable === timeoutTask) {
+                        pixelCopyTimeoutRunnable = null
+                    }
+                    if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                        restoreChromeVisibility()
+                        return@request
+                    }
+                    val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+                    val nonBlack = copyResult == PixelCopy.SUCCESS && isBitmapNonBlack(bitmap)
+                    if (nonBlack) {
+                        Log.i(
+                            TAG,
+                            "pixelCopy ok gen=$generation w=${bitmap.width} h=${bitmap.height} ms=$elapsedMs nonBlack=true",
+                        )
+                        applyLastFrameBitmapToView(bitmap)
+                        showOverlay(translucentForLastFrame = true)
+                    } else {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                        Log.w(
+                            TAG,
+                            "pixelCopy fallback gen=$generation result=$copyResult nonBlack=false ms=$elapsedMs",
+                        )
+                        showOverlay(translucentForLastFrame = false)
+                    }
+                    beginWebViewLoad(view, channelId, url, generation)
+                },
+                mainHandler,
+            )
+            true
+        }.getOrDefault(false)
+
+        if (!requested && completed.compareAndSet(false, true)) {
+            mainHandler.removeCallbacks(timeoutTask)
+            if (pixelCopyTimeoutRunnable === timeoutTask) {
+                pixelCopyTimeoutRunnable = null
+            }
+            if (!bitmap.isRecycled) bitmap.recycle()
+            Log.w(TAG, "pixelCopy request failed gen=$generation -> fallback black overlay")
+            showOverlay(translucentForLastFrame = false)
+            beginWebViewLoad(view, channelId, url, generation)
+        }
+    }
+
+    private fun isBitmapNonBlack(bitmap: Bitmap): Boolean {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return false
+        val steps = 4
+        for (iy in 0 until steps) {
+            val y = ((0.18f + 0.64f * iy / (steps - 1)) * h).toInt().coerceIn(0, h - 1)
+            for (ix in 0 until steps) {
+                val x = ((0.18f + 0.64f * ix / (steps - 1)) * w).toInt().coerceIn(0, w - 1)
+                val px = bitmap.getPixel(x, y)
+                if (Color.red(px) >= 12 || Color.green(px) >= 12 || Color.blue(px) >= 12) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     // ---------------- 纯视频 / 网页控件 ----------------
 
-    private fun onPlaybackDetected() {
+    private fun onPlaybackDetected(generation: Long) {
+        if (!switchGeneration.isCurrent(generation)) return
         if (isPlaying) return
         isPlaying = true
         gestureController.isPlaying = true
@@ -795,6 +1135,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         chrome.setPlaying(true)
         updateAutoPipParams()
         if (CctvWebChannel.isVodPoolChannel(currentChannelId)) {
+            activeVodEndedGeneration = generation
             mainHandler.removeCallbacks(vodEndedPollRunnable)
             mainHandler.postDelayed(vodEndedPollRunnable, VOD_ENDED_POLL_INTERVAL_MS)
         }
@@ -851,33 +1192,206 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 if (targetUrl == null) {
                     Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
                 } else {
-                    chrome.closeDrawer(restoreControls = false)
+                    chrome.dismissAllImmediately()
                     reloadChannel(action.channelId, action.channelName, targetUrl)
                 }
             }
 
             is CctvWebSwitchAction.SwitchToNativePlayer -> {
-                isSwitchingEngine = true
-                updateAutoPipParams()
-                chrome.closeDrawer(restoreControls = false)
-                MobileUiPreferences.setLastPlayedChannelId(this, action.channel.id)
-                destroyWebView()
-                val targetIntent = Intent(this, PlayerActivity::class.java)
-                    .putExtra(PlayerActivity.EXTRA_CHANNEL_ID, action.channel.id)
-                    .putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, action.channel.name)
-                    .putExtra(PlayerActivity.EXTRA_STREAM_URL, action.channel.streamUrl)
-                MobilePlayerTransitionHelper.startSeamlessCrossEngineSwitch(
-                    from = this,
-                    targetIntent = targetIntent,
-                    currentRequestedOrientation = requestedOrientation,
-                )
-                finish()
+                startCrossEngineSwitchToNativePlayer(action.channel)
             }
         }
     }
 
-    /** 同页复用 WebView 切台或重试：重置到阶段一待起播态并黑幕过渡，不重建 Activity。 */
+    private fun startCrossEngineSwitchToNativePlayer(targetChannel: Channel) {
+        if (isSwitchingEngine) return
+        val generation = switchGeneration.nextGeneration()
+        val wasPlaying = isPlaying
+        isSwitchingEngine = true
+        updateAutoPipParams()
+        cancelPendingPixelCopy()
+        mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.removeCallbacks(vodEndedPollRunnable)
+        mainHandler.removeCallbacks(revealTimeoutRunnable)
+        currentChannelName = targetChannel.name
+        chrome.dismissAllImmediately()
+
+        val view = webView
+        val decor = window?.decorView
+        val canCapture = wasPlaying &&
+            !isInPictureInPictureMode &&
+            !suspendedInBackground &&
+            view != null &&
+            view.visibility == View.VISIBLE &&
+            view.width > 0 &&
+            view.height > 0 &&
+            decor != null &&
+            decor.isAttachedToWindow
+
+        if (!wasPlaying && hasVisibleLastFrame()) {
+            val copy = runCatching { lastFrameBitmap?.copy(Bitmap.Config.RGB_565, false) }.getOrNull()
+            showOverlay(translucentForLastFrame = true)
+            completeCrossEngineSwitchToNativePlayer(targetChannel, copy)
+            return
+        }
+
+        if (!canCapture) {
+            showOverlay(translucentForLastFrame = false)
+            completeCrossEngineSwitchToNativePlayer(targetChannel, null)
+            return
+        }
+
+        chrome.rootView.visibility = View.GONE
+        val secondVsync = Choreographer.FrameCallback {
+            pendingChoreographerCallback = null
+            if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
+                restoreChromeVisibility()
+                return@FrameCallback
+            }
+            captureCrossEngineLastFrameAndFinish(view!!, targetChannel, generation)
+        }
+        val firstVsync = Choreographer.FrameCallback {
+            if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
+                pendingChoreographerCallback = null
+                restoreChromeVisibility()
+                return@FrameCallback
+            }
+            pendingChoreographerCallback = secondVsync
+            Choreographer.getInstance().postFrameCallback(secondVsync)
+        }
+        pendingChoreographerCallback = firstVsync
+        Choreographer.getInstance().postFrameCallback(firstVsync)
+    }
+
+    private fun captureCrossEngineLastFrameAndFinish(
+        view: WebView,
+        targetChannel: Channel,
+        generation: Long,
+    ) {
+        val decor = window?.decorView
+        val loc = IntArray(2)
+        view.getLocationInWindow(loc)
+        val decorW = decor?.width ?: 0
+        val decorH = decor?.height ?: 0
+        val left = loc[0].coerceIn(0, decorW)
+        val top = loc[1].coerceIn(0, decorH)
+        val right = (loc[0] + view.width).coerceIn(left, decorW)
+        val bottom = (loc[1] + view.height).coerceIn(top, decorH)
+        val rectW = right - left
+        val rectH = bottom - top
+        if (rectW <= 0 || rectH <= 0) {
+            showOverlay(translucentForLastFrame = false)
+            completeCrossEngineSwitchToNativePlayer(targetChannel, null)
+            return
+        }
+
+        val scale = minOf(1f, MAX_LAST_FRAME_EDGE_PX.toFloat() / maxOf(rectW, rectH).toFloat())
+        val dstW = maxOf(1, (rectW * scale).toInt())
+        val dstH = maxOf(1, (rectH * scale).toInt())
+        val bitmap = runCatching {
+            Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
+        }.getOrNull()
+        if (bitmap == null) {
+            showOverlay(translucentForLastFrame = false)
+            completeCrossEngineSwitchToNativePlayer(targetChannel, null)
+            return
+        }
+
+        val completed = AtomicBoolean(false)
+        val startNs = System.nanoTime()
+        val timeoutTask = Runnable {
+            if (!completed.compareAndSet(false, true)) return@Runnable
+            pixelCopyTimeoutRunnable = null
+            if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) return@Runnable
+            Log.w(TAG, "cctv->mgtv pixelCopy timeout gen=$generation")
+            showOverlay(translucentForLastFrame = false)
+            completeCrossEngineSwitchToNativePlayer(targetChannel, null)
+        }
+        pixelCopyTimeoutRunnable = timeoutTask
+        mainHandler.postDelayed(timeoutTask, PIXEL_COPY_TIMEOUT_MS)
+
+        val srcRect = Rect(left, top, right, bottom)
+        val requested = runCatching {
+            PixelCopy.request(
+                window,
+                srcRect,
+                bitmap,
+                { copyResult ->
+                    if (!completed.compareAndSet(false, true)) {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                        return@request
+                    }
+                    mainHandler.removeCallbacks(timeoutTask)
+                    if (pixelCopyTimeoutRunnable === timeoutTask) {
+                        pixelCopyTimeoutRunnable = null
+                    }
+                    if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                        return@request
+                    }
+                    val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+                    val nonBlack = copyResult == PixelCopy.SUCCESS && isBitmapNonBlack(bitmap)
+                    if (nonBlack) {
+                        Log.i(
+                            TAG,
+                            "cctv->mgtv pixelCopy ok gen=$generation w=${bitmap.width} h=${bitmap.height} ms=$elapsedMs nonBlack=true",
+                        )
+                        val handoffCopy = runCatching { bitmap.copy(Bitmap.Config.RGB_565, false) }.getOrNull()
+                        applyLastFrameBitmapToView(bitmap)
+                        showOverlay(translucentForLastFrame = true)
+                        completeCrossEngineSwitchToNativePlayer(targetChannel, handoffCopy)
+                    } else {
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                        showOverlay(translucentForLastFrame = false)
+                        completeCrossEngineSwitchToNativePlayer(targetChannel, null)
+                    }
+                },
+                mainHandler,
+            )
+            true
+        }.getOrDefault(false)
+
+        if (!requested && completed.compareAndSet(false, true)) {
+            mainHandler.removeCallbacks(timeoutTask)
+            if (pixelCopyTimeoutRunnable === timeoutTask) {
+                pixelCopyTimeoutRunnable = null
+            }
+            if (!bitmap.isRecycled) bitmap.recycle()
+            showOverlay(translucentForLastFrame = false)
+            completeCrossEngineSwitchToNativePlayer(targetChannel, null)
+        }
+    }
+
+    private fun completeCrossEngineSwitchToNativePlayer(
+        targetChannel: Channel,
+        handoffBitmap: Bitmap?,
+    ) {
+        if (isFinishing || isDestroyed) {
+            if (handoffBitmap != null && !handoffBitmap.isRecycled) handoffBitmap.recycle()
+            return
+        }
+        MobilePlayerTransitionHelper.stashCrossEngineLastFrame(handoffBitmap)
+        MobileUiPreferences.setLastPlayedChannelId(this, targetChannel.id)
+        destroyWebView()
+        val targetIntent = Intent(this, PlayerActivity::class.java)
+            .putExtra(PlayerActivity.EXTRA_CHANNEL_ID, targetChannel.id)
+            .putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, targetChannel.name)
+            .putExtra(PlayerActivity.EXTRA_STREAM_URL, targetChannel.streamUrl)
+        MobilePlayerTransitionHelper.startSeamlessCrossEngineSwitch(
+            from = this,
+            targetIntent = targetIntent,
+            currentRequestedOrientation = requestedOrientation,
+        )
+        finish()
+    }
+
+    /** 同页复用 WebView 切台或重试：递增代次防竞态，播放态下优先 PixelCopy 尾帧冻结过渡，不重建 Activity。 */
     private fun reloadChannel(channelId: String, channelName: String, url: String) {
+        val generation = switchGeneration.nextGeneration()
+        val wasPlaying = isPlaying
+        val keepExistingLastFrame = !wasPlaying && hasVisibleLastFrame()
+
+        cancelPendingPixelCopy()
         mainHandler.removeCallbacks(pollRunnable)
         mainHandler.removeCallbacks(vodEndedPollRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
@@ -903,42 +1417,59 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         gestureController.isNativeControlsVisible = nativeControlsVisible
         chrome.hideError()
         chrome.setPlaying(false)
-        chrome.setWebNativeControlsVisible(nativeControlsVisible)
+        chrome.dismissAllImmediately()
+        chrome.setWebNativeControlsVisible(nativeControlsVisible, revealTopBar = false)
 
         webView?.visibility = View.VISIBLE
-        chrome.showControls(animate = false)
-        showOverlay()
-
-        // 先停止旧页并按频道模式切换 UA，再等待新页 onPageCommitVisible 注入与轮询，避免读到旧页残留的 __livetvPlaying
         updateAutoPipParams()
-        mainHandler.postDelayed(revealTimeoutRunnable, CctvWebChannel.focusTimeoutMs(channelId))
-        webView?.let { view ->
-            applyUserAgentForChannel(view, channelId)
-            view.stopLoading()
-            view.loadUrl(url)
+
+        val view = webView ?: return
+        val canCaptureLastFrame = wasPlaying &&
+            !isInPictureInPictureMode &&
+            !suspendedInBackground &&
+            view.visibility == View.VISIBLE &&
+            view.width > 0 &&
+            view.height > 0
+        when {
+            canCaptureLastFrame -> {
+                captureLastFrameAndLoad(view, channelId, url, generation)
+            }
+
+            keepExistingLastFrame -> {
+                showOverlay(translucentForLastFrame = true)
+                beginWebViewLoad(view, channelId, url, generation)
+            }
+
+            else -> {
+                showOverlay(translucentForLastFrame = false)
+                beginWebViewLoad(view, channelId, url, generation)
+            }
         }
     }
 
     // ---------------- 脚本注入与错误态 ----------------
 
-    private fun injectFocusScript(view: WebView) {
+    private fun injectFocusScript(view: WebView, generation: Long) {
+        if (!switchGeneration.isCurrent(generation)) return
         awaitingPageCommit = false
         view.evaluateJavascript(CctvWebViewportFocusScript.FOCUS_SCRIPT, null)
         if (nativeControlsVisible && !isInPictureInPictureMode) {
             view.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
         }
         if (!isPlaying) {
-            mainHandler.removeCallbacks(pollRunnable)
-            mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
+            schedulePoll(generation, POLL_INTERVAL_MS)
         }
     }
 
-    private fun showLoadFailure(messageRes: Int) {
+    private fun showLoadFailure(messageRes: Int, generation: Long) {
+        if (!switchGeneration.isCurrent(generation)) return
+        cancelPendingPixelCopy()
         mainHandler.removeCallbacksAndMessages(null)
         awaitingPageCommit = false
         suspendedInBackground = false
         hasLoadFailure = true
         updateAutoPipParams()
+        clearLastFrameView()
         loadingOverlay?.let {
             it.animate().cancel()
             root.removeView(it)
@@ -996,6 +1527,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         val view = webView ?: return
         if (isFinishing || isDestroyed || hasLoadFailure) return
         suspendedInBackground = true
+        switchGeneration.nextGeneration()
+        cancelPendingPixelCopy()
+        clearLastFrameView()
         mainHandler.removeCallbacks(pollRunnable)
         mainHandler.removeCallbacks(vodEndedPollRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
@@ -1048,6 +1582,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             webView = recreated
             touchContainer.addView(recreated, matchParent())
         }
+        MobilePlayerTransitionHelper.consumeCrossEngineLastFrame(intent)?.let { crossBitmap ->
+            isPlaying = false
+            applyLastFrameBitmapToView(crossBitmap)
+        }
         reloadChannel(
             channelId = newChannelId,
             channelName = CctvWebSwitchPolicy.resolveChannelName(newChannelId, categories, newChannelName),
@@ -1075,9 +1613,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         webView?.onResume()
         webView?.resumeTimers()
         if (!isPlaying && !suspendedInBackground && webView != null) {
-            mainHandler.removeCallbacks(pollRunnable)
-            mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
+            schedulePoll(switchGeneration.current, POLL_INTERVAL_MS)
         } else if (isPlaying && !suspendedInBackground && CctvWebChannel.isVodPoolChannel(currentChannelId)) {
+            activeVodEndedGeneration = switchGeneration.current
             mainHandler.removeCallbacks(vodEndedPollRunnable)
             mainHandler.postDelayed(vodEndedPollRunnable, VOD_ENDED_POLL_INTERVAL_MS)
         }
@@ -1205,6 +1743,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     private fun destroyWebView() {
         suspendedInBackground = false
+        switchGeneration.nextGeneration()
+        cancelPendingPixelCopy()
+        clearLastFrameView()
         mainHandler.removeCallbacksAndMessages(null)
         webView?.let { view ->
             (view.parent as? ViewGroup)?.removeView(view)
@@ -1224,6 +1765,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     override fun onDestroy() {
         MobilePlayerTransitionHelper.unregisterActiveMobilePlayer(this)
         mainHandler.removeCallbacks(backgroundSuspendRunnable)
+        cancelPendingPixelCopy()
+        clearLastFrameView()
         mainHandler.removeCallbacksAndMessages(null)
         suspendedInBackground = false
         backCallback.isEnabled = false
@@ -1262,7 +1805,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         private const val SLOW_POLL_AFTER_MS = 15_000L
         private const val SLOW_POLL_INTERVAL_MS = 1_000L
         private const val VOD_ENDED_POLL_INTERVAL_MS = 1_500L
-        private const val OVERLAY_FADE_MS = 120L
+        private const val OVERLAY_FADE_MS = 150L
+        private const val PIXEL_COPY_TIMEOUT_MS = 180L
+        private const val MAX_LAST_FRAME_EDGE_PX = 1280
+        private const val LAST_FRAME_BLUR_RADIUS_PX = 24f
+        private const val LAST_FRAME_SCRIM_BLUR_COLOR = 0x73000000.toInt()
+        private const val LAST_FRAME_SCRIM_FALLBACK_COLOR = 0x8C000000.toInt()
+        private const val LOADING_CAPSULE_TINT_COLOR = 0xE6FFFFFF.toInt()
         private const val TARGET_VIDEO_FRAME_RATE_HZ = 25f
         private const val BACKGROUND_SUSPEND_DELAY_MS = 5_000L
 

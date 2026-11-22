@@ -14,6 +14,7 @@ import android.util.Rational
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.SurfaceView
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
@@ -48,6 +49,7 @@ import com.livetv.android.ui.mobile.ChannelDrawerRow
 import com.livetv.android.ui.mobile.ChromeBackAction
 import com.livetv.android.ui.mobile.CrossEngineCctvPrecheck
 import com.livetv.android.ui.mobile.MobilePlayerChromeController
+import com.livetv.android.ui.mobile.MobilePlayerLoadingOverlay
 import com.livetv.android.ui.mobile.MobilePlayerTransitionHelper
 import com.livetv.android.ui.mobile.MobileUiPreferences
 import com.livetv.android.ui.mobile.PlayerChromeCapabilities
@@ -107,6 +109,7 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var navigator: ChannelNavigator
     private var drawerAdapter: ChannelDrawerAdapter? = null
     private var mobileChrome: MobilePlayerChromeController? = null
+    private var mobileLoadingOverlay: MobilePlayerLoadingOverlay? = null
 
     /** 当前播放的频道。 */
     private var currentChannel: Channel? = null
@@ -193,6 +196,14 @@ class PlayerActivity : AppCompatActivity() {
         setupTouchUi()
         applySafeAreaInsets()
         resolveInitialChannel(savedInstanceState)
+        if (isTouchDevice) {
+            MobilePlayerTransitionHelper.consumeCrossEngineLastFrame(intent)?.let { crossBitmap ->
+                mobileLoadingOverlay?.applyCrossEngineLastFrame(
+                    bitmap = crossBitmap,
+                    message = getString(R.string.cctv_web_switching_to, currentChannel?.name.orEmpty()),
+                )
+            }
+        }
         ensureCatalogLoaded()
         updateOverlayChannelInfo()
         updateFavoriteButton()
@@ -241,6 +252,14 @@ class PlayerActivity : AppCompatActivity() {
             categories = latestCategories
         }
         val target = resolveChannelFromIntent(intent) ?: return
+        if (isTouchDevice) {
+            MobilePlayerTransitionHelper.consumeCrossEngineLastFrame(intent)?.let { crossBitmap ->
+                mobileLoadingOverlay?.applyCrossEngineLastFrame(
+                    bitmap = crossBitmap,
+                    message = getString(R.string.cctv_web_switching_to, target.name),
+                )
+            }
+        }
         rebuildNavigatorKeepingCurrent()
         navigator.locate(target.id, target.streamUrl)
         if (target.id == currentChannel?.id && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
@@ -288,6 +307,7 @@ class PlayerActivity : AppCompatActivity() {
         if (isInPictureInPictureMode) {
             Log.i(TAG, "entered picture-in-picture mode")
             mobileChrome?.setPictureInPictureMode(true)
+            mobileLoadingOverlay?.hide(animate = false)
             hideStatus()
         } else {
             Log.i(TAG, "exited picture-in-picture mode")
@@ -300,6 +320,7 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        mobileLoadingOverlay?.hide(animate = false)
         playerManager.stop()
     }
 
@@ -310,6 +331,8 @@ class PlayerActivity : AppCompatActivity() {
         switchHintJob?.cancel()
         switchHintJob = null
         binding.root.removeCallbacks(hideChannelNameRunnable)
+        mobileLoadingOverlay?.release()
+        mobileLoadingOverlay = null
         mobileChrome?.release()
         binding.channelDrawer.animate().cancel()
         binding.drawerScrim.animate().cancel()
@@ -319,6 +342,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun dismissForOtherEngine() {
         isSwitchingEngine = true
+        mobileLoadingOverlay?.release()
         runCatching {
             playerManager.stop()
             binding.playerView.player = null
@@ -523,29 +547,47 @@ class PlayerActivity : AppCompatActivity() {
             PlaybackState.Idle -> {
                 switchHintJob?.cancel()
                 hideStatus()
+                mobileLoadingOverlay?.onPlaybackTransientPauseOrIdle()
                 binding.errorText.visibility = View.GONE
                 mobileChrome?.hideError()
             }
 
             PlaybackState.Loading -> {
                 mobileChrome?.hideError()
-                showStatus(
-                    message = getString(R.string.player_loading, currentChannel?.name.orEmpty()),
-                    showProgress = true,
-                )
+                if (isTouchDevice) {
+                    hideStatus()
+                    if (!isInPictureInPictureMode) {
+                        mobileLoadingOverlay?.showLoading(
+                            getString(R.string.cctv_web_switching_to, currentChannel?.name.orEmpty()),
+                        )
+                    }
+                } else {
+                    showStatus(
+                        message = getString(R.string.player_loading, currentChannel?.name.orEmpty()),
+                        showProgress = true,
+                    )
+                }
             }
 
             PlaybackState.Buffering -> {
                 mobileChrome?.hideError()
-                showStatus(
-                    message = getString(R.string.player_buffering),
-                    showProgress = true,
-                )
+                if (isTouchDevice) {
+                    hideStatus()
+                    if (!isInPictureInPictureMode) {
+                        mobileLoadingOverlay?.showBuffering(getString(R.string.player_buffering))
+                    }
+                } else {
+                    showStatus(
+                        message = getString(R.string.player_buffering),
+                        showProgress = true,
+                    )
+                }
             }
 
             PlaybackState.Playing -> {
                 switchHintJob?.cancel()
                 hideStatus()
+                mobileLoadingOverlay?.hide(animate = true)
                 binding.errorText.visibility = View.GONE
                 mobileChrome?.hideError()
             }
@@ -553,6 +595,7 @@ class PlayerActivity : AppCompatActivity() {
             PlaybackState.Paused -> {
                 switchHintJob?.cancel()
                 hideStatus()
+                mobileLoadingOverlay?.onPlaybackTransientPauseOrIdle()
                 binding.errorText.visibility = View.GONE
                 mobileChrome?.hideError()
             }
@@ -560,6 +603,7 @@ class PlayerActivity : AppCompatActivity() {
             is PlaybackState.Error -> {
                 switchHintJob?.cancel()
                 hideStatus()
+                mobileLoadingOverlay?.hide(animate = false)
                 if (isTouchDevice) {
                     binding.errorText.visibility = View.GONE
                     mobileChrome?.showError(buildErrorDescription(state.error), showRetry = true)
@@ -583,18 +627,28 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun showRetryingHint(retryCount: Int, maxRetries: Int) {
         switchHintJob?.cancel()
-        showStatus(
-            message = getString(R.string.player_retrying, retryCount, maxRetries),
-            showProgress = true,
-        )
+        val msg = getString(R.string.player_retrying, retryCount, maxRetries)
+        if (isTouchDevice) {
+            hideStatus()
+            if (!isInPictureInPictureMode) {
+                mobileLoadingOverlay?.showBuffering(msg)
+            }
+        } else {
+            showStatus(message = msg, showProgress = true)
+        }
     }
 
     private fun showSwitchingSourceHint() {
         switchHintJob?.cancel()
-        showStatus(
-            message = getString(R.string.player_switching_source),
-            showProgress = true,
-        )
+        val msg = getString(R.string.player_switching_source)
+        if (isTouchDevice) {
+            hideStatus()
+            if (!isInPictureInPictureMode) {
+                mobileLoadingOverlay?.showBuffering(msg)
+            }
+        } else {
+            showStatus(message = msg, showProgress = true)
+        }
     }
 
     private fun showChannelSwitchedHint(channel: Channel) {
@@ -754,12 +808,41 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun switchToChannel(channel: Channel) {
         binding.channelName.text = channel.name
+        isControllerOpenedByUser = false
+        binding.playerView.hideController()
+
+        if (isTouchDevice) {
+            val wasPlaying = playerManager.playbackState == PlaybackState.Playing
+            currentChannel = channel
+            MobileUiPreferences.setLastPlayedChannelId(this, channel.id)
+            switchHintJob?.cancel()
+            hideStatus()
+            mobileChrome?.dismissAllImmediately()
+            updateOverlayChannelInfo()
+            updateFavoriteButton()
+            val surfaceView = binding.playerView.videoSurfaceView as? SurfaceView
+            val overlay = mobileLoadingOverlay
+            if (overlay != null) {
+                overlay.beginChannelSwitch(
+                    surfaceView = surfaceView,
+                    wasPlaying = wasPlaying,
+                    inPictureInPicture = isInPictureInPictureMode,
+                    message = getString(R.string.cctv_web_switching_to, channel.name),
+                ) {
+                    if (!isFinishing && !isDestroyed) {
+                        playerManager.switchChannel(channel)
+                    }
+                }
+            } else {
+                playerManager.switchChannel(channel)
+            }
+            return
+        }
+
         playerManager.switchChannel(channel)
         if (playerManager.playbackState !is PlaybackState.Error) {
             showChannelSwitchedHint(channel)
         }
-        isControllerOpenedByUser = false
-        binding.playerView.hideController()
         updateOverlayChannelInfo()
         updateFavoriteButton()
     }
@@ -835,9 +918,35 @@ class PlayerActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
             return
         }
+        if (isSwitchingEngine) return
+        val wasPlaying = playerManager.playbackState == PlaybackState.Playing
         isSwitchingEngine = true
         updateAutoPipParams()
-        mobileChrome?.closeDrawer()
+        switchHintJob?.cancel()
+        hideStatus()
+        mobileChrome?.dismissAllImmediately()
+        val surfaceView = binding.playerView.videoSurfaceView as? SurfaceView
+        val overlay = mobileLoadingOverlay
+        if (overlay != null) {
+            overlay.prepareCrossEngineHandoff(
+                surfaceView = surfaceView,
+                wasPlaying = wasPlaying,
+                inPictureInPicture = isInPictureInPictureMode,
+                message = getString(R.string.cctv_web_switching_to, channel.name),
+            ) { handoffBitmap ->
+                completeSwitchToCctvWebPlayer(channel, handoffBitmap)
+            }
+        } else {
+            completeSwitchToCctvWebPlayer(channel, null)
+        }
+    }
+
+    private fun completeSwitchToCctvWebPlayer(channel: Channel, handoffBitmap: android.graphics.Bitmap?) {
+        if (isFinishing || isDestroyed) {
+            if (handoffBitmap != null && !handoffBitmap.isRecycled) handoffBitmap.recycle()
+            return
+        }
+        MobilePlayerTransitionHelper.stashCrossEngineLastFrame(handoffBitmap)
         MobileUiPreferences.setLastPlayedChannelId(this, channel.id)
         runCatching {
             playerManager.stop()
@@ -895,15 +1004,24 @@ class PlayerActivity : AppCompatActivity() {
                     }
                     navigator.locate(channel.id, channel.streamUrl)
                     switchToChannel(channel)
-                    mobileChrome?.closeDrawer()
                 }
             },
             initialPlaying = true,
         )
 
+        mobileLoadingOverlay = MobilePlayerLoadingOverlay(
+            context = this,
+            parentRoot = binding.playerRoot,
+            chromeRoot = binding.mobileChrome.chromeRoot,
+            onOverlayTap = {
+                if (!isDrawerOpen) {
+                    mobileChrome?.toggleControls()
+                }
+            },
+        )
         setupTouchGestures()
         mobileChrome?.setPipButtonVisible(supportsPip)
-        mobileChrome?.showControls(animate = false)
+        mobileChrome?.dismissAllImmediately()
     }
 
     @SuppressLint("ClickableViewAccessibility")

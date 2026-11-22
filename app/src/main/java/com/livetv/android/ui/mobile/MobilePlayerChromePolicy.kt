@@ -183,7 +183,10 @@ class MobilePlayerChromeStateMachine(
         return state
     }
 
-    fun setWebNativeControlsVisible(nativeVisible: Boolean): MobilePlayerChromeState {
+    fun setWebNativeControlsVisible(
+        nativeVisible: Boolean,
+        revealTopBar: Boolean = true,
+    ): MobilePlayerChromeState {
         val effective = capabilities.showWebControlToggle && nativeVisible
         if (state.isInPictureInPicture) {
             state = state.copy(
@@ -194,14 +197,15 @@ class MobilePlayerChromeStateMachine(
             )
             return state
         }
+        val nextTopVisible = if (effective && revealTopBar && !state.isScreenLocked && !state.isDrawerOpen) {
+            true
+        } else {
+            state.topBarVisible
+        }
         state = state.copy(
             isWebNativeControlsVisible = effective,
-            topBarVisible = if (effective && !state.isScreenLocked && !state.isDrawerOpen) {
-                true
-            } else {
-                state.topBarVisible
-            },
-            bottomBarVisible = if (state.topBarVisible || effective) {
+            topBarVisible = nextTopVisible,
+            bottomBarVisible = if (nextTopVisible) {
                 canShowBottomBar(
                     isScreenLocked = state.isScreenLocked,
                     isDrawerOpen = state.isDrawerOpen,

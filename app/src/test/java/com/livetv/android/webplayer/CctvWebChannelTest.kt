@@ -63,8 +63,8 @@ class CctvWebChannelTest {
         assertFalse(CctvWebChannel.requiresDesktopUserAgent("cctv:cctv4k"))
         assertNull("4K 轮播地址来自节目池，不返回静态 /live/ URL", CctvWebChannel.liveUrl("cctv:cctv4k"))
         assertEquals(
-            "4K 点播轮播台黑幕超时兜底应放宽至 15s",
-            15_000L,
+            "4K 点播轮播台黑幕超时兜底应放宽至 12s",
+            12_000L,
             CctvWebChannel.focusTimeoutMs("cctv:cctv4k"),
         )
         assertEquals(

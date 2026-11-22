@@ -27,8 +27,8 @@ object CctvWebChannel {
     /** 直播频道黑幕超时兜底时长（ms）。 */
     const val LIVE_FOCUS_TIMEOUT_MS = 7_000L
 
-    /** 4K 点播页（VIDE*.shtml）黑幕超时兜底时长（ms）：覆盖 500ms 延迟自举与冷启点播切片首帧加载。 */
-    const val VOD_FOCUS_TIMEOUT_MS = 15_000L
+    /** 4K 点播页（VIDE*.shtml）黑幕超时兜底时长（ms）：放宽至 12s 避免慢网提前撤幕露出官方加载动画。 */
+    const val VOD_FOCUS_TIMEOUT_MS = 12_000L
 
     private const val BASE_URL = "https://tv.cctv.com/live/"
 

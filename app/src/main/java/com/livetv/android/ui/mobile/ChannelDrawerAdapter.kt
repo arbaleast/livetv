@@ -1,5 +1,6 @@
 package com.livetv.android.ui.mobile
 
+import android.graphics.Typeface
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -71,6 +72,7 @@ class ChannelDrawerAdapter(
         fun bind(item: ChannelDrawerRow.ChannelItem) {
             binding.root.isSelected = item.isCurrent
             binding.drawerChannelName.text = item.channel.name
+            binding.drawerChannelName.typeface = if (item.isCurrent) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
             binding.drawerChannelPlaying.visibility =
                 if (item.isCurrent) View.VISIBLE else View.GONE
             binding.root.setOnClickListener { onChannelClick(item.channel) }

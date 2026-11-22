@@ -24,7 +24,7 @@
         android:layout_weight="1"
         android:ellipsize="end"
         android:maxLines="1"
-        android:textColor="@color/mobile_text_primary"
+        android:textColor="@color/mobile_drawer_item_text"
         android:textSize="14sp" />
 
     <LinearLayout
@@ -40,13 +40,13 @@
             android:layout_width="6dp"
             android:layout_height="6dp"
             android:layout_marginEnd="5dp"
-            android:background="@drawable/bg_mobile_playing_dot" />
+            android:background="@drawable/bg_player_drawer_playing_dot" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/player_drawer_playing"
-            android:textColor="@color/mobile_accent"
+            android:textColor="@color/mobile_drawer_playing_accent"
             android:textSize="11sp"
             android:textStyle="bold" />
     </LinearLayout>

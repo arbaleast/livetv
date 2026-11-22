@@ -174,4 +174,22 @@ class MobilePlayerChromePolicyTest {
         assertFalse(exited.bottomBarVisible)
         assertFalse(sm.shouldAutoHideControls())
     }
+
+    @Test
+    fun `syncing native controls without revealing keeps chrome hidden during channel switch loading`() {
+        val sm = MobilePlayerChromeStateMachine(PlayerChromeCapabilities.CCTV, initialPlaying = false)
+        sm.setDrawerOpen(true)
+        sm.setDrawerOpen(false)
+        sm.hideControls(force = true)
+
+        val synced = sm.setWebNativeControlsVisible(nativeVisible = true, revealTopBar = false)
+        assertTrue(synced.isWebNativeControlsVisible)
+        assertFalse("切台加载态同步原控标记不得自动弹出顶栏", synced.topBarVisible)
+        assertFalse("切台加载态同步原控标记不得自动弹出底栏", synced.bottomBarVisible)
+
+        // 用户主动轻点屏幕才唤出控制栏（原控态仅显顶栏、底栏隐藏）
+        val tapped = sm.toggleControls()
+        assertTrue(tapped.topBarVisible)
+        assertFalse(tapped.bottomBarVisible)
+    }
 }
