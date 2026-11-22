@@ -829,7 +829,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun switchToCctvWebPlayer(channel: Channel) {
         val precheck = PlayerTransitionAndPipPolicy.evaluateMgtvToCctvSwitch(
             channelId = channel.id,
-            supportedLiveUrl = CctvWebChannel.liveUrl(channel.id),
+            isSupportedCctv = CctvWebChannel.isSupported(channel.id),
         )
         if (precheck == CrossEngineCctvPrecheck.UNSUPPORTED_CCTV) {
             Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()

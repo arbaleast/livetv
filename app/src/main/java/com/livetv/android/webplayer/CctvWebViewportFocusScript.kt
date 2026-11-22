@@ -28,7 +28,7 @@ object CctvWebViewportFocusScript {
   var HIDE_CLASS = 'livetv-focus-hidden';
   var CONTROL_CLASS = 'livetv-pure-control-hidden';
   var PURE_CLASS = 'livetv-pure-video';
-  var PLAYER_ID = 'player';
+  var PLAYER_IDS = ['player', 'myPlayer'];
   var MIN_W = 200;
   var MIN_H = 100;
   var THROTTLE_MS = 280;
@@ -40,18 +40,27 @@ object CctvWebViewportFocusScript {
   var pruned = false;
   var pruneTimer = 0;
 
+  function findPlayerContainer() {
+    for (var i = 0; i < PLAYER_IDS.length; i++) {
+      var el = document.getElementById(PLAYER_IDS[i]);
+      if (el) { return el; }
+    }
+    return null;
+  }
+
   function ensureStyle() {
     if (document.getElementById(STYLE_ID)) { return true; }
     var css =
       'html,body{background:#000 !important;margin:0 !important;padding:0 !important;' +
       'overflow:hidden !important;width:100vw !important;height:100vh !important;}\n' +
       '.' + HIDE_CLASS + '{display:none !important;visibility:hidden !important;}\n' +
-      '#player{position:fixed !important;left:0 !important;top:0 !important;right:0 !important;bottom:0 !important;' +
+      '#player,#myPlayer{position:fixed !important;left:0 !important;top:0 !important;right:0 !important;bottom:0 !important;' +
       'width:100vw !important;height:100vh !important;max-width:100vw !important;max-height:100vh !important;' +
       'margin:0 !important;padding:0 !important;z-index:2147483647 !important;background:#000 !important;}\n' +
-      '#player video,#player canvas{width:100% !important;height:100% !important;' +
+      '#player video,#player canvas,#myPlayer video,#myPlayer canvas{width:100% !important;height:100% !important;' +
       'max-width:100% !important;max-height:100% !important;object-fit:contain !important;background:#000 !important;}\n' +
-      'html.livetv-pure-video #player .livetv-pure-control-hidden{visibility:hidden !important;opacity:0 !important;pointer-events:none !important;}';
+      'html.livetv-pure-video #player .livetv-pure-control-hidden,html.livetv-pure-video #myPlayer .livetv-pure-control-hidden,html.livetv-pure-video #myPlayer > :not(video):not(canvas){visibility:hidden !important;opacity:0 !important;pointer-events:none !important;}\n' +
+      'html.livetv-pure-video #player video::-webkit-media-controls,html.livetv-pure-video #player video::-webkit-media-controls-enclosure,html.livetv-pure-video #myPlayer video::-webkit-media-controls,html.livetv-pure-video #myPlayer video::-webkit-media-controls-enclosure{display:none !important;opacity:0 !important;visibility:hidden !important;pointer-events:none !important;}';
     var head = document.head || document.documentElement;
     if (head) {
       try {
@@ -93,7 +102,7 @@ object CctvWebViewportFocusScript {
   }
 
   function isVideoPlaying(v) {
-    return Boolean(v && !v.paused && v.readyState >= 2 && v.currentTime > 0);
+    return Boolean(v && !v.paused && v.readyState >= 2 && v.videoWidth > 0 && v.currentTime > 0.05);
   }
 
   function findActiveMedia(player) {
@@ -132,13 +141,13 @@ object CctvWebViewportFocusScript {
   }
 
   window.__livetvScanPureControls = function () {
-    var player = document.getElementById(PLAYER_ID);
+    var player = findPlayerContainer();
     if (player) { markPureControls(player); }
   };
 
   function pruneOuterDom() {
     if (pruned || !window.__livetvPlaying || window.__livetvPureVideo === false) { return; }
-    var player = document.getElementById(PLAYER_ID);
+    var player = findPlayerContainer();
     if (!player) { return; }
     pruned = true;
     try {
@@ -200,27 +209,32 @@ object CctvWebViewportFocusScript {
       (function (videoEl) {
         function markPlaying() {
           var firstPlaying = !window.__livetvPlaying;
+          window.__livetvEnded = false;
           window.__livetvFocusReady = true;
           window.__livetvPlaying = true;
           if (firstPlaying || pureScanCount < 3) {
             pureScanCount += 1;
-            var p = document.getElementById(PLAYER_ID);
+            var p = findPlayerContainer();
             if (p) { applyPureState(p); }
           }
         }
         function onPlaying() {
-          if (!videoEl || videoEl.paused || videoEl.readyState < 2) { return; }
+          if (!isVideoPlaying(videoEl)) { return; }
           markPlaying();
         }
         function onProgress() {
           if (!isVideoPlaying(videoEl)) { return; }
           markPlaying();
         }
+        function onEnded() {
+          window.__livetvEnded = true;
+        }
         videoEl.addEventListener('playing', onPlaying);
         videoEl.addEventListener('timeupdate', onProgress);
+        videoEl.addEventListener('ended', onEnded);
         if (typeof videoEl.requestVideoFrameCallback === 'function') {
           videoEl.requestVideoFrameCallback(function () {
-            if (videoEl && !videoEl.paused) {
+            if (videoEl && !videoEl.paused && videoEl.videoWidth > 0) {
               markPlaying();
             }
           });
@@ -305,10 +319,21 @@ object CctvWebViewportFocusScript {
     }
   }
 
+  function ensureObserver() {
+    if (observer || !window.MutationObserver || !document.documentElement) { return; }
+    try {
+      observer = new MutationObserver(schedule);
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {
+      observer = null;
+    }
+  }
+
   function run() {
+    ensureObserver();
     var hasStyle = ensureStyle();
     applyBaseStyles();
-    var player = document.getElementById(PLAYER_ID);
+    var player = findPlayerContainer();
     if (!player) { return; }
 
     bindVideoEvents(player);
@@ -345,11 +370,7 @@ object CctvWebViewportFocusScript {
   run();
   document.addEventListener('DOMContentLoaded', schedule);
   window.addEventListener('load', schedule);
-
-  if (window.MutationObserver) {
-    observer = new MutationObserver(schedule);
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-  }
+  ensureObserver();
 
   var ticks = 0;
   var poll = setInterval(function () {
@@ -363,9 +384,9 @@ object CctvWebViewportFocusScript {
     /** 阶段一就绪探针：只读布尔表达式。 */
     const val CHECK_READY_SCRIPT: String = "Boolean(window.__livetvFocusReady)"
 
-    /** 两阶段状态探针：返回 `'playing'` / `'ready'` / `'loading'`。 */
+    /** 两阶段状态探针（含点播播完态）：返回 `'ended'` / `'playing'` / `'ready'` / `'loading'`。 */
     const val CHECK_STATE_SCRIPT: String =
-        "(window.__livetvPlaying?'playing':(window.__livetvFocusReady?'ready':'loading'))"
+        "(window.__livetvEnded?'ended':(window.__livetvPlaying?'playing':(window.__livetvFocusReady?'ready':'loading')))"
 
     /** 进入纯视频：重扫 `#player` 内控制层并在已起播时开启 `html.livetv-pure-video`。 */
     val SET_PURE_VIDEO_ON_SCRIPT: String = """

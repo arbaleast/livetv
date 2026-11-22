@@ -46,19 +46,32 @@ class CctvWebSwitchActionTest {
             CctvWebSwitchAction.ReloadInPlace(
                 channelId = "cctv:cctv13",
                 channelName = "CCTV-13 新闻",
-                url = "https://tv.cctv.com/live/cctv13/",
+                url = "https://tv.cctv.com/live/cctv13/m/",
             ),
             action,
+        )
+
+        // cctv4k 归为同页 4K 节目池轮播重载（url 为空，由 Activity 从 Cctv4kVodPool 抽取）
+        val action4k = CctvWebSwitchPolicy.decide(
+            currentChannelId = "cctv:cctv1",
+            targetChannel = cctvChannel("cctv:cctv4k", "CCTV-4K 超高清"),
+        )
+        assertEquals(
+            CctvWebSwitchAction.ReloadInPlace(
+                channelId = "cctv:cctv4k",
+                channelName = "CCTV-4K 超高清",
+                url = "",
+            ),
+            action4k,
         )
     }
 
     @Test
     fun `switching to unsupported cctv channel returns UnsupportedToast`() {
         listOf(
-            cctvChannel("cctv:cctv4k", "CCTV-4K 超高清"),
             cctvChannel("cctv:cctv8k", "CCTV-8K 超高清"),
             cctvChannel("cctv:cctv18", "CCTV-18"),
-            cctvChannel("cctv4k", "CCTV-4K 超高清"),
+            cctvChannel("cctv8k", "CCTV-8K 超高清"),
         ).forEach { target ->
             assertEquals(
                 "应拒绝不支持的频道 ${target.id}",

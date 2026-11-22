@@ -27,8 +27,10 @@ class CctvWebViewportFocusScriptTest {
     )
 
     @Test
-    fun `anchors the player and requires a visible video or canvas`() {
+    fun `anchors both player and myPlayer containers and requires a visible video or canvas`() {
         assertTrue(script.contains("'player'"))
+        assertTrue("应同时兼容 4K 点播页容器 #myPlayer", script.contains("'myPlayer'"))
+        assertTrue("CSS 聚焦应同时覆盖 #player 与 #myPlayer", script.contains("#myPlayer"))
         assertTrue(script.contains("video"))
         assertTrue(script.contains("canvas"))
         assertTrue(script.contains("getBoundingClientRect"))
@@ -46,6 +48,7 @@ class CctvWebViewportFocusScriptTest {
     @Test
     fun `throttles mutation observer and narrows scope after player is ready`() {
         assertTrue(script.contains("MutationObserver"))
+        assertTrue("observe 前必须判空 document.documentElement 防止早注入抛 TypeError 中断定时器", script.contains("!document.documentElement"))
         assertTrue("MutationObserver 应包含节流定时器", script.contains("setTimeout"))
         assertTrue("就绪后应先 disconnect 再收缩观察范围", script.contains("disconnect()"))
         assertTrue("就绪后应收缩监听 document.body", script.contains("document.body"))
@@ -58,11 +61,16 @@ class CctvWebViewportFocusScriptTest {
     @Test
     fun `detects playing video state and toggles two stage pure video styles safely`() {
         assertTrue(script.contains("readyState"))
-        assertTrue(script.contains("currentTime"))
+        assertTrue(script.contains("videoWidth > 0"))
+        assertTrue(script.contains("currentTime > 0.05"))
         assertTrue(script.contains("playing"))
         assertTrue(script.contains("timeupdate"))
         assertTrue(script.contains("window.__livetvPlaying"))
         assertTrue(script.contains("html.livetv-pure-video #player .livetv-pure-control-hidden"))
+        assertTrue(
+            "纯视频态应通过 CSS 屏蔽 WebView 原生 <video controls> Shadow DOM（避免 4K 点播撤幕瞬间闪出进度条/暂停圆钮/加载圈）",
+            script.contains("::-webkit-media-controls"),
+        )
         assertTrue("纯视频内部控制层应包含 visibility:hidden !important", script.contains("visibility:hidden !important"))
         assertTrue(script.contains("opacity:0 !important"))
         assertTrue(script.contains("pointer-events:none !important"))
@@ -102,12 +110,15 @@ class CctvWebViewportFocusScriptTest {
         assertTrue(onScript.contains("__livetvPureVideo"))
         assertTrue(offScript.contains("livetv-pure-video"))
         assertTrue(offScript.contains("remove"))
+        assertTrue("应监听 video ended 事件支持 4K 点播自动轮播下一期", script.contains("'ended'"))
         assertEqualsIgnoringSpace(
-            "(window.__livetvPlaying?'playing':(window.__livetvFocusReady?'ready':'loading'))",
+            "(window.__livetvEnded?'ended':(window.__livetvPlaying?'playing':(window.__livetvFocusReady?'ready':'loading')))",
             stateScript,
         )
+        assertTrue(stateScript.contains("__livetvEnded"))
         assertTrue(stateScript.contains("__livetvPlaying"))
         assertTrue(stateScript.contains("__livetvFocusReady"))
+        assertTrue(stateScript.contains("'ended'"))
         assertTrue(stateScript.contains("'playing'"))
         assertTrue(stateScript.contains("'ready'"))
         assertTrue(stateScript.contains("'loading'"))

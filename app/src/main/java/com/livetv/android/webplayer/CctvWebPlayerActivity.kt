@@ -93,6 +93,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private var currentChannelId: String = DEFAULT_CHANNEL_ID
     private var currentChannelName: String = ""
     private var categories: List<ChannelCategory> = emptyList()
+    private var baseUserAgent: String = ""
+    private var currentVodUrl: String? = null
+    private var currentVodTitle: String? = null
+    private val vod4kPool: List<Cctv4kVodItem> by lazy { loadVod4kPool() }
 
     private var revealed = false
     private var startedAt = 0L
@@ -105,6 +109,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private var isSwitchingEngine = false
 
     private val backgroundSuspendRunnable = Runnable { suspendWebViewInBackground() }
+    private val vodEndedPollRunnable = Runnable { pollVodEndedState() }
 
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
@@ -135,7 +140,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         if (isPlaying || awaitingPageCommit) return
 
         val elapsed = System.currentTimeMillis() - startedAt
-        if (!revealed && elapsed >= FOCUS_TIMEOUT_MS) {
+        val focusTimeoutMs = CctvWebChannel.focusTimeoutMs(currentChannelId)
+        if (!revealed && elapsed >= focusTimeoutMs) {
             reveal()
         }
         val nextDelay = if (elapsed >= SLOW_POLL_AFTER_MS) SLOW_POLL_INTERVAL_MS else POLL_INTERVAL_MS
@@ -189,7 +195,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         val storeCategories = runCatching { app.catalogStore.getAllCategories() }.getOrDefault(emptyList())
         categories = CctvWebSwitchPolicy.resolveCategories(storeCategories)
 
-        val channelId = intent.getStringExtra(EXTRA_CHANNEL_ID) ?: DEFAULT_CHANNEL_ID
+        val rawChannelId = intent.getStringExtra(EXTRA_CHANNEL_ID) ?: DEFAULT_CHANNEL_ID
+        val channelId = if (CctvWebChannel.isSupported(rawChannelId)) {
+            rawChannelId
+        } else {
+            Log.w(TAG, "unsupported channel '$rawChannelId', falling back to $DEFAULT_CHANNEL_ID")
+            DEFAULT_CHANNEL_ID
+        }
         currentChannelId = channelId
         currentChannelName = CctvWebSwitchPolicy.resolveChannelName(
             channelId = channelId,
@@ -202,11 +214,12 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         mountChrome()
         applySafeAreaInsets()
 
-        val pageUrl = CctvWebChannel.liveUrl(channelId)
+        val pageUrl = resolveTargetUrl(channelId, avoidCurrentVod = true)
         if (pageUrl == null) {
             showUnavailableMessage(R.string.cctv_web_unsupported)
             return
         }
+        chrome.setTitle(displayTitleForCurrentChannel())
 
         MobileUiPreferences.setLastPlayedChannelId(this, channelId)
         updateFavoriteUi()
@@ -217,6 +230,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             return
         }
         webView = created
+        applyUserAgentForChannel(created, channelId)
         touchContainer.addView(created, matchParent())
 
         // 阶段一（待起播）保持控制层可见，方便随时返回或打开选台抽屉
@@ -226,7 +240,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
         startedAt = System.currentTimeMillis()
         awaitingPageCommit = true
-        mainHandler.postDelayed(revealTimeoutRunnable, FOCUS_TIMEOUT_MS)
+        mainHandler.postDelayed(revealTimeoutRunnable, CctvWebChannel.focusTimeoutMs(channelId))
         created.loadUrl(pageUrl)
     }
 
@@ -303,7 +317,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     }
 
     private fun retryCurrentChannel() {
-        val url = CctvWebChannel.liveUrl(currentChannelId)
+        val url = resolveTargetUrl(currentChannelId, avoidCurrentVod = true)
         if (url == null) {
             finish()
             return
@@ -318,6 +332,66 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             touchContainer.addView(recreated, matchParent())
         }
         reloadChannel(currentChannelId, currentChannelName, url)
+    }
+
+    private fun loadVod4kPool(): List<Cctv4kVodItem> {
+        val raw = runCatching {
+            assets.open(Cctv4kVodPool.ASSET_FILE_NAME).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }.getOrNull()
+        return Cctv4kVodPool.parse(raw)
+    }
+
+    private fun resolveTargetUrl(channelId: String, avoidCurrentVod: Boolean): String? {
+        if (CctvWebChannel.isVodPoolChannel(channelId)) {
+            val avoidUrl = if (avoidCurrentVod) currentVodUrl ?: lastVod4kUrl else null
+            val picked = Cctv4kVodPool.pickNext(
+                items = vod4kPool,
+                currentUrl = avoidUrl,
+            ) ?: return null
+            currentVodUrl = picked.url
+            currentVodTitle = picked.title
+            lastVod4kUrl = picked.url
+            Log.i(TAG, "4k vod pool picked: ${picked.title}")
+            return picked.url
+        }
+        currentVodUrl = null
+        currentVodTitle = null
+        return CctvWebChannel.liveUrl(channelId)
+    }
+
+    private fun displayTitleForCurrentChannel(): String {
+        val vodTitle = currentVodTitle
+        return if (CctvWebChannel.isVodPoolChannel(currentChannelId) && !vodTitle.isNullOrBlank()) {
+            "CCTV-4K · $vodTitle"
+        } else {
+            currentChannelName
+        }
+    }
+
+    private fun applyUserAgentForChannel(view: WebView, channelId: String) {
+        if (baseUserAgent.isEmpty()) {
+            baseUserAgent = view.settings.userAgentString
+        }
+        val resolved = CctvWebUserAgent.resolveForChannel(baseUserAgent, channelId)
+        if (resolved.isNotEmpty() && view.settings.userAgentString != resolved) {
+            view.settings.userAgentString = resolved
+        }
+    }
+
+    private fun pollVodEndedState() {
+        val view = webView ?: return
+        if (!isPlaying || !CctvWebChannel.isVodPoolChannel(currentChannelId)) return
+        if (isFinishing || isDestroyed || suspendedInBackground || hasLoadFailure) return
+        view.evaluateJavascript(CctvWebViewportFocusScript.CHECK_STATE_SCRIPT) { raw ->
+            if (!isPlaying || !CctvWebChannel.isVodPoolChannel(currentChannelId)) return@evaluateJavascript
+            if (isFinishing || isDestroyed || suspendedInBackground) return@evaluateJavascript
+            if (raw?.trim()?.trim('"') == STATE_ENDED) {
+                Log.i(TAG, "4k vod ended, advancing to next album")
+                retryCurrentChannel()
+            } else {
+                mainHandler.postDelayed(vodEndedPollRunnable, VOD_ENDED_POLL_INTERVAL_MS)
+            }
+        }
     }
 
     // ---------------- WebView ----------------
@@ -345,7 +419,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             setGeolocationEnabled(false)
             setSaveFormData(false)
             cacheMode = WebSettings.LOAD_DEFAULT
-            userAgentString = CctvWebUserAgent.sanitize(userAgentString)
+            if (baseUserAgent.isEmpty()) {
+                baseUserAgent = userAgentString
+            }
+            userAgentString = CctvWebUserAgent.resolveForChannel(baseUserAgent, currentChannelId)
         }
 
         view.webViewClient = object : WebViewClient() {
@@ -717,6 +794,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         }
         chrome.setPlaying(true)
         updateAutoPipParams()
+        if (CctvWebChannel.isVodPoolChannel(currentChannelId)) {
+            mainHandler.removeCallbacks(vodEndedPollRunnable)
+            mainHandler.postDelayed(vodEndedPollRunnable, VOD_ENDED_POLL_INTERVAL_MS)
+        }
     }
 
     private fun enterPureVideo() {
@@ -752,7 +833,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 categories = categories,
                 fallbackName = currentChannelName,
             )
-            chrome.setTitle(currentChannelName)
+            chrome.setTitle(displayTitleForCurrentChannel())
             chrome.setCatalog(categories, currentChannelId)
         }
     }
@@ -766,8 +847,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             }
 
             is CctvWebSwitchAction.ReloadInPlace -> {
-                chrome.closeDrawer(restoreControls = false)
-                reloadChannel(action.channelId, action.channelName, action.url)
+                val targetUrl = action.url.ifBlank { resolveTargetUrl(action.channelId, avoidCurrentVod = true) }
+                if (targetUrl == null) {
+                    Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
+                } else {
+                    chrome.closeDrawer(restoreControls = false)
+                    reloadChannel(action.channelId, action.channelName, targetUrl)
+                }
             }
 
             is CctvWebSwitchAction.SwitchToNativePlayer -> {
@@ -793,6 +879,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     /** 同页复用 WebView 切台或重试：重置到阶段一待起播态并黑幕过渡，不重建 Activity。 */
     private fun reloadChannel(channelId: String, channelName: String, url: String) {
         mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.removeCallbacks(vodEndedPollRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
 
         currentChannelId = channelId
@@ -802,7 +889,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             fallbackName = channelName,
         )
         MobileUiPreferences.setLastPlayedChannelId(this, channelId)
-        chrome.setTitle(currentChannelName)
+        chrome.setTitle(displayTitleForCurrentChannel())
         chrome.setCatalog(categories, currentChannelId)
         updateFavoriteUi()
 
@@ -822,11 +909,14 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         chrome.showControls(animate = false)
         showOverlay()
 
-        // 先停止旧页并等待新页 onPageCommitVisible 再注入与轮询，避免读到旧页残留的 __livetvPlaying
+        // 先停止旧页并按频道模式切换 UA，再等待新页 onPageCommitVisible 注入与轮询，避免读到旧页残留的 __livetvPlaying
         updateAutoPipParams()
-        mainHandler.postDelayed(revealTimeoutRunnable, FOCUS_TIMEOUT_MS)
-        webView?.stopLoading()
-        webView?.loadUrl(url)
+        mainHandler.postDelayed(revealTimeoutRunnable, CctvWebChannel.focusTimeoutMs(channelId))
+        webView?.let { view ->
+            applyUserAgentForChannel(view, channelId)
+            view.stopLoading()
+            view.loadUrl(url)
+        }
     }
 
     // ---------------- 脚本注入与错误态 ----------------
@@ -859,7 +949,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         chrome.setPlaying(false)
         chrome.showError(
             message = getString(messageRes),
-            showRetry = CctvWebChannel.liveUrl(currentChannelId) != null,
+            showRetry = CctvWebChannel.isSupported(currentChannelId),
         )
     }
 
@@ -907,6 +997,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         if (isFinishing || isDestroyed || hasLoadFailure) return
         suspendedInBackground = true
         mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.removeCallbacks(vodEndedPollRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_WAIVED, true)
         view.stopLoading()
@@ -932,7 +1023,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         }
         val newChannelId = intent.getStringExtra(EXTRA_CHANNEL_ID) ?: return
         val newChannelName = intent.getStringExtra(EXTRA_CHANNEL_NAME)
-        val pageUrl = CctvWebChannel.liveUrl(newChannelId)
+        val pageUrl = resolveTargetUrl(newChannelId, avoidCurrentVod = true)
         if (pageUrl == null) {
             Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
             return
@@ -970,7 +1061,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         if (suspendedInBackground && webView != null && !hasLoadFailure) {
             suspendedInBackground = false
             webView?.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-            val pageUrl = CctvWebChannel.liveUrl(currentChannelId)
+            val pageUrl = resolveTargetUrl(currentChannelId, avoidCurrentVod = false)
             if (pageUrl != null) {
                 Log.i(TAG, "foreground resume reload: $currentChannelId")
                 reloadChannel(currentChannelId, currentChannelName, pageUrl)
@@ -986,6 +1077,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         if (!isPlaying && !suspendedInBackground && webView != null) {
             mainHandler.removeCallbacks(pollRunnable)
             mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
+        } else if (isPlaying && !suspendedInBackground && CctvWebChannel.isVodPoolChannel(currentChannelId)) {
+            mainHandler.removeCallbacks(vodEndedPollRunnable)
+            mainHandler.postDelayed(vodEndedPollRunnable, VOD_ENDED_POLL_INTERVAL_MS)
         }
         applyImmersive()
         updateAutoPipParams()
@@ -1025,6 +1119,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     override fun onPause() {
         mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.removeCallbacks(vodEndedPollRunnable)
         if (!isInPictureInPictureMode) {
             webView?.onPause()
             webView?.pauseTimers()
@@ -1159,15 +1254,20 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         private const val ABOUT_BLANK = "about:blank"
         private const val TAG = "CctvWebPlayer"
 
+        private const val STATE_ENDED = "ended"
         private const val STATE_PLAYING = "playing"
         private const val STATE_READY = "ready"
 
         private const val POLL_INTERVAL_MS = 80L
         private const val SLOW_POLL_AFTER_MS = 15_000L
         private const val SLOW_POLL_INTERVAL_MS = 1_000L
-        private const val FOCUS_TIMEOUT_MS = 7_000L
+        private const val VOD_ENDED_POLL_INTERVAL_MS = 1_500L
         private const val OVERLAY_FADE_MS = 120L
         private const val TARGET_VIDEO_FRAME_RATE_HZ = 25f
         private const val BACKGROUND_SUSPEND_DELAY_MS = 5_000L
+
+        /** 进程内记住最近一次 4K 彩蛋播放的 URL，确保退出重进与每次刷新必换不同节目。 */
+        @Volatile
+        private var lastVod4kUrl: String? = null
     }
 }

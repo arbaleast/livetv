@@ -29,8 +29,7 @@ object CctvWebSwitchPolicy {
         targetChannel: Channel,
     ): CctvWebSwitchAction {
         val targetKey = CctvWebChannel.keyOf(targetChannel.id)
-        val url = targetKey?.let { CctvWebChannel.liveUrl(targetChannel.id) }
-        if (targetKey == null || url == null) {
+        if (targetKey == null) {
             val normalizedId = targetChannel.id.trim().lowercase()
             val isUnsupportedCctv = normalizedId.startsWith(CctvWebChannel.CHANNEL_PREFIX) ||
                 (normalizedId.startsWith("cctv") && targetChannel.streamUrl.isBlank())
@@ -41,6 +40,7 @@ object CctvWebSwitchPolicy {
             }
         }
 
+        val url = CctvWebChannel.liveUrl(targetKey).orEmpty()
         return if (CctvWebChannel.keyOf(currentChannelId) == targetKey) {
             CctvWebSwitchAction.NoOp
         } else {

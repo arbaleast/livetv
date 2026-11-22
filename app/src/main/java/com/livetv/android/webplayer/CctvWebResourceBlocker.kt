@@ -42,7 +42,6 @@ internal object CctvWebResourceBlocker {
         "/photoalbum/templet/common/depa1561603549108607/top2023newindex.js",
         "/photoalbum/templet/common/depa1635928379783438/indexpc.js",
         "/photoalbum/templet/common/depa1567091909687313/zhibo_shoucang.js",
-        "/photoalbum/templet/common/depa1567091909687313/h5_shield.js",
         "/photoalbum/templet/common/depa1548732472557170/swiper4.min.js",
         "/photoalbum/templet/common/depa1504516146368634/echo.min.js",
         "/photoalbum/templet/common/depa1567091909687313/cctvnew-jquery.tinyscrollbar.js",
@@ -51,8 +50,7 @@ internal object CctvWebResourceBlocker {
         "/photoalbum/templet/common/depa1561603549108607/shareindex.js",
         "/photoalbum/templet/common/depa1486437585241505/nativesharexy2.js",
         "/photoalbum/templet/common/depa1437029649871629/pubtoolmethod.js",
-        // 页面重复加载的第二份 jQuery（保留主文档 <head> 的 /photoalbum/templet/js/jquery-1.7.2.min.js 供自举）
-        "/library/script/jquery-1.7.2.min.js",
+        // 注意：CCTV-3/6/8 PC 直播页依赖 /library/script/jquery-1.7.2.min.js 与 h5_shield.js 自举播放器，严禁拦截
         // 上述导航/登录脚本通过 document.write 动态注入的子脚本
         "/photoalbum/templet/common/depa1658908558759922/mylogin.js",
         "/photoalbum/templet/common/depa1628231077516717/daohang211126.js",

@@ -95,8 +95,6 @@ class CctvWebResourceBlockerTest {
             "https://js.data.cctv.com/__aplus_plugin_cctv.js,aplus_plugin_aplus_u.js",
             "https://s.yangshipin.cn/CCTVVideo/cctvh5-trace/cctvh5-trace.min.js",
             "https://o.alicdn.com/QTSDK/quicktracking-sdk/qt_web.umd.js",
-            // 剥离的重复 jQuery
-            "https://r.img.cctvpic.com/library/script/jquery-1.7.2.min.js",
         )
         blockedJsSamples.forEach { url ->
             assertEquals("应拦截外围 JS: $url", CctvWebResourceBlocker.BlockResponseKind.EMPTY_JS, CctvWebResourceBlocker.matchUrl(url))
@@ -133,6 +131,12 @@ class CctvWebResourceBlockerTest {
             "https://cdn.liveplay.myqcloud.com/live/seg.ts",
             "https://player.cntv.cn/html5Player/images/icon.png",
             "https://r.img.cctvpic.com/photoAlbum/templet/js/jquery-1.7.2.min.js",
+            "https://r.img.cctvpic.com/library/script/jquery-1.7.2.min.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA1567091909687313/h5_shield.js",
+            "https://js.player.cntv.cn/creator/vodplayer.js",
+            "https://vdn.apps.cntv.cn/api/getHttpVideoInfo.do?pid=7b0cbb881b6640f1b2c0d7fa8b4e6215",
+            "https://p5.img.cctvpic.com/photoAlbum/templet/common/DEPA1567070010882321/ptjszx_player.js",
+            "https://p1.img.cctvpic.com/photoAlbum/templet/common/DEPA1559800841944426/2020_4kplay_index.js",
             "https://p1.img.cctvpic.com/photoAlbum/templet/common/DEPA1424933607444705/zepto.min.js",
             "https://p1.img.cctvpic.com/photoAlbum/templet/common/DEPA1486437585241505/configtool.js",
             "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA1486437585241505/configtoolV1.1.js",

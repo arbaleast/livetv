@@ -240,9 +240,10 @@ class CctvWebPrototypeGuardTest {
         assertTrue("应保留后台 5s 硬休眠 RENDERER_PRIORITY_WAIVED", activity.contains("RENDERER_PRIORITY_WAIVED"))
         assertTrue("onDestroy 应取消后台休眠回调", activity.contains("backgroundSuspendRunnable"))
 
-        // 黑幕撤除对齐首帧守卫：短轮询 + 120ms 淡出 + STATE_READY 不提前撤幕
+        // 黑幕撤除对齐首帧守卫：短轮询 + 120ms 淡出 + STATE_READY 不提前撤幕 + 分模式兜底超时
         assertTrue("就绪前轮询间隔应收紧至 80ms", activity.contains("POLL_INTERVAL_MS = 80L"))
         assertTrue("黑幕淡出动画时长应压缩至 120ms", activity.contains("OVERLAY_FADE_MS = 120L"))
+        assertTrue("黑幕超时兜底应通过 CctvWebChannel.focusTimeoutMs 分流（直播 7s / 4K 点播 12s）", activity.contains("CctvWebChannel.focusTimeoutMs("))
         val readyBranchStart = activity.indexOf("STATE_READY -> {")
         assertTrue("pollState 应包含 STATE_READY 分支", readyBranchStart >= 0)
         val readyBranchEnd = activity.indexOf("else -> {", readyBranchStart)
@@ -277,7 +278,10 @@ class CctvWebPrototypeGuardTest {
 
         assertTrue("应至少出现官方直播域名", urls.isNotEmpty())
         urls.forEach { (name, url) ->
-            assertTrue("$name 出现非官方 URL: $url", url.startsWith("https://tv.cctv.com/live/"))
+            assertTrue(
+                "$name 出现非官方 URL: $url",
+                url.startsWith("https://tv.cctv.com/live/") || url.startsWith("https://tv.cctv.com/"),
+            )
         }
     }
 }

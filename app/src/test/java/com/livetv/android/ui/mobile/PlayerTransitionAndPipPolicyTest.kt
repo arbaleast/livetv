@@ -187,40 +187,40 @@ class PlayerTransitionAndPipPolicyTest {
     }
 
     @Test
-    fun `mgtv drawer cctv precheck rejects 4k and 8k before stopping exoplayer`() {
+    fun `mgtv drawer cctv precheck allows 4k vod pool and rejects 8k before stopping exoplayer`() {
         assertEquals(
             CrossEngineCctvPrecheck.SWITCH_TO_CCTV_WEB,
             PlayerTransitionAndPipPolicy.evaluateMgtvToCctvSwitch(
                 channelId = "cctv:cctv1",
-                supportedLiveUrl = CctvWebChannel.liveUrl("cctv:cctv1"),
+                isSupportedCctv = CctvWebChannel.isSupported("cctv:cctv1"),
             ),
         )
         assertEquals(
             CrossEngineCctvPrecheck.SWITCH_TO_CCTV_WEB,
             PlayerTransitionAndPipPolicy.evaluateMgtvToCctvSwitch(
                 channelId = "cctv:cctv13",
-                supportedLiveUrl = CctvWebChannel.liveUrl("cctv:cctv13"),
+                isSupportedCctv = CctvWebChannel.isSupported("cctv:cctv13"),
             ),
         )
         assertEquals(
-            CrossEngineCctvPrecheck.UNSUPPORTED_CCTV,
+            CrossEngineCctvPrecheck.SWITCH_TO_CCTV_WEB,
             PlayerTransitionAndPipPolicy.evaluateMgtvToCctvSwitch(
                 channelId = "cctv:cctv4k",
-                supportedLiveUrl = CctvWebChannel.liveUrl("cctv:cctv4k"),
+                isSupportedCctv = CctvWebChannel.isSupported("cctv:cctv4k"),
             ),
         )
         assertEquals(
             CrossEngineCctvPrecheck.UNSUPPORTED_CCTV,
             PlayerTransitionAndPipPolicy.evaluateMgtvToCctvSwitch(
                 channelId = "cctv:cctv8k",
-                supportedLiveUrl = CctvWebChannel.liveUrl("cctv:cctv8k"),
+                isSupportedCctv = CctvWebChannel.isSupported("cctv:cctv8k"),
             ),
         )
         assertEquals(
             CrossEngineCctvPrecheck.NOT_CCTV,
             PlayerTransitionAndPipPolicy.evaluateMgtvToCctvSwitch(
                 channelId = "mgtv:280",
-                supportedLiveUrl = CctvWebChannel.liveUrl("mgtv:280"),
+                isSupportedCctv = CctvWebChannel.isSupported("mgtv:280"),
             ),
         )
     }

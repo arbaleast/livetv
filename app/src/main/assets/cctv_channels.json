@@ -53,8 +53,7 @@
       "id": "uhd",
       "name": "超高清",
       "channels": [
-        {"id": "cctv4k", "name": "CCTV-4K 超高清", "epgId": "cctv4k"},
-        {"id": "cctv8k", "name": "CCTV-8K 超高清", "epgId": "cctv8k"}
+        {"id": "cctv4k", "name": "CCTV-4K 超高清", "epgId": "cctv4k"}
       ]
     }
   ]

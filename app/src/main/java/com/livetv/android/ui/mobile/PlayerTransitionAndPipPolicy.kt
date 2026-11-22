@@ -129,17 +129,18 @@ object PlayerTransitionAndPipPolicy {
 
     /**
      * 手机端 MGTV 抽屉点击频道时对 `cctv:` 频道做前置校验：
-     * 不支持的 4K/8K 直接拒绝，不停止当前 ExoPlayer、不白跳 `CctvWebPlayerActivity`。
+     * 支持的 18 路（CCTV 1–17 直播 + CCTV-4K 轮播）放行切换，其余不支持频道（如已移除的 8K）直接拒绝，
+     * 不停止当前 ExoPlayer、不白跳 `CctvWebPlayerActivity`。
      */
     fun evaluateMgtvToCctvSwitch(
         channelId: String,
-        supportedLiveUrl: String?,
+        isSupportedCctv: Boolean,
     ): CrossEngineCctvPrecheck {
         val normalized = channelId.trim().lowercase()
         if (!normalized.startsWith(CCTV_PREFIX)) {
             return CrossEngineCctvPrecheck.NOT_CCTV
         }
-        return if (!supportedLiveUrl.isNullOrBlank()) {
+        return if (isSupportedCctv) {
             CrossEngineCctvPrecheck.SWITCH_TO_CCTV_WEB
         } else {
             CrossEngineCctvPrecheck.UNSUPPORTED_CCTV
