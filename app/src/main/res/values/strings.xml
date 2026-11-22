@@ -11,6 +11,7 @@
     <string name="tv_action_refreshing">加载中…</string>
     <string name="tv_empty_channels">暂无可播放的频道</string>
     <string name="tv_empty_channels_desc">点击重新加载频道目录</string>
+    <string name="tv_cctv_unsupported">电视端暂不支持央视频道播放</string>
     <string name="cctv_web_unavailable">当前设备无法启动网页播放器（WebView 不可用）</string>
     <string name="cctv_web_unsupported">该频道暂不支持网页播放</string>
     <string name="cctv_web_back">返回</string>

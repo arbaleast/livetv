@@ -26,11 +26,12 @@ import androidx.leanback.widget.Row
 import androidx.leanback.widget.RowPresenter
 import com.livetv.android.LiveTvApplication
 import com.livetv.android.R
-import com.livetv.android.data.mgtv.MgtvStreamResolver
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.ui.mobile.MobileChannelList
 import com.livetv.android.ui.mobile.MobileUiPreferences
 import com.livetv.android.util.FocusRestorePolicy
+import com.livetv.android.util.TvChannelRouteAction
+import com.livetv.android.util.TvChannelRoutePolicy
 import kotlin.math.roundToInt
 
 class MainBrowseFragment : BrowseSupportFragment() {
@@ -220,19 +221,30 @@ class MainBrowseFragment : BrowseSupportFragment() {
     }
 
     private fun handleChannelClick(channel: Channel) {
-        val isDynamicSource = channel.id.startsWith(MgtvStreamResolver.CHANNEL_ID_PREFIX)
-        if (channel.streamUrl.isNotEmpty() || isDynamicSource) {
-            startActivity(Intent(requireContext(), PlayerActivity::class.java).apply {
-                putExtra(PlayerActivity.EXTRA_CHANNEL_ID, channel.id)
-                putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, channel.name)
-                putExtra(PlayerActivity.EXTRA_STREAM_URL, channel.streamUrl)
-            })
-        } else {
-            Toast.makeText(
-                requireContext(),
-                getString(R.string.channel_no_stream_url, channel.name),
-                Toast.LENGTH_SHORT,
-            ).show()
+        when (TvChannelRoutePolicy.decide(channel)) {
+            TvChannelRouteAction.UnsupportedCctv -> {
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.tv_cctv_unsupported),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+
+            TvChannelRouteAction.PlayNative -> {
+                startActivity(Intent(requireContext(), PlayerActivity::class.java).apply {
+                    putExtra(PlayerActivity.EXTRA_CHANNEL_ID, channel.id)
+                    putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, channel.name)
+                    putExtra(PlayerActivity.EXTRA_STREAM_URL, channel.streamUrl)
+                })
+            }
+
+            TvChannelRouteAction.NoStreamUrl -> {
+                Toast.makeText(
+                    requireContext(),
+                    getString(R.string.channel_no_stream_url, channel.name),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
         }
     }
 

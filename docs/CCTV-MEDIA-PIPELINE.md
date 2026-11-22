@@ -1,8 +1,14 @@
-# CCTV-MEDIA-PIPELINE — CCTV 媒体数据处理可行性（P0 研究）
+# CCTV-MEDIA-PIPELINE — CCTV 媒体数据处理可行性（P0 研究归档）
 
-> **状态**：P0 研究文档；**未新增任何媒体处理代码**（无 `CctvTsProcessor` 之类的空壳）。
-> **证据规则**：凡是仓库里能指到源码的写「事实」；凡是需要抓包/样本才能确认的写「假设（UNVERIFIED）」。
-> **合规红线**：本文件不设计、不评估、不实施任何 DRM / HDCP / 访问控制绕过。
+> **最终结论（2026-11-22 归档）**：
+> - **原生 VDN + Media3 ExoPlayer 媒体管线：NO-GO**。实测官方移动端与桌面端直播页均通过 `live.worker.js` WASM DRM 及约 20 个官方外围脚本自举完成播放，无法合规直接喂给 Media3，本项目不实施任何自定义解密、WASM 移植或自定义 `Extractor`。
+> - **现行落地方案（仅手机端）**：通过隔离包 `com.livetv.android.webplayer` 加载官方直播页（`cctv1`–`cctv17`），采用 `#player` 两阶段纯视频视口聚焦（仅 `opacity:0 + pointer-events:none`，不搬移 DOM、不模拟点击）、原生亮度/音量手势、双向选台与同页复用 `WebView`、`pauseTimers()`/`LOAD_DEFAULT` 缓存与 `onRenderProcessGone` 彻底销毁。
+> - **已知边界与性能基线（OnePlus PKG110 / Android 16）**：
+>   - `cctv4k` / `cctv8k` 官方页面 404，已提前短路提示不支持；
+>   - 首次进页/切台需用户轻点官方播放键（合规不模拟点击）；
+>   - Android TV 端保持「电视端暂不支持央视频道播放」兜底，不引入 WebView；
+>   - 稳定播 `cctv1` 30s 基线：主进程 PSS **144.0 MB** / CPU **60.7%**，WebView 渲染进程 PSS **243.0 MB** / CPU **114.0%**；切后台 4s 降至 **7.1% / 17.8%**。
+> - **合规红线**：本文件不设计、不评估、不实施任何 DRM / HDCP / 访问控制绕过；以下 §1–§8 保留为 P0 原生管线研究历史记录。
 
 ---
 

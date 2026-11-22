@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -44,6 +45,8 @@ import com.livetv.android.util.DeviceUtils
 import com.livetv.android.util.PlayerKeyPolicy
 import com.livetv.android.util.PlayerOrientationPolicy
 import com.livetv.android.util.PlayerTouchGestureMath
+import com.livetv.android.util.TvChannelRouteAction
+import com.livetv.android.util.TvChannelRoutePolicy
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -573,9 +576,23 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun switchChannel(direction: Int) {
-        val channel = if (direction > 0) navigator.next() else navigator.previous()
+        val maxSteps = navigator.channels.size.coerceAtLeast(1)
+        var candidate: Channel? = null
+        for (step in 0 until maxSteps) {
+            val next = (if (direction > 0) navigator.next() else navigator.previous()) ?: break
+            if (!isTouchDevice && TvChannelRoutePolicy.isCctvChannel(next.id)) {
+                continue
+            }
+            candidate = next
+            break
+        }
+        val channel = candidate
         if (channel == null) {
-            showStatus(getString(R.string.player_no_channel), showProgress = false)
+            if (!isTouchDevice && navigator.channels.any { TvChannelRoutePolicy.isCctvChannel(it.id) }) {
+                Toast.makeText(this, R.string.tv_cctv_unsupported, Toast.LENGTH_SHORT).show()
+            } else {
+                showStatus(getString(R.string.player_no_channel), showProgress = false)
+            }
             return
         }
         switchToChannel(channel)
@@ -666,6 +683,10 @@ class PlayerActivity : AppCompatActivity() {
         drawerAdapter = ChannelDrawerAdapter { channel ->
             if (isTouchDevice && channel.id.startsWith(CctvWebChannel.CHANNEL_PREFIX)) {
                 switchToCctvWebPlayer(channel)
+                return@ChannelDrawerAdapter
+            }
+            if (!isTouchDevice && TvChannelRoutePolicy.decide(channel) == TvChannelRouteAction.UnsupportedCctv) {
+                Toast.makeText(this, R.string.tv_cctv_unsupported, Toast.LENGTH_SHORT).show()
                 return@ChannelDrawerAdapter
             }
             navigator.locate(channel.id, channel.streamUrl)

@@ -1,13 +1,47 @@
-# CCTV-INTEGRATION — CCTV 官方直播接入（P0 设计）
+# CCTV-INTEGRATION — CCTV 官方直播接入（P0 架构归档）
 
-> **状态**：P0 设计文档。本轮**未写任何业务代码**，P1–P6 全部为「规划待实施」。
-> **证据边界**：现有代码结论均附仓库内 `file:line`；VDN v3 协议项在仓库中**零证据**，
-> 一律标为 `UNVERIFIED`，不得据此编码（见 §2、§6）。
->
-> **合规红线**：不绕过 DRM / HDCP / 任何访问控制；不使用 Cookie 或他人会话；
-> 不因播放器解码报错就推断加密算法或封装类型。
+> **最终结论（2026-11-22 归档）**：
+> - **原生 VDN + Media3 ExoPlayer 路线：NO-GO**。实测移动端与桌面端官方直播页均依赖 `live.worker.js` WASM DRM 及约 20 个官方外围脚本完成自举与流授权，按合规红线（G2/G5）不可直连 Media3，P2–P4 原生解析路线正式终止。
+> - **已落地替代方案（仅手机端）**：隔离包 `app/src/main/java/com/livetv/android/webplayer/` + P1 静态目录（`assets/cctv_channels.json` + `CompositeCatalogCoordinator` 分槽合并）。Android TV 端保持克制兜底，不引入 WebView。
+> - **合规红线**：不绕过 DRM / HDCP / 任何访问控制；不使用 Cookie 或他人会话；不模拟用户点击或强改播放状态。
 
 ---
+
+## 0. 最终架构裁决与已落地实现（2026-11-22）
+
+### 0.1 原生 VDN + Media3 路线：NO-GO 结论
+
+| 闸门 | 判定 | 实证结论 |
+|---|---|---|
+| **G1（认证与自举）** | **未通过（NO-GO）** | 移动端与桌面端播放流程均强依赖约 20 个官方外围脚本与 `live.worker.js` WASM 模块协同自举，无公开无状态签名接口 |
+| **G2（标准明文/AES-128 可播流）** | **未通过（NO-GO）** | 实际直播流走 `live.worker.js` WASM DRM 链路，Media3 原生不可直接播放 |
+| **G5（合规红线）** | **触发终止** | 逆向/复刻 WASM DRM 或外围风控违反合规红线，正式终止 P2–P4 原生解析路线 |
+
+### 0.2 已落地的手机端隔离方案（`webplayer/`）
+
+播放引擎核心（`PlayerManager`、`RoutingStreamResolver`、`StreamRefreshCoordinator`、`data/mgtv/`、`media/`）**零侵入**；手机端 CCTV 能力全部收口在 `com.livetv.android.webplayer` 与 P1 目录层：
+
+| 模块 | 职责与实现要点 |
+|---|---|
+| P1 目录与多源聚合 | `assets/cctv_channels.json`（仅静态元数据，无任何 URL）→ `CctvChannelCatalog` / `CctvCatalogCoordinator` + `CompositeCatalogCoordinator` / `ChannelCatalogMerger` 与 MGTV 分槽合并写入 `ChannelCatalogStore` |
+| 频道与安全白名单 | `CctvWebChannel`（仅放行已验证 200 的 `cctv1`–`cctv17` 官方直播页 `https://tv.cctv.com/live/cctvN/`）；`CctvWebNavigationPolicy`（Fail-Closed，仅允许 `https://tv.cctv.com` 及严格子域）；`CctvWebUserAgent`（仅剔除 `; wv`） |
+| 两阶段纯视频视口聚焦 | `CctvWebViewportFocusScript`（静态常量脚本）：阶段一固定 `#player` 为 `100vw×100vh` 黑底并隐藏外围兄弟至 `document.body`，保持 `object-fit:contain !important`；`MutationObserver` 280ms 节流并在就绪后收缩至 `document.body`（`subtree: false`）；阶段二通过 `playing`/`timeupdate` 与播放态检查置位 `window.__livetvPlaying`，从 `#player` 内媒体节点向上遍历至 `#player` 边界标记 `.livetv-pure-control-hidden`，由 `html.livetv-pure-video #player .livetv-pure-control-hidden{opacity:0 !important;pointer-events:none !important;}` 隐藏网页控制层（**严禁**对内部控件用 `display:none`，不搬移 DOM、不模拟点击） |
+| 播放页交互与手势 | `CctvWebPlayerActivity` + `CctvWebGestureController`：原生黑幕过渡 + `awaitingPageCommit` 屏障与 7s 超时兜底；包裹 `WebView` 的 `CctvTouchContainer`（`onInterceptTouchEvent` 三态分流：左半屏亮度 `[0.01f, 1.0f]`、右半屏音量浮点累加器 `[0, maxVolume]` 与居中 HUD，纯视频态单击切换 3.5s 自动隐藏的渐变顶栏，待起播与「原控」态单击透传网页并保持顶栏常驻） |
+| 双向选台与生命周期 | `CctvWebSwitchPolicy` + 复用 `ChannelDrawerModel`/`ChannelDrawerAdapter` 右侧抽屉：CCTV 1–17 原地 `stopLoading()` + `loadUrl()` 复用 `WebView`（不重建 Activity）；跨源切 MGTV/IPTV 前严格销毁 `WebView` 再拉起 `PlayerActivity`；`PlayerActivity` 仅在手机触控端选 `cctv:` 时停止 ExoPlayer 并转交 `CctvWebPlayerActivity`；`WebSettings.LOAD_DEFAULT`、`onPause/onResume` 成对 `pauseTimers()/resumeTimers()`、`onRenderProcessGone` 彻底移树并 `.destroy()` |
+
+### 0.3 已知边界与真机基线（OnePlus PKG110 / Android 16）
+
+- **`cctv4k` / `cctv8k`**：官方直播页实测 404，入口与抽屉均提前短路提示「该频道暂不支持网页播放」，不拉起 Chromium。
+- **首次起播 / 切台交互**：受合规红线约束（严禁模拟 `.click()` / `.play()`），需用户轻点一次官方播放键起播；起播后自动进入纯视频态并隐藏官方控制栏。
+- **Android TV 端**：不引入 WebView；`MainBrowseFragment` 主页与 `PlayerActivity` 侧边选台/上下切台均经 `TvChannelRoutePolicy` 拦截 `cctv:` 频道并弹出「电视端暂不支持央视频道播放」，不打断当前页面或正在播放的 MGTV/IPTV 节目。
+- **真机性能基线（PKG110，稳定播放 `cctv1` 30s 后采集）**：
+  - 主进程 `com.livetv.android`：**TOTAL PSS = 144.0 MB（147,418 KB）** / 前台 CPU **60.7%**（单核口径，8 核整机约 7.6%）；
+  - WebView 渲染进程 `sandboxed_process0`：**TOTAL PSS = 243.0 MB（248,881 KB）** / 前台 CPU **114.0%**（8 核整机约 14.3%）；
+  - 按 Home 键切后台 4s 后：主进程与渲染进程 CPU 分别降至 **7.1% / 17.8%**（音频与 JS 定时器已暂停），回前台恢复无崩溃。
+
+---
+
+> 以下 §1–§7 保留为 P0 阶段针对原生 VDN 路线的原始审计与设计历史记录（该路线已由 §0 正式裁定 NO-GO）。
 
 ## 1. 源码审计结论与复用映射表
 
