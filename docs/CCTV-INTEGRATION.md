@@ -443,3 +443,44 @@ HLS 模块；解析链路中**不得**为了"看一眼清单"再发一次请求�
 - [ ] 普通静态 IPTV 频道播放不变（`allowedHeaderHosts` 为空路径）
 - [ ] 无网络启动：空态正常，CCTV 失败不影响 MGTV 列表
 - [ ] `lintDebug testDebugUnitTest assembleDebug` 全绿
+
+---
+
+## 8. 最终性能剖析与 15 分钟长播封板结论（Commit `678c735` / PKG110）
+
+> **封板裁决（2026-11-22）**：基于 Commit `678c735` 在 OnePlus PKG110（Android 16，系统 WebView `com.google.android.webview` `138.0.7204.179`）上完成的 5 维 Perfetto + CDP 剖析与 15 分钟连续长播监测，手机端 CCTV WebView 方案**已触达应用层物理性能底板、长播稳定无泄漏无崩溃，正式封板**。后续不再在 WebView 内部投入边际收益趋零的微调。
+
+### 8.1 5 维 Perfetto + CDP 深度剖析结论（已触达应用层物理底板）
+
+- **真实电池功耗（固定亮度、纯电池放电态、同 Wi-Fi，Perfetto 500ms 燃料计采样）**：
+  - 首页列表静置基线：**400 mW**（97.2 mA）
+  - 原生 Media3 ExoPlayer 对照（MGTV 368p @ 25fps，独立 `SurfaceView` DEVICE 叠加）：**1,069 mW**（258.5 mA，较静置 +669 mW）
+  - 当前 CCTV WebView（720p @ 25fps，无独立 `SurfaceView`）：**1,105–1,565 mW**（综合 **1,335 mW**，较原生仅多耗 **~266 mW**，同时承载 4 倍像素分辨率与官方 WASM DRM）
+- **前端与渲染内部账本（CDP 10s 只读增量）**：
+  - `Nodes` 恒定 **800（+0）**、`Documents = 1`、`Frames = 1`、`LayoutCount = 0`、`RecalcStyleCount = 0`（零隐藏重排/样式重算空转）；
+  - 网页 JS（`ScriptDuration`）10s 增量仅 **0.234s（占单核 2.3% CPU）**，V8 堆 `JSHeapUsedSize` 仅 **~26.9 MB**；其余 **~74% 渲染进程私有内存**与 **~85% `CrRendererMain` 任务耗时（1,725 MHz）**全部属于 Chromium C++ MSE/IPC 调度与 `live.worker.js` WASM 的刚性引擎底噪。
+- **65 Hz 无重绘 `Choreographer#doFrame` 离线定性（15s Perfetto Trace）**：
+  - 15s 共 `1,345` 次 `doFrame`（90.00 Hz）：`373` 次 Active Draw（24.9 Hz，与视频帧率对齐）+ `972` 次 No-Draw 空转（64.8 Hz，总墙钟 `1,432.17 ms` / 实际 CPU `1,025.31 ms`，仅占单核 **6.8%** / 8 核整机 **< 0.9%**）；
+  - 972 次 No-Draw `doFrame` 的唯一子切片为 `animation`（73.8% 墙钟 / 63.5% CPU），内核 `compact_sched` 唤醒与 **`VizWebView`（1,246 次）→ `Chrome_ChildIOT`（1,010 次）→ `VideoFrameCompo`（1,007 次）** 精确 1:1 对应；App 层 0 个原生 `ProgressBar` / `Animator` 回调残留，实锤为 90Hz 面板下 Chromium `VSyncMonitor` 轮询 25fps 视频节拍的引擎机制税。
+- **流畅度与交互跟手度**：
+  - 稳态 30s 实测 **753 帧 / 0 丢帧（`0.00%`）**；
+  - 高频交互压测（边播边连续亮度滑动×2 + 顶栏呼出 + 选台抽屉列表急滑×3）下 `gfxinfo`：`Janky = 6.29%`、`P50 / P90 / P95 / P99 = 9 / 14 / 14 / 16 ms`、`Max = 19 ms`（0 帧 ≥ 20 ms），`WebViewFunctor::drawGl`（5.29 ms/帧）未拖垮原生交互流畅度。
+
+### 8.2 15 分钟连续长播稳定性验证（`cctv1` 720p25 纯视频）
+
+- **内存平台期实证（`t = 0m` 至 `t = 15m` 共 16 点）**：
+  - 主进程 `com.livetv.android` TOTAL PSS 全程零漂移：**174.1 → 174.1 MB（净增 `+0.0 MB`）**；
+  - WebView 渲染进程 `sandboxed_process0` 于 **`t = 13m`** 触顶（**TOTAL PSS `341.9 MB` / `Private Other` `267.4 MB`**），`t = 14m–15m` 收敛走平至 **`335.6 MB` / `261.5 MB`**（整机合计稳态 PSS **~510 MB**，`JSHeapUsed` 维持 27–29 MB，`Nodes` 恒定 800），确认无无限内存泄漏。
+- **MSE 自动滑窗驱逐**：
+  - `video.buffered.start(0)` 于 **`t = 9m–10m`** 之间自动启动后移（`0.11s → 33.73s`），此后连续 6 分钟缓冲总跨度稳定锁死在 **`594.2s–594.3s`（约 10 分钟滑动窗口）**，`buffered.length` 恒为 `1`（连续单段，无碎片）。
+- **驱逐期流畅度与零异常**：
+  - 爬坡期（0–9m，13,524 帧）：`Janky = 5.01%`、`P95/P99 = 14/16 ms`、`Max = 36 ms`；
+  - 驱逐期（9–15m，8,992 帧）：`Janky = 4.74%`、`P95/P99 = 14/16 ms`、`Max = 28 ms`（无驱逐毛刺）；
+  - 15 分钟累计输出 **22,510 帧**，仅于 `t = 12m` 触顶前夕瞬时丢 **8 帧**（总丢帧率 **`0.035%`**）；全程 **0 崩溃、0 `onRenderProcessGone`、0 `lmkd`/OOM、0 `QuotaExceededError`、0 音频欠载、0 `E chromium:` 报错**。
+
+### 8.3 已知保留边界与后续演进备忘（供未来参考，不构成当前缺陷）
+
+- **TTFF 基线**：冷启 `cctv1` 硬解出帧 **10.16s**（含桌面页 `/live/cctvN/` → `/m/` JS 重定向浪费 **~1.15s**、首次冷下载 `live.worker.js`/`liveplayer_controls.js` 约 4.2s、播放器内部 ~1.3s 初始化空窗与首片 `.ts` 拉取解密 ~2.7s）；暖切台 `cctv1 → cctv13` 为 **4.17s**（热缓存将脚本阶段压缩至 0.46s，其余主要为 ~1.18s 播放器固定等待 + ~2.26s 首片 `.ts` 拉取解密）。
+- **后续演进方向**：
+  1. 如需进一步削减 ~1s 冷启 TTFF，可独立评估验证全部 17 路官方频道直连 `/live/cctvN/m/` 的可用性与稳定性；
+  2. 如需彻底抹平相对原生播放器的 ~266 mW 功耗差与 ~250 MB 渲染进程引擎底噪，唯一治本方向为**「原生 M3U / 局域网 IPTV 源优先、手机端 WebView 兜底」的混合路由**，不再在 WebView 内部继续做边际收益趋零的微调。
