@@ -89,20 +89,30 @@ class ChannelDrawerModelTest {
     }
 
     @Test
-    fun `filter chips prepend All and skip empty categories`() {
+    fun `filter chips merge fragmented categories prepend All and hide empty Other`() {
+        val raw = listOf(
+            category("empty", "空分组", emptyList()),
+            category("cctv:general", "综合·新闻", listOf(channel("cctv:cctv1", "CCTV-1 综合"))),
+            category("cctv:sports", "体育·少儿", listOf(channel("cctv:cctv5", "CCTV-5 体育"))),
+            category("mgtv:sat", "卫视台", listOf(channel("mgtv:287", "金鹰卡通"))),
+            category("mgtv:local", "地方台", listOf(channel("mgtv:280", "湖南经视"))),
+        )
+
         val chips = ChannelDrawerModel.buildFilterChips(
-            categories = listOf(
-                category("empty", "空分组", emptyList()),
-                category("news", "新闻", listOf(channel("n1"))),
-                category("sports", "体育", listOf(channel("s1"))),
-            ),
+            categories = raw,
             selectedCategoryId = null,
         )
 
         assertEquals(3, chips.size)
         assertEquals(ChannelDrawerFilterChip(null, "全部", selected = true), chips[0])
-        assertEquals(ChannelDrawerFilterChip("news", "新闻", selected = false), chips[1])
-        assertEquals(ChannelDrawerFilterChip("sports", "体育", selected = false), chips[2])
+        assertEquals(
+            ChannelDrawerFilterChip(MobileChannelCategoryPolicy.ID_CCTV, MobileChannelCategoryPolicy.NAME_CCTV, selected = false),
+            chips[1],
+        )
+        assertEquals(
+            ChannelDrawerFilterChip(MobileChannelCategoryPolicy.ID_SATELLITE, MobileChannelCategoryPolicy.NAME_SATELLITE, selected = false),
+            chips[2],
+        )
     }
 
     @Test
@@ -118,31 +128,48 @@ class ChannelDrawerModelTest {
     }
 
     @Test
-    fun `filtered rows show single category channels preserving current highlight`() {
+    fun `filtered rows show single merged category channels preserving current highlight`() {
+        val raw = listOf(
+            category("cctv:general", "综合·新闻", listOf(channel("cctv:cctv1", "CCTV-1 综合"))),
+            category("mgtv:sat", "卫视台", listOf(channel("mgtv:287", "金鹰卡通"))),
+            category("custom:other", "地方台", listOf(channel("custom:x1", "测试地方台"))),
+        )
+
         val rows = ChannelDrawerModel.buildFilteredRows(
-            categories = categories,
-            currentChannelId = "s1",
-            selectedCategoryId = "sports",
+            categories = raw,
+            currentChannelId = "mgtv:287",
+            selectedCategoryId = MobileChannelCategoryPolicy.ID_SATELLITE,
         )
 
         assertEquals(1, rows.size)
-        assertEquals(ChannelDrawerRow.ChannelItem(channel("s1"), isCurrent = true), rows[0])
+        assertEquals(ChannelDrawerRow.ChannelItem(channel("mgtv:287", "金鹰卡通"), isCurrent = true), rows[0])
         assertEquals(0, ChannelDrawerModel.currentRowIndex(rows))
     }
 
     @Test
-    fun `filtered rows fall back to all grouped rows when selection is null or unknown`() {
+    fun `filtered rows fall back to all merged grouped rows when selection is null or unknown`() {
+        val raw = listOf(
+            category("cctv:general", "综合·新闻", listOf(channel("cctv:cctv1", "CCTV-1 综合"))),
+            category("cctv:sports", "体育·少儿", listOf(channel("cctv:cctv5", "CCTV-5 体育"))),
+            category("mgtv:sat", "卫视台", listOf(channel("mgtv:287", "金鹰卡通"))),
+        )
+
         val allRows = ChannelDrawerModel.buildFilteredRows(
-            categories = categories,
-            currentChannelId = "n2",
+            categories = raw,
+            currentChannelId = "cctv:cctv5",
             selectedCategoryId = null,
         )
+        // 2 个合并分类头（央视 + 卫视·芒果）+ 3 个频道 = 5 行
         assertEquals(5, allRows.size)
+        assertEquals(
+            ChannelDrawerRow.CategoryHeader(MobileChannelCategoryPolicy.ID_CCTV, MobileChannelCategoryPolicy.NAME_CCTV),
+            allRows[0],
+        )
         assertEquals(2, ChannelDrawerModel.currentRowIndex(allRows))
 
         val fallbackRows = ChannelDrawerModel.buildFilteredRows(
-            categories = categories,
-            currentChannelId = "n2",
+            categories = raw,
+            currentChannelId = "cctv:cctv5",
             selectedCategoryId = "nonexistent",
         )
         assertEquals(allRows, fallbackRows)

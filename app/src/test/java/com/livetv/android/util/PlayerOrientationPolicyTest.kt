@@ -16,13 +16,17 @@ class PlayerOrientationPolicyTest {
     }
 
     @Test
-    fun `touch device follows device orientation including portrait and reverse landscape`() {
-        assertEquals(13, PlayerOrientationPolicy.resolveRequestedOrientation(isTvDevice = false))
+    fun `touch device defaults to sensor landscape orientation for playback`() {
+        assertEquals(6, PlayerOrientationPolicy.resolveRequestedOrientation(isTvDevice = false))
     }
 
     @Test
     fun `orientation constants match Android ActivityInfo compile time values`() {
         assertEquals(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE, PlayerOrientationPolicy.ORIENTATION_LANDSCAPE)
+        assertEquals(
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE,
+            PlayerOrientationPolicy.ORIENTATION_SENSOR_LANDSCAPE,
+        )
         assertEquals(ActivityInfo.SCREEN_ORIENTATION_FULL_USER, PlayerOrientationPolicy.ORIENTATION_FULL_USER)
         assertEquals(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE, PlayerOrientationPolicy.ORIENTATION_USER_LANDSCAPE)
     }

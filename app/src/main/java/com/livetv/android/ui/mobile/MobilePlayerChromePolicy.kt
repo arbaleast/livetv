@@ -69,6 +69,7 @@ data class MobilePlayerChromeState(
     val isErrorVisible: Boolean = false,
     val isWebNativeControlsVisible: Boolean = false,
     val isPlaying: Boolean = true,
+    val isInPictureInPicture: Boolean = false,
 )
 
 /**
@@ -82,7 +83,7 @@ class MobilePlayerChromeStateMachine(
         private set
 
     fun showControls(): MobilePlayerChromeState {
-        if (state.isScreenLocked || state.isDrawerOpen) return state
+        if (state.isInPictureInPicture || state.isScreenLocked || state.isDrawerOpen) return state
         state = state.copy(
             topBarVisible = true,
             bottomBarVisible = canShowBottomBar(
@@ -100,15 +101,22 @@ class MobilePlayerChromeStateMachine(
         state = state.copy(
             topBarVisible = false,
             bottomBarVisible = false,
-            lockButtonVisible = if (state.isScreenLocked) state.lockButtonVisible else false,
+            lockButtonVisible = if (state.isScreenLocked && !state.isInPictureInPicture) {
+                state.lockButtonVisible
+            } else {
+                false
+            },
         )
         return state
     }
 
-    fun toggleControls(): MobilePlayerChromeState =
-        if (state.topBarVisible) hideControls(force = true) else showControls()
+    fun toggleControls(): MobilePlayerChromeState {
+        if (state.isInPictureInPicture) return state
+        return if (state.topBarVisible) hideControls(force = true) else showControls()
+    }
 
     fun toggleScreenLock(): MobilePlayerChromeState {
+        if (state.isInPictureInPicture) return state
         val nextLocked = !state.isScreenLocked
         state = if (nextLocked) {
             state.copy(
@@ -134,13 +142,13 @@ class MobilePlayerChromeStateMachine(
     }
 
     fun onSingleTapWhileLocked(): MobilePlayerChromeState {
-        if (!state.isScreenLocked) return state
+        if (state.isInPictureInPicture || !state.isScreenLocked) return state
         state = state.copy(lockButtonVisible = !state.lockButtonVisible)
         return state
     }
 
     fun showLockButtonTemporarily(): MobilePlayerChromeState {
-        if (!state.isScreenLocked) return state
+        if (state.isInPictureInPicture || !state.isScreenLocked) return state
         state = state.copy(lockButtonVisible = true)
         return state
     }
@@ -151,6 +159,7 @@ class MobilePlayerChromeStateMachine(
     }
 
     fun setDrawerOpen(open: Boolean): MobilePlayerChromeState {
+        if (open && state.isInPictureInPicture) return state
         state = if (open) {
             state.copy(
                 isDrawerOpen = true,
@@ -176,6 +185,15 @@ class MobilePlayerChromeStateMachine(
 
     fun setWebNativeControlsVisible(nativeVisible: Boolean): MobilePlayerChromeState {
         val effective = capabilities.showWebControlToggle && nativeVisible
+        if (state.isInPictureInPicture) {
+            state = state.copy(
+                isWebNativeControlsVisible = effective,
+                topBarVisible = false,
+                bottomBarVisible = false,
+                lockButtonVisible = false,
+            )
+            return state
+        }
         state = state.copy(
             isWebNativeControlsVisible = effective,
             topBarVisible = if (effective && !state.isScreenLocked && !state.isDrawerOpen) {
@@ -196,8 +214,30 @@ class MobilePlayerChromeStateMachine(
         return state
     }
 
+    fun setPictureInPictureMode(inPip: Boolean): MobilePlayerChromeState {
+        state = if (inPip) {
+            state.copy(
+                isInPictureInPicture = true,
+                topBarVisible = false,
+                bottomBarVisible = false,
+                lockButtonVisible = false,
+                isDrawerOpen = false,
+            )
+        } else {
+            val restoreNativeTopBar = state.isWebNativeControlsVisible && !state.isScreenLocked
+            state.copy(
+                isInPictureInPicture = false,
+                topBarVisible = restoreNativeTopBar,
+                bottomBarVisible = false,
+                lockButtonVisible = false,
+            )
+        }
+        return state
+    }
+
     fun shouldAutoHideControls(): Boolean =
-        state.topBarVisible &&
+        !state.isInPictureInPicture &&
+            state.topBarVisible &&
             !state.isScreenLocked &&
             !state.isDrawerOpen &&
             !state.isErrorVisible &&

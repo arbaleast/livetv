@@ -114,7 +114,7 @@
 | 频道定位 | 用 `EXTRA_CHANNEL_ID` 在仓库中定位完整频道（含 `backupUrls` / `headers`）；未命中则按地址匹配；再未命中用 Extra 构造临时单频道 | 已实现，保证旧调用 100% 兼容 |
 | 返回 | Back 退出播放页回到浏览页，焦点按第 2 节规则恢复 | 依赖 Leanback/系统默认，**需真机验证** |
 | 全屏 | 隐藏状态栏与导航栏（沉浸式） | 已实现：改用 `WindowInsetsControllerCompat` + `WindowCompat.setDecorFitsSystemWindows(window, false)`，并处理 `displayCutout` / `systemBars` 安全区 |
-| 屏幕方向 | TV 端锁定横屏；触控设备播放页跟随设备方向自动旋转（不中断播放、不丢当前频道） | 已实现：`PlayerOrientationPolicy` 分端设 `requestedOrientation`（TV 锁 `LANDSCAPE`，触控 `FULL_USER`），配合 `configChanges` + `onConfigurationChanged` 无缝旋转与 `onSaveInstanceState` 频道恢复 |
+| 屏幕方向 | TV 端锁定横屏；触控设备播放页默认正/反横屏进入（支持手动横竖屏切换，不中断播放、不丢当前频道） | 已实现：`PlayerOrientationPolicy` 分端设 `requestedOrientation`（TV 锁 `LANDSCAPE`，触控默认 `SENSOR_LANDSCAPE`），配合 `configChanges` + `onConfigurationChanged` 无缝旋转与 `onSaveInstanceState` 频道恢复 |
 | 屏幕常亮 | 播放期间禁止自动熄屏 | 已实现：`PlayerActivity.onCreate` 里 `window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)` |
 | 加载/缓冲提示 | Loading / Buffering / 自动重试 / 切备用线时显示提示，Playing 时隐藏 | 已实现（阶段三新增 `statusText`，文案见 `strings.xml` 的 `player_*`） |
 | 错误提示 | 按错误分类给出说明 + "按确认键重试 · 按上下键切换频道"指引 | 已实现（阶段三改为按 `PlaybackError` 分类，文案全部走 `strings.xml`） |
@@ -151,11 +151,11 @@
 **文案分端**：触控端错误提示是 `点按「重试」重新连接 · 用下方按钮切换频道`（`player_error_hint_touch`），
 TV 端仍是 `按确认键重试 · 按上下键切换频道`（`player_error_hint`）。
 
-**自动旋转（仅播放页）**：`PlayerActivity` 在 `AndroidManifest.xml` 中不锁死方向并声明
+**横屏播放与旋转（仅播放页）**：`PlayerActivity` 与 `CctvWebPlayerActivity` 在 `AndroidManifest.xml` 中声明
 `configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"`；
 进入时通过 `PlayerOrientationPolicy.resolveRequestedOrientation(isTvDevice)` 动态设置方向——
-TV 端继续锁定横屏（`SCREEN_ORIENTATION_LANDSCAPE`），触控端跟随设备方向（`SCREEN_ORIENTATION_FULL_USER`，
-支持竖屏与正/反横屏且遵循系统自动旋转开关）。旋转时由 `onConfigurationChanged` 刷新沉浸式隐藏栏与
+TV 端继续锁定横屏（`SCREEN_ORIENTATION_LANDSCAPE`），触控端默认以正/反横屏进入（`SCREEN_ORIENTATION_SENSOR_LANDSCAPE`），
+并可通过底栏「横竖屏」按钮手动切换竖屏。旋转时由 `onConfigurationChanged` 刷新沉浸式隐藏栏与
 `displayCutout`/`systemBars` 安全区，不释放 `ExoPlayer`、不中断播放；同时通过 `onSaveInstanceState`
 保存当前频道 ID，防止后台重建回退到初始频道。
 

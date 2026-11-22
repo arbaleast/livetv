@@ -11,6 +11,9 @@ object PlayerOrientationPolicy {
     /** 锁定横屏，对应 `ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE`。 */
     const val ORIENTATION_LANDSCAPE = 0
 
+    /** 正/反横屏自动旋转，对应 `ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE`。 */
+    const val ORIENTATION_SENSOR_LANDSCAPE = 6
+
     /** 跟随设备方向（含竖屏、正向横屏、反向横屏，遵循系统自动旋转开关），对应 `ActivityInfo.SCREEN_ORIENTATION_FULL_USER`。 */
     const val ORIENTATION_FULL_USER = 13
 
@@ -20,10 +23,10 @@ object PlayerOrientationPolicy {
     /**
      * 按设备形态决定播放页请求的屏幕方向：
      * - TV 设备保持锁定横屏；
-     * - 手机/平板触控设备跟随设备方向（支持竖屏与正/反横屏，遵循系统自动旋转开关）。
+     * - 手机/平板触控设备默认以正/反横屏进入播放（支持底栏「横竖屏」按钮按需切换竖屏）。
      */
     fun resolveRequestedOrientation(isTvDevice: Boolean): Int =
-        if (isTvDevice) ORIENTATION_LANDSCAPE else ORIENTATION_FULL_USER
+        if (isTvDevice) ORIENTATION_LANDSCAPE else ORIENTATION_SENSOR_LANDSCAPE
 
     /**
      * 进程重建时优先恢复保存的当前频道 ID，未保存或空白时再回退到 Intent 传入的初始频道 ID。

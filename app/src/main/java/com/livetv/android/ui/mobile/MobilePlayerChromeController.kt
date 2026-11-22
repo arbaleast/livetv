@@ -40,6 +40,7 @@ internal class MobilePlayerChromeController(
         fun onCycleAspect() {}
         fun onToggleWebControls() {}
         fun onReload() {}
+        fun onEnterPip() {}
         fun onDrawerVisibilityChanged(open: Boolean) {}
     }
 
@@ -98,6 +99,7 @@ internal class MobilePlayerChromeController(
     val isScreenLocked: Boolean get() = stateMachine.state.isScreenLocked
     val isDrawerOpen: Boolean get() = stateMachine.state.isDrawerOpen
     val isControlsVisible: Boolean get() = stateMachine.state.topBarVisible
+    val isInPictureInPicture: Boolean get() = stateMachine.state.isInPictureInPicture
 
     init {
         applyCapabilitySlots()
@@ -113,6 +115,8 @@ internal class MobilePlayerChromeController(
 
         binding.chromeAspect.visibility = if (capabilities.showAspectRatio) View.VISIBLE else View.GONE
         binding.chromeWebControls.visibility = if (capabilities.showWebControlToggle) View.VISIBLE else View.GONE
+        binding.chromeWebControls.contentDescription =
+            binding.chromeRoot.context.getString(R.string.cctv_web_control_native_desc)
         binding.chromeReload.visibility = if (capabilities.showReload) View.VISIBLE else View.GONE
     }
 
@@ -156,6 +160,9 @@ internal class MobilePlayerChromeController(
         binding.chromeAspect.setOnClickListener {
             callbacks.onCycleAspect()
             rescheduleAutoHideIfNeeded()
+        }
+        binding.chromePip.setOnClickListener {
+            callbacks.onEnterPip()
         }
         binding.chromeRotate.setOnClickListener {
             callbacks.onRotate()
@@ -211,6 +218,43 @@ internal class MobilePlayerChromeController(
         binding.chromeLiveBadge.visibility = if (visible) View.VISIBLE else View.GONE
     }
 
+    fun setPipButtonVisible(visible: Boolean) {
+        binding.chromePip.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+
+    fun setPictureInPictureMode(inPip: Boolean) {
+        val wasDrawerOpen = stateMachine.state.isDrawerOpen
+        stateMachine.setPictureInPictureMode(inPip)
+        if (inPip) {
+            handler.removeCallbacks(autoHideControlsRunnable)
+            handler.removeCallbacks(autoHideLockRunnable)
+            handler.removeCallbacks(autoHideHudRunnable)
+            if (wasDrawerOpen) {
+                callbacks.onDrawerVisibilityChanged(false)
+            }
+            hideViewImmediately(binding.chromeTopBar)
+            hideViewImmediately(binding.chromeBottomBar)
+            hideViewImmediately(binding.chromeLock)
+            hideViewImmediately(binding.chromeHud)
+            hideViewImmediately(binding.chromeDrawerScrim)
+            hideViewImmediately(binding.chromeDrawerPanel)
+            binding.chromeDrawerPanel.translationX = 0f
+            binding.chromeErrorCard.visibility = View.GONE
+        } else {
+            if (stateMachine.state.isErrorVisible) {
+                binding.chromeErrorCard.visibility = View.VISIBLE
+            }
+            syncBarVisibility(animate = false)
+            rescheduleAutoHideIfNeeded()
+        }
+    }
+
+    private fun hideViewImmediately(view: View) {
+        view.animate().cancel()
+        view.alpha = 1f
+        view.visibility = View.GONE
+    }
+
     fun updateFavorite(isFavorite: Boolean) {
         binding.chromeFavorite.isSelected = isFavorite
         binding.chromeFavorite.setImageResource(
@@ -237,12 +281,20 @@ internal class MobilePlayerChromeController(
 
     fun setWebNativeControlsVisible(nativeVisible: Boolean) {
         val next = stateMachine.setWebNativeControlsVisible(nativeVisible)
+        val ctx = binding.chromeRoot.context
         binding.chromeWebControls.isSelected = next.isWebNativeControlsVisible
         binding.chromeWebControls.setText(
             if (next.isWebNativeControlsVisible) {
                 R.string.cctv_web_control_pure
             } else {
                 R.string.cctv_web_control_native
+            },
+        )
+        binding.chromeWebControls.contentDescription = ctx.getString(
+            if (next.isWebNativeControlsVisible) {
+                R.string.cctv_web_control_pure_desc
+            } else {
+                R.string.cctv_web_control_native_desc
             },
         )
         syncBarVisibility(animate = true)
@@ -260,7 +312,7 @@ internal class MobilePlayerChromeController(
     // ---------------- 顶/底栏与锁屏 ----------------
 
     fun showControls(animate: Boolean = true) {
-        if (isScreenLocked || isDrawerOpen) return
+        if (isInPictureInPicture || isScreenLocked || isDrawerOpen) return
         stateMachine.showControls()
         syncBarVisibility(animate = animate)
         rescheduleAutoHideIfNeeded()
@@ -284,6 +336,7 @@ internal class MobilePlayerChromeController(
     }
 
     fun toggleControls() {
+        if (isInPictureInPicture) return
         if (isScreenLocked) {
             onSingleTapWhileLocked()
             return
@@ -296,6 +349,7 @@ internal class MobilePlayerChromeController(
     }
 
     fun toggleScreenLock() {
+        if (isInPictureInPicture) return
         handler.removeCallbacks(autoHideControlsRunnable)
         handler.removeCallbacks(autoHideLockRunnable)
         val next = stateMachine.toggleScreenLock()
@@ -367,6 +421,7 @@ internal class MobilePlayerChromeController(
     // ---------------- 居中胶囊 HUD ----------------
 
     fun showHudMeter(icon: HudIcon, percent: Int) {
+        if (isInPictureInPicture) return
         val clamped = percent.coerceIn(0, 100)
         binding.chromeHudText.visibility = View.GONE
         binding.chromeHudMeter.visibility = View.VISIBLE
@@ -391,6 +446,7 @@ internal class MobilePlayerChromeController(
     }
 
     fun showHudText(text: String) {
+        if (isInPictureInPicture) return
         binding.chromeHudMeter.visibility = View.GONE
         binding.chromeHudText.visibility = View.VISIBLE
         binding.chromeHudText.text = text
@@ -405,6 +461,10 @@ internal class MobilePlayerChromeController(
         stateMachine.setErrorVisible(true)
         binding.chromeErrorMessage.text = message
         binding.chromeErrorRetry.visibility = if (showRetry) View.VISIBLE else View.GONE
+        if (isInPictureInPicture) {
+            binding.chromeErrorCard.visibility = View.GONE
+            return
+        }
         binding.chromeErrorCard.visibility = View.VISIBLE
         if (!isScreenLocked && !isDrawerOpen) {
             showControls(animate = true)
@@ -421,7 +481,7 @@ internal class MobilePlayerChromeController(
     // ---------------- 选台抽屉（含分组筛选） ----------------
 
     fun openDrawer() {
-        if (isScreenLocked) return
+        if (isInPictureInPicture || isScreenLocked) return
         handler.removeCallbacks(autoHideControlsRunnable)
         stateMachine.setDrawerOpen(true)
         callbacks.onDrawerVisibilityChanged(true)

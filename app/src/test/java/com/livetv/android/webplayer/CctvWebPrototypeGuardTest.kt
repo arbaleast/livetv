@@ -125,11 +125,85 @@ class CctvWebPrototypeGuardTest {
         val manifest = File("src/main/AndroidManifest.xml").readText(Charsets.UTF_8)
         val cctvActivityIdx = manifest.indexOf(".webplayer.CctvWebPlayerActivity")
         assertTrue(cctvActivityIdx >= 0)
-        val cctvManifestBlock = manifest.substring(cctvActivityIdx, minOf(manifest.length, cctvActivityIdx + 300))
+        val cctvActivityEnd = manifest.indexOf("/>", cctvActivityIdx)
+        assertTrue(cctvActivityEnd > cctvActivityIdx)
+        val cctvManifestBlock = manifest.substring(cctvActivityIdx, cctvActivityEnd)
         assertTrue(
             "CctvWebPlayerActivity 应使用 Theme.LiveTv.Player 消除启动灰底闪屏",
             cctvManifestBlock.contains("@style/Theme.LiveTv.Player"),
         )
+        assertTrue(
+            "CctvWebPlayerActivity 清单必须开启 supportsPictureInPicture",
+            cctvManifestBlock.contains("android:supportsPictureInPicture=\"true\""),
+        )
+        assertTrue(
+            "CctvWebPlayerActivity 清单必须使用 singleTask 防止 PiP 双实例双音轨",
+            cctvManifestBlock.contains("android:launchMode=\"singleTask\""),
+        )
+        assertTrue(
+            "CctvWebPlayerActivity configChanges 必须包含 screenLayout 与 smallestScreenSize 防止进出 PiP 重建",
+            cctvManifestBlock.contains("screenLayout") && cctvManifestBlock.contains("smallestScreenSize"),
+        )
+
+        val playerActivityIdx = manifest.indexOf(".ui.PlayerActivity")
+        assertTrue(playerActivityIdx >= 0)
+        val playerActivityEnd = manifest.indexOf("/>", playerActivityIdx)
+        assertTrue(playerActivityEnd > playerActivityIdx)
+        val playerManifestBlock = manifest.substring(playerActivityIdx, playerActivityEnd)
+        assertTrue(
+            "PlayerActivity 清单必须开启 supportsPictureInPicture",
+            playerManifestBlock.contains("android:supportsPictureInPicture=\"true\""),
+        )
+        assertTrue(
+            "PlayerActivity 清单必须使用 singleTask 防止 PiP 双实例双音轨",
+            playerManifestBlock.contains("android:launchMode=\"singleTask\""),
+        )
+
+        // PiP 生命周期防冻死、防 5s 漏音与单实例守卫
+        assertTrue("CctvWebPlayerActivity 应重写 onNewIntent 复用单实例", activity.contains("override fun onNewIntent"))
+        assertTrue("CctvWebPlayerActivity 应重写 onUserLeaveHint 支持回桌面自动进小窗", activity.contains("override fun onUserLeaveHint"))
+        assertTrue("CctvWebPlayerActivity 应重写 onPictureInPictureModeChanged", activity.contains("override fun onPictureInPictureModeChanged"))
+        val pauseStart = activity.indexOf("override fun onPause()")
+        val stopStart = activity.indexOf("override fun onStop()")
+        assertTrue(pauseStart >= 0 && stopStart > pauseStart)
+        val pauseBlock = activity.substring(pauseStart, stopStart)
+        assertTrue(
+            "onPause 必须判断 isInPictureInPictureMode 防止小窗播放被冻结",
+            pauseBlock.contains("isInPictureInPictureMode"),
+        )
+        val destroyWebStart = activity.indexOf("private fun destroyWebView()", stopStart)
+        assertTrue(destroyWebStart > stopStart)
+        val stopBlock = activity.substring(stopStart, destroyWebStart)
+        assertTrue(
+            "onStop 必须兜底 pause WebView 与定时器，防止划掉小窗后 5 秒后台漏音",
+            stopBlock.contains("webView?.onPause()") && stopBlock.contains("webView?.pauseTimers()"),
+        )
+        assertFalse(
+            "跨引擎接管不得调用 finishAndRemoveTask() 误杀同 Task 新拉起的另一播放页",
+            activity.contains("finishAndRemoveTask()"),
+        )
+
+        // 网页控件持久化与文案守卫
+        assertTrue(
+            "CctvWebPlayerActivity 初始化应读取持久化网页控件状态",
+            activity.contains("MobileUiPreferences.isCctvWebControlsVisible"),
+        )
+        assertTrue(
+            "CctvWebPlayerActivity 切换网页控件应立即持久化写入",
+            activity.contains("MobileUiPreferences.setCctvWebControlsVisible"),
+        )
+        val reloadStart = activity.indexOf("private fun reloadChannel(")
+        assertTrue(reloadStart >= 0)
+        val reloadEnd = activity.indexOf("private fun injectFocusScript(", reloadStart)
+        assertTrue(reloadEnd > reloadStart)
+        assertFalse(
+            "reloadChannel 切台/硬休眠恢复不得硬重置 nativeControlsVisible = false",
+            activity.substring(reloadStart, reloadEnd).contains("nativeControlsVisible = false"),
+        )
+
+        val strings = File("src/main/res/values/strings.xml").readText(Charsets.UTF_8)
+        assertTrue("纯净态按钮文案应为「网页控件」", strings.contains(">网页控件</string>"))
+        assertTrue("网页控件态按钮文案应为「退出原控」", strings.contains(">退出原控</string>"))
 
         // R3 awaitingPageCommit 异常/超时路径必须复位防卡死
         val errorStart = activity.indexOf("override fun onReceivedError")

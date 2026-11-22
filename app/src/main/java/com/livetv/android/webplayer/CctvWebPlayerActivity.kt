@@ -1,6 +1,7 @@
 package com.livetv.android.webplayer
 
 import android.annotation.SuppressLint
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -13,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import android.util.Rational
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -48,9 +50,10 @@ import com.livetv.android.domain.model.ChannelCategory
 import com.livetv.android.ui.PlayerActivity
 import com.livetv.android.ui.mobile.ChromeBackAction
 import com.livetv.android.ui.mobile.MobilePlayerChromeController
+import com.livetv.android.ui.mobile.MobilePlayerTransitionHelper
 import com.livetv.android.ui.mobile.MobileUiPreferences
 import com.livetv.android.ui.mobile.PlayerChromeCapabilities
-import com.livetv.android.util.PlayerOrientationPolicy
+import com.livetv.android.ui.mobile.PlayerTransitionAndPipPolicy
 import java.io.ByteArrayInputStream
 
 /**
@@ -98,6 +101,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private var awaitingPageCommit = false
     private var suspendedInBackground = false
     private var hasLoadFailure = false
+    private var supportsPip = false
+    private var isSwitchingEngine = false
 
     private val backgroundSuspendRunnable = Runnable { suspendWebViewInBackground() }
 
@@ -159,12 +164,21 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        requestedOrientation = PlayerOrientationPolicy.resolveRequestedOrientation(isTvDevice = false)
+        supportsPip = MobilePlayerTransitionHelper.supportsPictureInPicture(this)
+        MobilePlayerTransitionHelper.applyIncomingNoTransitionIfNeeded(this, intent)
+        MobilePlayerTransitionHelper.registerActiveMobilePlayer(this) { dismissForOtherEngine() }
+        requestedOrientation = MobilePlayerTransitionHelper.resolveInitialOrientation(
+            isTvDevice = false,
+            intent = intent,
+        )
         val density = resources.displayMetrics.density
+        nativeControlsVisible = MobileUiPreferences.isCctvWebControlsVisible(this)
         gestureController = CctvWebGestureController(
             touchSlopPx = ViewConfiguration.get(this).scaledTouchSlop.toFloat(),
             edgeExclusionPx = CctvWebGestureController.EDGE_EXCLUSION_DP * density,
-        )
+        ).apply {
+            isNativeControlsVisible = nativeControlsVisible
+        }
 
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         setContentView(root)
@@ -244,11 +258,14 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 }
                 override fun onToggleWebControls() = toggleNativeControls()
                 override fun onReload() = retryCurrentChannel()
+                override fun onEnterPip() = enterPipIfEligible(fromUserAction = true)
             },
             initialPlaying = false,
         )
         chrome.setTitle(currentChannelName)
         chrome.setCatalog(categories, currentChannelId)
+        chrome.setWebNativeControlsVisible(nativeControlsVisible)
+        chrome.setPipButtonVisible(supportsPip)
         updateFavoriteUi()
     }
 
@@ -678,23 +695,33 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             .start()
     }
 
-    // ---------------- 纯视频 / 原控 ----------------
+    // ---------------- 纯视频 / 网页控件 ----------------
 
     private fun onPlaybackDetected() {
         if (isPlaying) return
         isPlaying = true
         gestureController.isPlaying = true
+        gestureController.isNativeControlsVisible = nativeControlsVisible
         mainHandler.removeCallbacks(pollRunnable)
 
-        if (!nativeControlsVisible) {
+        if (nativeControlsVisible) {
+            if (isInPictureInPictureMode) {
+                webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
+            } else {
+                webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
+                chrome.setWebNativeControlsVisible(true)
+            }
+        } else {
             webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
             chrome.setWebNativeControlsVisible(false)
         }
         chrome.setPlaying(true)
+        updateAutoPipParams()
     }
 
     private fun enterPureVideo() {
         nativeControlsVisible = false
+        MobileUiPreferences.setCctvWebControlsVisible(this, false)
         gestureController.isNativeControlsVisible = false
         webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
         chrome.setWebNativeControlsVisible(false)
@@ -702,9 +729,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     private fun exitPureVideo() {
         nativeControlsVisible = true
+        MobileUiPreferences.setCctvWebControlsVisible(this, true)
         gestureController.isNativeControlsVisible = true
         webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
-        // 「原控」态由共享外框保持顶栏常驻、底栏自动隐藏，避免与官方网页底栏重叠
+        // 「网页控件」态由共享外框保持顶栏常驻（露出「退出原控」）、底栏自动隐藏避免与网页底栏重叠
         chrome.setWebNativeControlsVisible(true)
     }
 
@@ -743,14 +771,19 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             }
 
             is CctvWebSwitchAction.SwitchToNativePlayer -> {
+                isSwitchingEngine = true
+                updateAutoPipParams()
                 chrome.closeDrawer(restoreControls = false)
                 MobileUiPreferences.setLastPlayedChannelId(this, action.channel.id)
                 destroyWebView()
-                startActivity(
-                    Intent(this, PlayerActivity::class.java)
-                        .putExtra(PlayerActivity.EXTRA_CHANNEL_ID, action.channel.id)
-                        .putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, action.channel.name)
-                        .putExtra(PlayerActivity.EXTRA_STREAM_URL, action.channel.streamUrl),
+                val targetIntent = Intent(this, PlayerActivity::class.java)
+                    .putExtra(PlayerActivity.EXTRA_CHANNEL_ID, action.channel.id)
+                    .putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, action.channel.name)
+                    .putExtra(PlayerActivity.EXTRA_STREAM_URL, action.channel.streamUrl)
+                MobilePlayerTransitionHelper.startSeamlessCrossEngineSwitch(
+                    from = this,
+                    targetIntent = targetIntent,
+                    currentRequestedOrientation = requestedOrientation,
                 )
                 finish()
             }
@@ -774,21 +807,23 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         updateFavoriteUi()
 
         isPlaying = false
-        nativeControlsVisible = false
         revealed = false
         hasLoadFailure = false
         awaitingPageCommit = true
         startedAt = System.currentTimeMillis()
+        nativeControlsVisible = MobileUiPreferences.isCctvWebControlsVisible(this)
         gestureController.reset()
+        gestureController.isNativeControlsVisible = nativeControlsVisible
         chrome.hideError()
         chrome.setPlaying(false)
-        chrome.setWebNativeControlsVisible(false)
+        chrome.setWebNativeControlsVisible(nativeControlsVisible)
 
         webView?.visibility = View.VISIBLE
         chrome.showControls(animate = false)
         showOverlay()
 
         // 先停止旧页并等待新页 onPageCommitVisible 再注入与轮询，避免读到旧页残留的 __livetvPlaying
+        updateAutoPipParams()
         mainHandler.postDelayed(revealTimeoutRunnable, FOCUS_TIMEOUT_MS)
         webView?.stopLoading()
         webView?.loadUrl(url)
@@ -799,6 +834,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private fun injectFocusScript(view: WebView) {
         awaitingPageCommit = false
         view.evaluateJavascript(CctvWebViewportFocusScript.FOCUS_SCRIPT, null)
+        if (nativeControlsVisible && !isInPictureInPictureMode) {
+            view.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
+        }
         if (!isPlaying) {
             mainHandler.removeCallbacks(pollRunnable)
             mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
@@ -810,6 +848,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         awaitingPageCommit = false
         suspendedInBackground = false
         hasLoadFailure = true
+        updateAutoPipParams()
         loadingOverlay?.let {
             it.animate().cancel()
             root.removeView(it)
@@ -875,6 +914,56 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         Log.i(TAG, "background hard suspend executed")
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        isSwitchingEngine = false
+        MobilePlayerTransitionHelper.applyIncomingNoTransitionIfNeeded(this, intent)
+        MobilePlayerTransitionHelper.registerActiveMobilePlayer(this) { dismissForOtherEngine() }
+        if (intent.hasExtra(PlayerTransitionAndPipPolicy.EXTRA_PREFERRED_ORIENTATION)) {
+            requestedOrientation = MobilePlayerTransitionHelper.resolveInitialOrientation(
+                isTvDevice = false,
+                intent = intent,
+            )
+        }
+        val latestStore = runCatching { app.catalogStore.getAllCategories() }.getOrDefault(emptyList())
+        if (latestStore.isNotEmpty()) {
+            categories = CctvWebSwitchPolicy.resolveCategories(latestStore)
+        }
+        val newChannelId = intent.getStringExtra(EXTRA_CHANNEL_ID) ?: return
+        val newChannelName = intent.getStringExtra(EXTRA_CHANNEL_NAME)
+        val pageUrl = CctvWebChannel.liveUrl(newChannelId)
+        if (pageUrl == null) {
+            Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val sameChannel = CctvWebChannel.keyOf(newChannelId) == CctvWebChannel.keyOf(currentChannelId)
+        if (sameChannel && webView != null && !hasLoadFailure && !suspendedInBackground) {
+            chrome.setCatalog(categories, currentChannelId)
+            updateAutoPipParams()
+            return
+        }
+        if (suspendedInBackground) {
+            suspendedInBackground = false
+            mainHandler.removeCallbacks(backgroundSuspendRunnable)
+            webView?.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        }
+        if (webView == null) {
+            val recreated = runCatching { buildWebView() }.getOrNull()
+            if (recreated == null) {
+                showUnavailableMessage(R.string.cctv_web_unavailable)
+                return
+            }
+            webView = recreated
+            touchContainer.addView(recreated, matchParent())
+        }
+        reloadChannel(
+            channelId = newChannelId,
+            channelName = CctvWebSwitchPolicy.resolveChannelName(newChannelId, categories, newChannelName),
+            url = pageUrl,
+        )
+    }
+
     override fun onStart() {
         super.onStart()
         mainHandler.removeCallbacks(backgroundSuspendRunnable)
@@ -891,6 +980,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isSwitchingEngine = false
         webView?.onResume()
         webView?.resumeTimers()
         if (!isPlaying && !suspendedInBackground && webView != null) {
@@ -898,20 +988,123 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
         }
         applyImmersive()
+        updateAutoPipParams()
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (!isInPictureInPictureMode && canEnterPipNow()) {
+            enterPipIfEligible(fromUserAction = false)
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (isInPictureInPictureMode) {
+            Log.i(TAG, "entered picture-in-picture mode")
+            chrome.setPictureInPictureMode(true)
+            if (nativeControlsVisible) {
+                // 小窗期间临时隐藏官方网页控件避免遮挡视频（不改写持久化偏好）
+                webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
+            }
+        } else {
+            Log.i(TAG, "exited picture-in-picture mode")
+            chrome.setPictureInPictureMode(false)
+            if (nativeControlsVisible && !isFinishing && !isDestroyed) {
+                webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
+                chrome.setWebNativeControlsVisible(true)
+            }
+            applyImmersive()
+            ViewCompat.requestApplyInsets(root)
+            updateAutoPipParams()
+        }
     }
 
     override fun onPause() {
         mainHandler.removeCallbacks(pollRunnable)
-        webView?.onPause()
-        webView?.pauseTimers()
+        if (!isInPictureInPictureMode) {
+            webView?.onPause()
+            webView?.pauseTimers()
+        }
         super.onPause()
     }
 
     override fun onStop() {
         super.onStop()
+        if (!isChangingConfigurations && webView != null) {
+            // 无论正常退后台还是划掉关闭 PiP 小窗，均在 onStop 立即暂停 WebView 与定时器，
+            // 彻底杜绝划掉小窗后 5 秒后台漏音。
+            webView?.onPause()
+            webView?.pauseTimers()
+        }
         if (!isChangingConfigurations && !isFinishing && webView != null && !hasLoadFailure) {
             mainHandler.removeCallbacks(backgroundSuspendRunnable)
             mainHandler.postDelayed(backgroundSuspendRunnable, BACKGROUND_SUSPEND_DELAY_MS)
+        }
+    }
+
+    private fun dismissForOtherEngine() {
+        isSwitchingEngine = true
+        destroyWebView()
+        // 同 affinity 下 singleTask 新播放页与旧 PiP 共享同一 Task，
+        // 仅 finish() 当前旧实例即可释放并保留新拉起的播放页，不得移除整个 Task。
+        if (!isFinishing && !isDestroyed) {
+            finish()
+        }
+    }
+
+    private fun canEnterPipNow(): Boolean = PlayerTransitionAndPipPolicy.canEnterPip(
+        isTvDevice = false,
+        supportsPipFeature = supportsPip,
+        isSwitchingEngine = isSwitchingEngine,
+        isErrorState = hasLoadFailure,
+        isPlaybackReady = isPlaying,
+        isFinishingOrDestroyed = isFinishing || isDestroyed,
+    )
+
+    private fun buildPipParams(): PictureInPictureParams {
+        val ratio = PlayerTransitionAndPipPolicy.resolvePipAspectRatio(16, 9)
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(ratio.numerator, ratio.denominator))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setSeamlessResizeEnabled(true)
+            builder.setAutoEnterEnabled(canEnterPipNow())
+        }
+        return builder.build()
+    }
+
+    private fun updateAutoPipParams() {
+        if (!supportsPip || isFinishing || isDestroyed) return
+        runCatching { setPictureInPictureParams(buildPipParams()) }
+    }
+
+    private fun enterPipIfEligible(fromUserAction: Boolean) {
+        if (!supportsPip) {
+            if (fromUserAction) {
+                Toast.makeText(this, R.string.player_pip_unsupported, Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        if (!canEnterPipNow()) {
+            if (fromUserAction) {
+                chrome.showHudText(getString(R.string.player_pip_not_ready))
+            }
+            return
+        }
+        chrome.setPictureInPictureMode(true)
+        if (nativeControlsVisible) {
+            webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
+        }
+        val entered = runCatching { enterPictureInPictureMode(buildPipParams()) }.getOrDefault(false)
+        if (!entered) {
+            chrome.setPictureInPictureMode(false)
+            if (nativeControlsVisible) {
+                webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
+                chrome.setWebNativeControlsVisible(true)
+            }
         }
     }
 
@@ -934,6 +1127,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        MobilePlayerTransitionHelper.unregisterActiveMobilePlayer(this)
         mainHandler.removeCallbacks(backgroundSuspendRunnable)
         mainHandler.removeCallbacksAndMessages(null)
         suspendedInBackground = false

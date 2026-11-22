@@ -123,4 +123,55 @@ class MobilePlayerChromePolicyTest {
         sm.setErrorVisible(false)
         assertTrue(sm.shouldAutoHideControls())
     }
+
+    @Test
+    fun `persisted CCTV web controls mode keeps top bar persistent and bottom bar hidden after playback starts`() {
+        val sm = MobilePlayerChromeStateMachine(PlayerChromeCapabilities.CCTV, initialPlaying = false)
+        sm.setWebNativeControlsVisible(true)
+        sm.showControls()
+        assertTrue(sm.state.topBarVisible)
+        assertFalse(sm.state.bottomBarVisible)
+        assertFalse(sm.shouldAutoHideControls())
+
+        // 起播进入 playing 后依然保持顶栏常驻、底栏隐藏
+        sm.setPlaying(true)
+        assertTrue(sm.state.topBarVisible)
+        assertFalse(sm.state.bottomBarVisible)
+        assertFalse(sm.shouldAutoHideControls())
+
+        // 用户退出原控后恢复底栏与 3500ms 自动隐藏
+        sm.setWebNativeControlsVisible(false)
+        assertTrue(sm.state.topBarVisible)
+        assertTrue(sm.state.bottomBarVisible)
+        assertTrue(sm.shouldAutoHideControls())
+    }
+
+    @Test
+    fun `entering picture-in-picture forces all chrome hidden and exiting restores native controls top bar`() {
+        val sm = MobilePlayerChromeStateMachine(PlayerChromeCapabilities.CCTV, initialPlaying = true)
+        sm.setWebNativeControlsVisible(true)
+        assertTrue(sm.state.topBarVisible)
+        assertFalse(sm.state.bottomBarVisible)
+
+        val inPip = sm.setPictureInPictureMode(true)
+        assertTrue(inPip.isInPictureInPicture)
+        assertFalse(inPip.topBarVisible)
+        assertFalse(inPip.bottomBarVisible)
+        assertFalse(inPip.lockButtonVisible)
+        assertFalse(inPip.isDrawerOpen)
+        assertFalse(sm.shouldAutoHideControls())
+
+        // PiP 期间呼出控件与抽屉必须被屏蔽
+        sm.showControls()
+        assertFalse(sm.state.topBarVisible)
+        sm.setDrawerOpen(true)
+        assertFalse(sm.state.isDrawerOpen)
+
+        // 退出 PiP 回到全屏后，持久化「退出原控」态自动恢复顶栏常驻、底栏隐藏
+        val exited = sm.setPictureInPictureMode(false)
+        assertFalse(exited.isInPictureInPicture)
+        assertTrue(exited.topBarVisible)
+        assertFalse(exited.bottomBarVisible)
+        assertFalse(sm.shouldAutoHideControls())
+    }
 }

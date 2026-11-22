@@ -38,14 +38,18 @@
             android:theme="@style/Theme.LiveTv.Mobile" />
         <activity
             android:name=".webplayer.CctvWebPlayerActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"
             android:hardwareAccelerated="true"
+            android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.LiveTv.Player" />
         <activity
             android:name=".ui.PlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="false"
+            android:launchMode="singleTask"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.LiveTv.Player" />
     </application>
 </manifest>

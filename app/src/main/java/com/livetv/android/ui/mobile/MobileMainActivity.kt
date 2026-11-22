@@ -355,7 +355,7 @@ class MobileMainActivity : AppCompatActivity() {
             catalogLoading = false
             if (isFinishing || isDestroyed) return@refresh
             setReloadingState(false)
-            categories = app.catalogStore.getAllCategories()
+            categories = MobileChannelCategoryPolicy.merge(app.catalogStore.getAllCategories())
             applyCategories()
             if (!silent) {
                 val total = categories.sumOf { it.channels.size }
@@ -583,7 +583,7 @@ class MobileMainActivity : AppCompatActivity() {
     }
 
     private fun loadChannels() {
-        categories = app.catalogStore.getAllCategories()
+        categories = MobileChannelCategoryPolicy.merge(app.catalogStore.getAllCategories())
         val needsLoad = categories.isEmpty() && !catalogLoading
         if (needsLoad) {
             catalogLoading = true
@@ -595,7 +595,7 @@ class MobileMainActivity : AppCompatActivity() {
                 catalogLoading = false
                 if (isFinishing || isDestroyed) return@refresh
                 setReloadingState(false)
-                categories = app.catalogStore.getAllCategories()
+                categories = MobileChannelCategoryPolicy.merge(app.catalogStore.getAllCategories())
                 applyCategories()
             }
         }
@@ -695,6 +695,7 @@ class MobileMainActivity : AppCompatActivity() {
 
     private fun openChannel(channel: Channel) {
         if (channel.id.startsWith(CctvWebChannel.CHANNEL_PREFIX)) {
+            MobilePlayerTransitionHelper.dismissOtherEngineBeforeLaunch(CctvWebPlayerActivity::class.java)
             startActivity(
                 Intent(this, CctvWebPlayerActivity::class.java)
                     .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_ID, channel.id),
@@ -707,6 +708,7 @@ class MobileMainActivity : AppCompatActivity() {
             return
         }
         rememberLastPlayed(channel.id)
+        MobilePlayerTransitionHelper.dismissOtherEngineBeforeLaunch(PlayerActivity::class.java)
         startActivity(
             Intent(this, PlayerActivity::class.java)
                 .putExtra(PlayerActivity.EXTRA_CHANNEL_ID, channel.id)

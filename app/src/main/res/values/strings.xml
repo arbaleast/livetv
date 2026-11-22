@@ -16,8 +16,10 @@
     <string name="cctv_web_unsupported">该频道暂不支持网页播放</string>
     <string name="cctv_web_back">返回</string>
     <string name="cctv_web_channel_drawer">选台</string>
-    <string name="cctv_web_control_native">原控</string>
-    <string name="cctv_web_control_pure">纯画</string>
+    <string name="cctv_web_control_native">网页控件</string>
+    <string name="cctv_web_control_pure">退出原控</string>
+    <string name="cctv_web_control_native_desc">显示官方网页控件</string>
+    <string name="cctv_web_control_pure_desc">退出网页控件并恢复纯净画面</string>
     <string name="cctv_web_loading">正在加载直播…</string>
     <string name="cctv_web_load_failed">直播页加载失败，请检查网络后重试</string>
     <string name="cctv_web_renderer_gone">播放器进程已退出，请返回重试</string>
@@ -101,8 +103,11 @@
     <string name="player_cd_play_pause">播放或暂停</string>
     <string name="player_cd_next">下一台</string>
     <string name="player_cd_aspect">切换画面比例</string>
+    <string name="player_cd_pip">小窗播放</string>
     <string name="player_cd_rotate">切换横竖屏</string>
     <string name="player_cd_refresh">刷新当前频道</string>
     <string name="player_cd_lock">锁定或解锁屏幕</string>
+    <string name="player_pip_unsupported">当前设备不支持小窗播放</string>
+    <string name="player_pip_not_ready">画面起播后可开启小窗</string>
     <string name="player_position_format">%1$s · %2$d/%3$d</string>
 </resources>

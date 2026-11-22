@@ -41,23 +41,24 @@ object ChannelDrawerModel {
     const val DEFAULT_ALL_LABEL = "全部"
 
     /**
-     * 生成抽屉顶部的分组筛选胶囊列表：「全部」置顶，跳过空分类；
-     * 若 `selectedCategoryId` 已不在有效分类中，自动回退选中「全部」。
+     * 生成手机端抽屉顶部的分组筛选胶囊列表：
+     * 先经 [MobileChannelCategoryPolicy.merge] 归并大类，「全部」置顶、自动跳过空大类；
+     * 若 `selectedCategoryId` 已不在有效分组中，自动回退选中「全部」。
      */
     fun buildFilterChips(
         categories: List<ChannelCategory>,
         selectedCategoryId: String?,
         allLabel: String = DEFAULT_ALL_LABEL,
     ): List<ChannelDrawerFilterChip> {
-        val nonEmpty = categories.filter { it.channels.isNotEmpty() }
-        val effectiveSelectedId = selectedCategoryId?.takeIf { id -> nonEmpty.any { it.id == id } }
-        val chips = ArrayList<ChannelDrawerFilterChip>(nonEmpty.size + 1)
+        val merged = MobileChannelCategoryPolicy.merge(categories)
+        val effectiveSelectedId = selectedCategoryId?.takeIf { id -> merged.any { it.id == id } }
+        val chips = ArrayList<ChannelDrawerFilterChip>(merged.size + 1)
         chips += ChannelDrawerFilterChip(
             categoryId = null,
             label = allLabel,
             selected = effectiveSelectedId == null,
         )
-        nonEmpty.forEach { category ->
+        merged.forEach { category ->
             chips += ChannelDrawerFilterChip(
                 categoryId = category.id,
                 label = category.name,
@@ -68,18 +69,19 @@ object ChannelDrawerModel {
     }
 
     /**
-     * 按选中的分组过滤抽屉行：
-     * - `selectedCategoryId == null` 或分组不存在时，返回全部带分类头的行；
-     * - 命中单个分组时，直接返回该分组下的频道条目，并保留当前播放频道高亮。
+     * 按合并大类与选中分组过滤手机端抽屉行：
+     * - `selectedCategoryId == null` 或分组不存在时，返回全部合并大类（带大类分组头）；
+     * - 命中单个合并大类时，直接返回该大类下的频道条目，并保留当前播放频道高亮。
      */
     fun buildFilteredRows(
         categories: List<ChannelCategory>,
         currentChannelId: String?,
         selectedCategoryId: String?,
     ): List<ChannelDrawerRow> {
+        val merged = MobileChannelCategoryPolicy.merge(categories)
         val target = selectedCategoryId?.let { id ->
-            categories.firstOrNull { it.id == id && it.channels.isNotEmpty() }
-        } ?: return buildRows(categories, currentChannelId)
+            merged.firstOrNull { it.id == id && it.channels.isNotEmpty() }
+        } ?: return buildRows(merged, currentChannelId)
 
         return target.channels.map { channel ->
             ChannelDrawerRow.ChannelItem(

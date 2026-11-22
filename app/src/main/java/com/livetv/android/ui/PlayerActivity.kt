@@ -1,12 +1,16 @@
 package com.livetv.android.ui
 
 import android.annotation.SuppressLint
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
+import android.util.Rational
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -19,6 +23,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -41,9 +46,12 @@ import com.livetv.android.ui.mobile.ChannelDrawerAdapter
 import com.livetv.android.ui.mobile.ChannelDrawerModel
 import com.livetv.android.ui.mobile.ChannelDrawerRow
 import com.livetv.android.ui.mobile.ChromeBackAction
+import com.livetv.android.ui.mobile.CrossEngineCctvPrecheck
 import com.livetv.android.ui.mobile.MobilePlayerChromeController
+import com.livetv.android.ui.mobile.MobilePlayerTransitionHelper
 import com.livetv.android.ui.mobile.MobileUiPreferences
 import com.livetv.android.ui.mobile.PlayerChromeCapabilities
+import com.livetv.android.ui.mobile.PlayerTransitionAndPipPolicy
 import com.livetv.android.util.DeviceUtils
 import com.livetv.android.util.PlayerKeyPolicy
 import com.livetv.android.util.PlayerOrientationPolicy
@@ -88,6 +96,7 @@ class PlayerActivity : AppCompatActivity() {
         private const val DRAWER_STABLE_BOTTOM_MARGIN_DP = 8
 
         private const val STATE_CURRENT_CHANNEL_ID = "current_channel_id"
+        private const val TAG = "PlayerActivity"
     }
 
     private val app: LiveTvApplication
@@ -104,6 +113,12 @@ class PlayerActivity : AppCompatActivity() {
 
     /** 是否是触控设备（手机 / 平板）。TV 端所有触控视图保持 `GONE`。 */
     private var isTouchDevice = false
+
+    /** 手机端设备是否支持系统画中画（TV 端恒为 `false`）。 */
+    private var supportsPip = false
+
+    /** 是否正在执行跨引擎无感切台（期间屏蔽自动进小窗）。 */
+    private var isSwitchingEngine = false
 
     /** 聚合目录的全部分类，供“频道列表”抽屉使用。 */
     private var categories: List<ChannelCategory> = emptyList()
@@ -138,8 +153,14 @@ class PlayerActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         isTouchDevice = !DeviceUtils.isTvDevice(this)
-        requestedOrientation = PlayerOrientationPolicy.resolveRequestedOrientation(
+        supportsPip = isTouchDevice && MobilePlayerTransitionHelper.supportsPictureInPicture(this)
+        if (isTouchDevice) {
+            MobilePlayerTransitionHelper.applyIncomingNoTransitionIfNeeded(this, intent)
+            MobilePlayerTransitionHelper.registerActiveMobilePlayer(this) { dismissForOtherEngine() }
+        }
+        requestedOrientation = MobilePlayerTransitionHelper.resolveInitialOrientation(
             isTvDevice = !isTouchDevice,
+            intent = intent,
         )
 
         binding = ActivityPlayerBinding.inflate(layoutInflater)
@@ -201,6 +222,42 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        isSwitchingEngine = false
+        if (isTouchDevice) {
+            MobilePlayerTransitionHelper.applyIncomingNoTransitionIfNeeded(this, intent)
+            MobilePlayerTransitionHelper.registerActiveMobilePlayer(this) { dismissForOtherEngine() }
+            if (intent.hasExtra(PlayerTransitionAndPipPolicy.EXTRA_PREFERRED_ORIENTATION)) {
+                requestedOrientation = MobilePlayerTransitionHelper.resolveInitialOrientation(
+                    isTvDevice = false,
+                    intent = intent,
+                )
+            }
+        }
+        val latestCategories = app.catalogStore.getAllCategories()
+        if (latestCategories.isNotEmpty()) {
+            categories = latestCategories
+        }
+        val target = resolveChannelFromIntent(intent) ?: return
+        rebuildNavigatorKeepingCurrent()
+        navigator.locate(target.id, target.streamUrl)
+        if (target.id == currentChannel?.id && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            updateOverlayChannelInfo()
+            updateFavoriteButton()
+            updateAutoPipParams()
+            return
+        }
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            switchToChannel(target)
+        } else {
+            currentChannel = target
+            updateOverlayChannelInfo()
+            updateFavoriteButton()
+        }
+    }
+
     override fun onStart() {
         super.onStart()
         playerManager.start(currentChannel)
@@ -208,7 +265,37 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isSwitchingEngine = false
         hideSystemUi()
+        if (isTouchDevice) {
+            updateAutoPipParams()
+        }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (isTouchDevice && !isInPictureInPictureMode && canEnterPipNow()) {
+            enterPipIfEligible(fromUserAction = false)
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration,
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        if (!isTouchDevice) return
+        if (isInPictureInPictureMode) {
+            Log.i(TAG, "entered picture-in-picture mode")
+            mobileChrome?.setPictureInPictureMode(true)
+            hideStatus()
+        } else {
+            Log.i(TAG, "exited picture-in-picture mode")
+            mobileChrome?.setPictureInPictureMode(false)
+            hideSystemUi()
+            ViewCompat.requestApplyInsets(binding.playerRoot)
+            updateAutoPipParams()
+        }
     }
 
     override fun onStop() {
@@ -217,6 +304,9 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (isTouchDevice) {
+            MobilePlayerTransitionHelper.unregisterActiveMobilePlayer(this)
+        }
         switchHintJob?.cancel()
         switchHintJob = null
         binding.root.removeCallbacks(hideChannelNameRunnable)
@@ -225,6 +315,92 @@ class PlayerActivity : AppCompatActivity() {
         binding.drawerScrim.animate().cancel()
         binding.playerView.player = null
         super.onDestroy()
+    }
+
+    private fun dismissForOtherEngine() {
+        isSwitchingEngine = true
+        runCatching {
+            playerManager.stop()
+            binding.playerView.player = null
+        }
+        // 严禁调用 finishAndRemoveTask()：同 affinity 下 singleTask 新播放页与旧 PiP 共享同一 Task，
+        // 仅 finish() 当前旧实例即可释放并保留新拉起的播放页。
+        if (!isFinishing && !isDestroyed) {
+            finish()
+        }
+    }
+
+    private fun resolveChannelFromIntent(sourceIntent: Intent): Channel? {
+        val flat = ChannelNavigator.flatten(categories)
+        val channelId = sourceIntent.getStringExtra(EXTRA_CHANNEL_ID)
+        val streamUrl = sourceIntent.getStringExtra(EXTRA_STREAM_URL)
+        val resolved = flat.firstOrNull { it.id == channelId }
+            ?: streamUrl?.takeIf { it.isNotBlank() }?.let { url -> flat.firstOrNull { it.streamUrl == url } }
+        if (resolved != null) return resolved
+        val fallbackUrl = streamUrl ?: return null
+        val fallbackName = sourceIntent.getStringExtra(EXTRA_CHANNEL_NAME) ?: ""
+        val fallbackId = channelId ?: fallbackName
+        return Channel(
+            id = fallbackId,
+            name = fallbackName,
+            description = "",
+            streamUrl = fallbackUrl,
+        )
+    }
+
+    private fun canEnterPipNow(): Boolean {
+        val state = if (::playerManager.isInitialized) playerManager.playbackState else PlaybackState.Idle
+        val isPlaybackReady = state == PlaybackState.Playing || state == PlaybackState.Buffering
+        return PlayerTransitionAndPipPolicy.canEnterPip(
+            isTvDevice = !isTouchDevice,
+            supportsPipFeature = supportsPip,
+            isSwitchingEngine = isSwitchingEngine,
+            isErrorState = state is PlaybackState.Error,
+            isPlaybackReady = isPlaybackReady,
+            isFinishingOrDestroyed = isFinishing || isDestroyed,
+        )
+    }
+
+    private fun buildPipParams(): PictureInPictureParams {
+        val videoSize = binding.playerView.player?.videoSize
+        val aspect = PlayerTransitionAndPipPolicy.resolvePipAspectRatio(
+            videoWidth = videoSize?.width ?: 0,
+            videoHeight = videoSize?.height ?: 0,
+        )
+        val builder = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(aspect.numerator, aspect.denominator))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setSeamlessResizeEnabled(true)
+            builder.setAutoEnterEnabled(canEnterPipNow())
+        }
+        return builder.build()
+    }
+
+    private fun updateAutoPipParams() {
+        if (!supportsPip || isFinishing || isDestroyed) return
+        runCatching { setPictureInPictureParams(buildPipParams()) }
+    }
+
+    private fun enterPipIfEligible(fromUserAction: Boolean) {
+        if (!isTouchDevice) return
+        if (!supportsPip) {
+            if (fromUserAction) {
+                Toast.makeText(this, R.string.player_pip_unsupported, Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        if (!canEnterPipNow()) {
+            if (fromUserAction) {
+                mobileChrome?.showHudText(getString(R.string.player_pip_not_ready))
+            }
+            return
+        }
+        mobileChrome?.setPictureInPictureMode(true)
+        hideStatus()
+        val entered = runCatching { enterPictureInPictureMode(buildPipParams()) }.getOrDefault(false)
+        if (!entered) {
+            mobileChrome?.setPictureInPictureMode(false)
+        }
     }
 
     // ---------------- 频道解析 ----------------
@@ -396,6 +572,7 @@ class PlayerActivity : AppCompatActivity() {
 
         if (isTouchDevice) {
             updatePlayPauseButton(state)
+            updateAutoPipParams()
         }
     }
 
@@ -646,20 +823,33 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     /**
-     * 手机端从选台栏切到 CCTV 频道：先停止并释放当前 ExoPlayer 会话，
-     * 再交给 WebView 播放页（TV 端不会走这里）。
+     * 手机端从选台栏切到 CCTV 频道：先校验该 CCTV 频道是否受网页播放支持（4K/8K 直接提示，
+     * 不停止当前 ExoPlayer），再无动画无缝交接给 `CctvWebPlayerActivity`（TV 端不会走这里）。
      */
     private fun switchToCctvWebPlayer(channel: Channel) {
+        val precheck = PlayerTransitionAndPipPolicy.evaluateMgtvToCctvSwitch(
+            channelId = channel.id,
+            supportedLiveUrl = CctvWebChannel.liveUrl(channel.id),
+        )
+        if (precheck == CrossEngineCctvPrecheck.UNSUPPORTED_CCTV) {
+            Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
+            return
+        }
+        isSwitchingEngine = true
+        updateAutoPipParams()
         mobileChrome?.closeDrawer()
         MobileUiPreferences.setLastPlayedChannelId(this, channel.id)
         runCatching {
             playerManager.stop()
             binding.playerView.player = null
         }
-        startActivity(
-            Intent(this, CctvWebPlayerActivity::class.java)
-                .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_ID, channel.id)
-                .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_NAME, channel.name),
+        val targetIntent = Intent(this, CctvWebPlayerActivity::class.java)
+            .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_ID, channel.id)
+            .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_NAME, channel.name)
+        MobilePlayerTransitionHelper.startSeamlessCrossEngineSwitch(
+            from = this,
+            targetIntent = targetIntent,
+            currentRequestedOrientation = requestedOrientation,
         )
         finish()
     }
@@ -690,6 +880,7 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onNextChannel() = switchChannel(direction = 1)
                 override fun onTogglePlayPause() = togglePlayPauseWithFeedback()
                 override fun onCycleAspect() = cycleAspectMode()
+                override fun onEnterPip() = enterPipIfEligible(fromUserAction = true)
                 override fun onErrorRetry() = playerManager.manualReset()
                 override fun onLockStateChanged(locked: Boolean) {
                     isScreenLocked = locked
@@ -711,6 +902,7 @@ class PlayerActivity : AppCompatActivity() {
         )
 
         setupTouchGestures()
+        mobileChrome?.setPipButtonVisible(supportsPip)
         mobileChrome?.showControls(animate = false)
     }
 
