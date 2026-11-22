@@ -2,6 +2,7 @@ package com.livetv.android.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.media.AudioManager
@@ -27,6 +28,8 @@ import com.livetv.android.R
 import com.livetv.android.databinding.ActivityPlayerBinding
 import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.model.ChannelCategory
+import com.livetv.android.webplayer.CctvWebChannel
+import com.livetv.android.webplayer.CctvWebPlayerActivity
 import com.livetv.android.data.mgtv.MgtvStreamResolver
 import com.livetv.android.domain.stream.StaticStreamResolver
 import com.livetv.android.player.ChannelNavigator
@@ -661,12 +664,35 @@ class PlayerActivity : AppCompatActivity() {
     private fun setupChannelDrawer() {
         binding.drawerList.layoutManager = LinearLayoutManager(this)
         drawerAdapter = ChannelDrawerAdapter { channel ->
+            if (isTouchDevice && channel.id.startsWith(CctvWebChannel.CHANNEL_PREFIX)) {
+                switchToCctvWebPlayer(channel)
+                return@ChannelDrawerAdapter
+            }
             navigator.locate(channel.id, channel.streamUrl)
             switchToChannel(channel)
             closeDrawer()
         }
         binding.drawerList.adapter = drawerAdapter
         binding.drawerScrim.setOnClickListener { closeDrawer() }
+    }
+
+    /**
+     * 手机端从选台栏切到 CCTV 频道：先停止并释放当前 ExoPlayer 会话，
+     * 再交给 WebView 播放页（TV 端不会走这里）。
+     */
+    private fun switchToCctvWebPlayer(channel: Channel) {
+        closeDrawer()
+        MobileUiPreferences.setLastPlayedChannelId(this, channel.id)
+        runCatching {
+            playerManager.stop()
+            binding.playerView.player = null
+        }
+        startActivity(
+            Intent(this, CctvWebPlayerActivity::class.java)
+                .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_ID, channel.id)
+                .putExtra(CctvWebPlayerActivity.EXTRA_CHANNEL_NAME, channel.name),
+        )
+        finish()
     }
 
     // ---------------- 触控浮层与手势（仅触控设备） ----------------
