@@ -135,6 +135,24 @@ class CctvWebPrototypeGuardTest {
             "7s 超时兜底 revealTimeoutRunnable 必须复位 awaitingPageCommit",
             activity.substring(timeoutLine, minOf(activity.length, timeoutLine + 350)).contains("awaitingPageCommit = false"),
         )
+
+        // 最终收口守卫：主帧放行、不锁 60Hz（防 ColorOS 120Hz 回退）、保留 25fps 帧率投票与后台硬休眠
+        val interceptStart = activity.indexOf("override fun shouldInterceptRequest")
+        assertTrue("应实现 shouldInterceptRequest", interceptStart >= 0)
+        val interceptHead = activity.substring(interceptStart, minOf(activity.length, interceptStart + 260))
+        assertTrue("shouldInterceptRequest 首行必须校验 isForMainFrame 放行主帧", interceptHead.contains("isForMainFrame"))
+
+        assertFalse("严禁保留 preferredDisplayModeId（ColorOS 强锁 60Hz 会反升 120Hz）", activity.contains("preferredDisplayModeId"))
+        assertFalse("严禁保留 preferredRefreshRate 窗口强锁", activity.contains("preferredRefreshRate"))
+        assertTrue("应保留 API 35+ View 级 setRequestedFrameRate(25f)", activity.contains("setRequestedFrameRate"))
+        assertTrue("应保留后台 5s 硬休眠 RENDERER_PRIORITY_WAIVED", activity.contains("RENDERER_PRIORITY_WAIVED"))
+        assertTrue("onDestroy 应取消后台休眠回调", activity.contains("backgroundSuspendRunnable"))
+
+        val blockerFile = File(dir, "CctvWebResourceBlocker.kt")
+        assertTrue("应存在 CctvWebResourceBlocker.kt", blockerFile.isFile)
+        val blocker = blockerFile.readText(Charsets.UTF_8)
+        assertFalse("CctvWebResourceBlocker 严禁拦截或引用 cntv_Advertise.js", blocker.contains("cntv_Advertise", ignoreCase = true))
+        assertFalse("CctvWebResourceBlocker 严禁伪造 window.wx 等 JS 桩对象", blocker.contains("window.wx", ignoreCase = true))
     }
 
     @Test

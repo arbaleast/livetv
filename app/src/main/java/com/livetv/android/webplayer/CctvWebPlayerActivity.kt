@@ -7,6 +7,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -52,6 +53,7 @@ import com.livetv.android.ui.mobile.ChannelDrawerAdapter
 import com.livetv.android.ui.mobile.ChannelDrawerModel
 import com.livetv.android.ui.mobile.ChannelDrawerRow
 import com.livetv.android.ui.mobile.MobileUiPreferences
+import java.io.ByteArrayInputStream
 
 /**
  * CCTV 手机端 WebView 播放页。
@@ -109,6 +111,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private var nativeControlsVisible = false
     private var isDrawerOpen = false
     private var awaitingPageCommit = false
+    private var suspendedInBackground = false
+
+    private val backgroundSuspendRunnable = Runnable { suspendWebViewInBackground() }
 
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
@@ -248,6 +253,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private fun buildWebView(): WebView {
         val view = WebView(this)
         view.setBackgroundColor(Color.BLACK)
+        view.setLayerType(View.LAYER_TYPE_NONE, null)
+        view.isVerticalScrollBarEnabled = false
+        view.isHorizontalScrollBarEnabled = false
+        view.overScrollMode = View.OVER_SCROLL_NEVER
+        applyRequestedVideoFrameRate(view)
 
         view.settings.apply {
             javaScriptEnabled = true
@@ -265,6 +275,27 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         }
 
         view.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView,
+                request: WebResourceRequest,
+            ): WebResourceResponse? {
+                if (request.isForMainFrame) return super.shouldInterceptRequest(view, request)
+                val uri = request.url
+                val blocked = CctvWebResourceBlocker.match(uri.host, uri.path, uri.query)
+                if (blocked != null) {
+                    val reason = if (blocked.statusCode == 204) "No Content" else "OK"
+                    return WebResourceResponse(
+                        blocked.mimeType,
+                        "utf-8",
+                        blocked.statusCode,
+                        reason,
+                        mapOf("Access-Control-Allow-Origin" to "*"),
+                        ByteArrayInputStream(blocked.body),
+                    )
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest,
@@ -322,6 +353,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 view.removeAllViews()
                 view.destroy()
                 if (webView === view) webView = null
+                suspendedInBackground = false
+                mainHandler.removeCallbacks(backgroundSuspendRunnable)
                 showLoadFailure(R.string.cctv_web_renderer_gone)
                 return true
             }
@@ -1018,6 +1051,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private fun showLoadFailure(messageRes: Int) {
         mainHandler.removeCallbacksAndMessages(null)
         awaitingPageCommit = false
+        suspendedInBackground = false
         loadingOverlay?.let {
             it.animate().cancel()
             root.removeView(it)
@@ -1065,11 +1099,50 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         if (hasFocus) applyImmersive()
     }
 
+    private fun applyRequestedVideoFrameRate(target: View) {
+        if (Build.VERSION.SDK_INT < 35) return
+        val applied = runCatching {
+            val method = View::class.java.getMethod(
+                "setRequestedFrameRate",
+                Float::class.javaPrimitiveType,
+            )
+            method.invoke(target, TARGET_VIDEO_FRAME_RATE_HZ)
+            true
+        }.getOrDefault(false)
+        Log.i(TAG, "setRequestedFrameRate(" + TARGET_VIDEO_FRAME_RATE_HZ + ")=" + applied)
+    }
+
+    private fun suspendWebViewInBackground() {
+        val view = webView ?: return
+        if (isFinishing || isDestroyed || errorMessageView != null) return
+        suspendedInBackground = true
+        mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.removeCallbacks(revealTimeoutRunnable)
+        view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_WAIVED, true)
+        view.stopLoading()
+        view.loadUrl(ABOUT_BLANK)
+        Log.i(TAG, "background hard suspend executed")
+    }
+
+    override fun onStart() {
+        super.onStart()
+        mainHandler.removeCallbacks(backgroundSuspendRunnable)
+        if (suspendedInBackground && webView != null && errorMessageView == null) {
+            suspendedInBackground = false
+            webView?.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+            val pageUrl = CctvWebChannel.liveUrl(currentChannelId)
+            if (pageUrl != null) {
+                Log.i(TAG, "foreground resume reload: $currentChannelId")
+                reloadChannel(currentChannelId, currentChannelName, pageUrl)
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         webView?.onResume()
         webView?.resumeTimers()
-        if (!isPlaying && webView != null) {
+        if (!isPlaying && !suspendedInBackground && webView != null) {
             mainHandler.removeCallbacks(pollRunnable)
             mainHandler.postDelayed(pollRunnable, POLL_INTERVAL_MS)
         }
@@ -1083,7 +1156,16 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    override fun onStop() {
+        super.onStop()
+        if (!isChangingConfigurations && !isFinishing && webView != null && errorMessageView == null) {
+            mainHandler.removeCallbacks(backgroundSuspendRunnable)
+            mainHandler.postDelayed(backgroundSuspendRunnable, BACKGROUND_SUSPEND_DELAY_MS)
+        }
+    }
+
     private fun destroyWebView() {
+        suspendedInBackground = false
         mainHandler.removeCallbacksAndMessages(null)
         webView?.let { view ->
             (view.parent as? ViewGroup)?.removeView(view)
@@ -1101,7 +1183,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(backgroundSuspendRunnable)
         mainHandler.removeCallbacksAndMessages(null)
+        suspendedInBackground = false
         backCallback.isEnabled = false
         loadingOverlay?.animate()?.cancel()
         if (::hud.isInitialized) hud.animate().cancel()
@@ -1144,5 +1228,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         private const val DRAWER_ANIM_MS = 220L
         private const val DRAWER_WIDTH_DP = 280
         private const val DRAWER_STABLE_BOTTOM_MARGIN_DP = 8
+        private const val TARGET_VIDEO_FRAME_RATE_HZ = 25f
+        private const val BACKGROUND_SUSPEND_DELAY_MS = 5_000L
     }
 }

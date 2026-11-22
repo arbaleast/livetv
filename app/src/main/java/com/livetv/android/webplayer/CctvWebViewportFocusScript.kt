@@ -37,6 +37,8 @@ object CctvWebViewportFocusScript {
   var observer = null;
   var narrowed = false;
   var pureScanCount = 0;
+  var pruned = false;
+  var pruneTimer = 0;
 
   function ensureStyle() {
     if (document.getElementById(STYLE_ID)) { return true; }
@@ -49,7 +51,7 @@ object CctvWebViewportFocusScript {
       'margin:0 !important;padding:0 !important;z-index:2147483647 !important;background:#000 !important;}\n' +
       '#player video,#player canvas{width:100% !important;height:100% !important;' +
       'max-width:100% !important;max-height:100% !important;object-fit:contain !important;background:#000 !important;}\n' +
-      'html.livetv-pure-video #player .livetv-pure-control-hidden{opacity:0 !important;pointer-events:none !important;}';
+      'html.livetv-pure-video #player .livetv-pure-control-hidden{visibility:hidden !important;opacity:0 !important;pointer-events:none !important;}';
     var head = document.head || document.documentElement;
     if (head) {
       try {
@@ -117,6 +119,7 @@ object CctvWebViewportFocusScript {
         if (kids[i] !== child && kids[i].id !== STYLE_ID) {
           kids[i].classList.add(CONTROL_CLASS);
           if (!hasStyle && pureActive) {
+            kids[i].style.setProperty('visibility', 'hidden', 'important');
             kids[i].style.setProperty('opacity', '0', 'important');
             kids[i].style.setProperty('pointer-events', 'none', 'important');
           }
@@ -133,10 +136,58 @@ object CctvWebViewportFocusScript {
     if (player) { markPureControls(player); }
   };
 
+  function pruneOuterDom() {
+    if (pruned || !window.__livetvPlaying || window.__livetvPureVideo === false) { return; }
+    var player = document.getElementById(PLAYER_ID);
+    if (!player) { return; }
+    pruned = true;
+    try {
+      var child = player;
+      var parent = player.parentElement;
+      while (parent && parent !== document.documentElement) {
+        var kids = parent.children;
+        for (var i = kids.length - 1; i >= 0; i--) {
+          var sibling = kids[i];
+          if (sibling !== child && sibling.id !== STYLE_ID) {
+            sibling.remove();
+          }
+        }
+        if (parent === document.body) { break; }
+        child = parent;
+        parent = parent.parentElement;
+      }
+      var links = document.querySelectorAll('link[rel="stylesheet"]');
+      for (var j = links.length - 1; j >= 0; j--) {
+        if (!player.contains(links[j]) && links[j].id !== STYLE_ID) {
+          links[j].remove();
+        }
+      }
+      var frames = document.querySelectorAll('iframe');
+      for (var k = frames.length - 1; k >= 0; k--) {
+        if (!player.contains(frames[k])) {
+          frames[k].remove();
+        }
+      }
+    } catch (e) { }
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+  }
+
+  function schedulePrune() {
+    if (pruned || pruneTimer || !window.__livetvPlaying) { return; }
+    pruneTimer = setTimeout(function () {
+      pruneTimer = 0;
+      pruneOuterDom();
+    }, 2000);
+  }
+
   function applyPureState(player) {
     markPureControls(player);
     if (window.__livetvPlaying && window.__livetvPureVideo !== false && document.documentElement) {
       document.documentElement.classList.add(PURE_CLASS);
+      schedulePrune();
     }
   }
 
@@ -314,6 +365,7 @@ object CctvWebViewportFocusScript {
     if (!document.getElementById('livetv-focus-style')) {
       var nodes = document.querySelectorAll('.livetv-pure-control-hidden');
       for (var i = 0; i < nodes.length; i++) {
+        nodes[i].style.setProperty('visibility', 'hidden', 'important');
         nodes[i].style.setProperty('opacity', '0', 'important');
         nodes[i].style.setProperty('pointer-events', 'none', 'important');
       }
@@ -332,6 +384,7 @@ object CctvWebViewportFocusScript {
   if (!document.getElementById('livetv-focus-style')) {
     var nodes = document.querySelectorAll('.livetv-pure-control-hidden');
     for (var i = 0; i < nodes.length; i++) {
+      nodes[i].style.removeProperty('visibility');
       nodes[i].style.removeProperty('opacity');
       nodes[i].style.removeProperty('pointer-events');
     }

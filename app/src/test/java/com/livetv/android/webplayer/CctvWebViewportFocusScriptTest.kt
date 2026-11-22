@@ -63,6 +63,7 @@ class CctvWebViewportFocusScriptTest {
         assertTrue(script.contains("timeupdate"))
         assertTrue(script.contains("window.__livetvPlaying"))
         assertTrue(script.contains("html.livetv-pure-video #player .livetv-pure-control-hidden"))
+        assertTrue("纯视频内部控制层应包含 visibility:hidden !important", script.contains("visibility:hidden !important"))
         assertTrue(script.contains("opacity:0 !important"))
         assertTrue(script.contains("pointer-events:none !important"))
 
@@ -70,6 +71,12 @@ class CctvWebViewportFocusScriptTest {
         val pureRuleLine = script.lines().firstOrNull { it.contains("livetv-pure-control-hidden") && it.contains("opacity") }
         assertTrue("应存在纯视频内部控制层隐藏 CSS 规则", pureRuleLine != null)
         assertFalse("纯视频内部控制层规则严禁使用 display:none", pureRuleLine!!.contains("display:none"))
+    }
+
+    @Test
+    fun `prunes outer dom and disconnects observer after playback stabilizes`() {
+        assertTrue("应包含外围 DOM 物理剪枝 .remove()", script.contains(".remove()"))
+        assertTrue("剪枝后应断开 MutationObserver", script.contains("observer.disconnect()"))
     }
 
     @Test

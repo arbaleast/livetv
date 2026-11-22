@@ -2,12 +2,11 @@
 
 > **最终结论（2026-11-22 归档）**：
 > - **原生 VDN + Media3 ExoPlayer 媒体管线：NO-GO**。实测官方移动端与桌面端直播页均通过 `live.worker.js` WASM DRM 及约 20 个官方外围脚本自举完成播放，无法合规直接喂给 Media3，本项目不实施任何自定义解密、WASM 移植或自定义 `Extractor`。
-> - **现行落地方案（仅手机端）**：通过隔离包 `com.livetv.android.webplayer` 加载官方直播页（`cctv1`–`cctv17`），采用 `#player` 两阶段纯视频视口聚焦（仅 `opacity:0 + pointer-events:none`，不搬移 DOM、不模拟点击）、原生亮度/音量手势、双向选台与同页复用 `WebView`、`pauseTimers()`/`LOAD_DEFAULT` 缓存与 `onRenderProcessGone` 彻底销毁。
-> - **已知边界与性能基线（OnePlus PKG110 / Android 16）**：
+> - **现行落地方案（仅手机端）**：通过隔离包 `com.livetv.android.webplayer` 加载官方直播页（`cctv1`–`cctv17`），采用 `#player` 两阶段纯视频视口聚焦（内部控件 `visibility:hidden + opacity:0 + pointer-events:none`、起播 2s 后外围 DOM 物理剪枝并断开 `MutationObserver`，不搬移 DOM、不模拟点击）、`CctvWebResourceBlocker` 精确外围黑名单（拦截 P2P/埋点/推广/外围非播放 JS&CSS，绝不拦截核心播放与广告脚本）、原生亮度/音量手势、双向选台与同页复用 `WebView`、API 35+ View 级 `setRequestedFrameRate(25f)`（禁用会触发 ColorOS 120Hz ÷ 2 反升的窗口 60Hz 强锁）、后台 5s 硬休眠（`RENDERER_PRIORITY_WAIVED` + `about:blank`，回前台自动重载）与 `onRenderProcessGone` 彻底销毁。
+> - **已知边界与性能收口（OnePlus PKG110 / Android 16）**：
 >   - `cctv4k` / `cctv8k` 官方页面 404，已提前短路提示不支持；
->   - 首次进页/切台需用户轻点官方播放键（合规不模拟点击）；
->   - Android TV 端保持「电视端暂不支持央视频道播放」兜底，不引入 WebView；
->   - 稳定播 `cctv1` 30s 基线：主进程 PSS **144.0 MB** / CPU **60.7%**，WebView 渲染进程 PSS **243.0 MB** / CPU **114.0%**；切后台 4s 降至 **7.1% / 17.8%**。
+>   - 首次进页/切台合规不模拟点击；Android TV 端保持「电视端暂不支持央视频道播放」兜底，不引入 WebView；
+>   - PKG110 实测优化收口：WebRTC/STUN 报错 **303 → 5** 条、渲染进程 `Private Other` **123,100 → ~103,000 KB（-16%）**、主进程 Top3 渲染线程 **42.3% → 35.3%–40.3%**（面板保持 90.00 Hz）、退后台 10s CPU **17.2% → 0.0%–0.6% / 0.0%**（回前台 **3.3–4.1s** 自动出画恢复），详见 `docs/CCTV-INTEGRATION.md` §0.3。
 > - **合规红线**：本文件不设计、不评估、不实施任何 DRM / HDCP / 访问控制绕过；以下 §1–§8 保留为 P0 原生管线研究历史记录。
 
 ---

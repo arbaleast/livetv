@@ -25,19 +25,24 @@
 |---|---|
 | P1 目录与多源聚合 | `assets/cctv_channels.json`（仅静态元数据，无任何 URL）→ `CctvChannelCatalog` / `CctvCatalogCoordinator` + `CompositeCatalogCoordinator` / `ChannelCatalogMerger` 与 MGTV 分槽合并写入 `ChannelCatalogStore` |
 | 频道与安全白名单 | `CctvWebChannel`（仅放行已验证 200 的 `cctv1`–`cctv17` 官方直播页 `https://tv.cctv.com/live/cctvN/`）；`CctvWebNavigationPolicy`（Fail-Closed，仅允许 `https://tv.cctv.com` 及严格子域）；`CctvWebUserAgent`（仅剔除 `; wv`） |
-| 两阶段纯视频视口聚焦 | `CctvWebViewportFocusScript`（静态常量脚本）：阶段一固定 `#player` 为 `100vw×100vh` 黑底并隐藏外围兄弟至 `document.body`，保持 `object-fit:contain !important`；`MutationObserver` 280ms 节流并在就绪后收缩至 `document.body`（`subtree: false`）；阶段二通过 `playing`/`timeupdate` 与播放态检查置位 `window.__livetvPlaying`，从 `#player` 内媒体节点向上遍历至 `#player` 边界标记 `.livetv-pure-control-hidden`，由 `html.livetv-pure-video #player .livetv-pure-control-hidden{opacity:0 !important;pointer-events:none !important;}` 隐藏网页控制层（**严禁**对内部控件用 `display:none`，不搬移 DOM、不模拟点击） |
-| 播放页交互与手势 | `CctvWebPlayerActivity` + `CctvWebGestureController`：原生黑幕过渡 + `awaitingPageCommit` 屏障与 7s 超时兜底；包裹 `WebView` 的 `CctvTouchContainer`（`onInterceptTouchEvent` 三态分流：左半屏亮度 `[0.01f, 1.0f]`、右半屏音量浮点累加器 `[0, maxVolume]` 与居中 HUD，纯视频态单击切换 3.5s 自动隐藏的渐变顶栏，待起播与「原控」态单击透传网页并保持顶栏常驻） |
-| 双向选台与生命周期 | `CctvWebSwitchPolicy` + 复用 `ChannelDrawerModel`/`ChannelDrawerAdapter` 右侧抽屉：CCTV 1–17 原地 `stopLoading()` + `loadUrl()` 复用 `WebView`（不重建 Activity）；跨源切 MGTV/IPTV 前严格销毁 `WebView` 再拉起 `PlayerActivity`；`PlayerActivity` 仅在手机触控端选 `cctv:` 时停止 ExoPlayer 并转交 `CctvWebPlayerActivity`；`WebSettings.LOAD_DEFAULT`、`onPause/onResume` 成对 `pauseTimers()/resumeTimers()`、`onRenderProcessGone` 彻底移树并 `.destroy()` |
+| 两阶段纯视频视口聚焦与剪枝 | `CctvWebViewportFocusScript`（静态常量脚本）：阶段一固定 `#player` 为 `100vw×100vh` 黑底并隐藏外围兄弟至 `document.body`，保持 `object-fit:contain !important`；`MutationObserver` 280ms 节流并在就绪后收缩至 `document.body`（`subtree: false`）；阶段二通过 `playing`/`timeupdate` 与播放态检查置位 `window.__livetvPlaying`，从 `#player` 内媒体节点向上遍历至 `#player` 边界标记 `.livetv-pure-control-hidden`，由 `html.livetv-pure-video #player .livetv-pure-control-hidden{visibility:hidden !important;opacity:0 !important;pointer-events:none !important;}` 隐藏网页控制层（**严禁**对内部控件用 `display:none`，不搬移 DOM、不模拟点击）；进入稳定播放 2 秒后执行一次外围 DOM 物理剪枝（`.remove()` 移除非祖先路径外围兄弟、无关 `<link rel="stylesheet">` 与 `<iframe>`）并彻底 `observer.disconnect()` |
+| 精确外围子资源拦截 | `CctvWebResourceBlocker`（纯 Kotlin，不依赖 Android `Uri`）：`shouldInterceptRequest` 首行放行 `request.isForMainFrame`，遵循「精确外围黑名单、默认放行（fail-open）」原则，仅拦截 `hlsp2p.js` / `*.qvb.qcloud.com`（阻断 P2P 回退纯 CDN，消除 WebRTC/STUN 报错）、外围埋点统计、推广 iframe（`ydh5.yangshipin.cn` / `app.cctv.com/special/`）、非播放器配图、EPG 外围接口、23 项外围非播放 JS（登录/加密/顶底导航/分享/轮播/滚动条/二维码）、重复 `/library/script/jquery-1.7.2.min.js` 与 9 项外围 CSS；**绝不拦截**官方广告脚本、核心播放器 4 脚本、自举基础库、`H5player.json`、`time.php`、VDN、媒体流与播放器图标，且不伪造任何 JS 桩对象 |
+| 播放页交互、帧率投票与生命周期 | `CctvWebPlayerActivity` + `CctvWebGestureController` + `CctvWebSwitchPolicy`：原生黑幕过渡 + `awaitingPageCommit` 屏障与 7s 超时兜底；进入 `playing` 后零轮询、隐藏态原生浮层全部 `View.GONE`、`WebView` 设 `LAYER_TYPE_NONE`；包裹 `WebView` 的 `CctvTouchContainer` 实现左亮度/右音量手势与三态点击分流；右侧抽屉（复用 `ChannelDrawerModel`/`ChannelDrawerAdapter`）支持 CCTV 1–17 原地复用 `WebView` 切台与跨源切 MGTV/IPTV（切前彻底销毁 `WebView`）；API 35+ 通过反射调用 View 级 `setRequestedFrameRate(25f)` 匹配 25fps 直播源；`WebSettings.LOAD_DEFAULT`、`onPause/onResume` 成对 `pauseTimers()/resumeTimers()`、`onStop` 延迟 5 秒执行后台硬休眠（`RENDERER_PRIORITY_WAIVED` + `stopLoading()` + `about:blank`）、`onStart` 切回前台自动 `reloadChannel()` 恢复、`onRenderProcessGone` 彻底移树并 `.destroy()` |
 
-### 0.3 已知边界与真机基线（OnePlus PKG110 / Android 16）
+### 0.3 已知边界与真机性能收口（OnePlus PKG110 / Android 16）
 
 - **`cctv4k` / `cctv8k`**：官方直播页实测 404，入口与抽屉均提前短路提示「该频道暂不支持网页播放」，不拉起 Chromium。
-- **首次起播 / 切台交互**：受合规红线约束（严禁模拟 `.click()` / `.play()`），需用户轻点一次官方播放键起播；起播后自动进入纯视频态并隐藏官方控制栏。
+- **首次起播 / 切台交互**：受合规红线约束（严禁模拟 `.click()` / `.play()`），需用户轻点一次官方播放键起播（设备允许无手势自动播放时可自动起播）；起播后自动进入纯视频态并隐藏官方控制栏。
 - **Android TV 端**：不引入 WebView；`MainBrowseFragment` 主页与 `PlayerActivity` 侧边选台/上下切台均经 `TvChannelRoutePolicy` 拦截 `cctv:` 频道并弹出「电视端暂不支持央视频道播放」，不打断当前页面或正在播放的 MGTV/IPTV 节目。
-- **真机性能基线（PKG110，稳定播放 `cctv1` 30s 后采集）**：
-  - 主进程 `com.livetv.android`：**TOTAL PSS = 144.0 MB（147,418 KB）** / 前台 CPU **60.7%**（单核口径，8 核整机约 7.6%）；
-  - WebView 渲染进程 `sandboxed_process0`：**TOTAL PSS = 243.0 MB（248,881 KB）** / 前台 CPU **114.0%**（8 核整机约 14.3%）；
-  - 按 Home 键切后台 4s 后：主进程与渲染进程 CPU 分别降至 **7.1% / 17.8%**（音频与 JS 定时器已暂停），回前台恢复无崩溃。
+- **真机性能优化收口对比（PKG110，冷启稳播 `cctv1` 30s + `cctv1 -> cctv13` + 退后台 10s）**：
+
+| 阶段 / 组合 | 刷新率（物理 / 投票） | Chromium E/W 报错 | 主进程 CPU（Top3 渲染线程） | 渲染进程 PSS（Private Other）/ CPU | 后台 10s CPU（主 / 渲染） |
+|---|---|---|---|---|---|
+| **A（Commit 2 基线，无拦截）** | 90.00 Hz / `25.00` | **303 条**（WebRTC/STUN 持续报错） | 77.7% | 233.0 MB / 53.0% | 6.8% / 6.8%（合计 13.6%） |
+| **B2（P2P + 埋点/推广/配图/EPG）** | 90.00 Hz / `25.00` | **5 条**（仅冷启警告） | 76.2%（Top3 **42.3%**：UI 19.0 + RenderThread 13.3 + VizWebView 10.0） | 188.1 MB（**123,100 KB**）/ 42.9% | 10.6% / 6.6%（合计 17.2%） |
+| **终版（B3 剥离剪枝 + API 35+ `setRequestedFrameRate(25f)` + 后台 5s 硬休眠）** | **90.00 Hz** / **`25.00 ExactOrMultiple`** | **5 条**（0 P2P/STUN 报错） | **69.4%–71.6%**（Top3 **35.3%–40.3%**） | **179.6–182.3 MB**（**~103,000–106,400 KB，约 -16%**）/ **35.3%–43.4%** | **`0.0%–0.6% / 0.0%`**（切回前台 **3.3–4.1s** 自动出画恢复，零崩溃） |
+
+- **工程踩坑备忘（ColorOS / LTPO 刷新率强锁回退）**：在 PKG110（ColorOS / Android 16，物理支持 60/90/120Hz）上若强行设置 `window.attributes.preferredDisplayModeId = 60Hz`，窗口投票会被覆盖为 `60.00 Exact`，ColorOS `DisplayModeDirector` 会选择以 **120Hz ÷ 2** 帧步调满足该请求，反而把物理面板 `activeMode` 从 **90.00 Hz 反推至 120.00 Hz**。因此终版已彻底移除窗口级 `preferredDisplayModeId` / `preferredRefreshRate` 强锁，改由 WebView 原生 `25.00 ExactOrMultiple` 投票配合 API 35+ View 级 `setRequestedFrameRate(25f)`，实测面板稳定保持 `90.00 Hz` 不再回退 120Hz。
 
 ---
 
