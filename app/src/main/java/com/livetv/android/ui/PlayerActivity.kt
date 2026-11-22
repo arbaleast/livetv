@@ -200,7 +200,7 @@ class PlayerActivity : AppCompatActivity() {
             MobilePlayerTransitionHelper.consumeCrossEngineLastFrame(intent)?.let { crossBitmap ->
                 mobileLoadingOverlay?.applyCrossEngineLastFrame(
                     bitmap = crossBitmap,
-                    message = getString(R.string.cctv_web_switching_to, currentChannel?.name.orEmpty()),
+                    channelName = currentChannel?.name.orEmpty(),
                 )
             }
         }
@@ -256,7 +256,7 @@ class PlayerActivity : AppCompatActivity() {
             MobilePlayerTransitionHelper.consumeCrossEngineLastFrame(intent)?.let { crossBitmap ->
                 mobileLoadingOverlay?.applyCrossEngineLastFrame(
                     bitmap = crossBitmap,
-                    message = getString(R.string.cctv_web_switching_to, target.name),
+                    channelName = target.name,
                 )
             }
         }
@@ -557,9 +557,7 @@ class PlayerActivity : AppCompatActivity() {
                 if (isTouchDevice) {
                     hideStatus()
                     if (!isInPictureInPictureMode) {
-                        mobileLoadingOverlay?.showLoading(
-                            getString(R.string.cctv_web_switching_to, currentChannel?.name.orEmpty()),
-                        )
+                        mobileLoadingOverlay?.showMgtvLoading(currentChannel?.name.orEmpty())
                     }
                 } else {
                     showStatus(
@@ -574,7 +572,7 @@ class PlayerActivity : AppCompatActivity() {
                 if (isTouchDevice) {
                     hideStatus()
                     if (!isInPictureInPictureMode) {
-                        mobileLoadingOverlay?.showBuffering(getString(R.string.player_buffering))
+                        mobileLoadingOverlay?.showMgtvBuffering(getString(R.string.player_buffering))
                     }
                 } else {
                     showStatus(
@@ -631,7 +629,7 @@ class PlayerActivity : AppCompatActivity() {
         if (isTouchDevice) {
             hideStatus()
             if (!isInPictureInPictureMode) {
-                mobileLoadingOverlay?.showBuffering(msg)
+                mobileLoadingOverlay?.showMgtvBuffering(msg)
             }
         } else {
             showStatus(message = msg, showProgress = true)
@@ -644,7 +642,7 @@ class PlayerActivity : AppCompatActivity() {
         if (isTouchDevice) {
             hideStatus()
             if (!isInPictureInPictureMode) {
-                mobileLoadingOverlay?.showBuffering(msg)
+                mobileLoadingOverlay?.showMgtvBuffering(msg)
             }
         } else {
             showStatus(message = msg, showProgress = true)
@@ -803,6 +801,10 @@ class PlayerActivity : AppCompatActivity() {
             }
             return
         }
+        if (isTouchDevice && channel.id.startsWith(CctvWebChannel.CHANNEL_PREFIX)) {
+            switchToCctvWebPlayer(channel)
+            return
+        }
         switchToChannel(channel)
     }
 
@@ -827,7 +829,7 @@ class PlayerActivity : AppCompatActivity() {
                     surfaceView = surfaceView,
                     wasPlaying = wasPlaying,
                     inPictureInPicture = isInPictureInPictureMode,
-                    message = getString(R.string.cctv_web_switching_to, channel.name),
+                    channelName = channel.name,
                 ) {
                     if (!isFinishing && !isDestroyed) {
                         playerManager.switchChannel(channel)
@@ -932,7 +934,7 @@ class PlayerActivity : AppCompatActivity() {
                 surfaceView = surfaceView,
                 wasPlaying = wasPlaying,
                 inPictureInPicture = isInPictureInPictureMode,
-                message = getString(R.string.cctv_web_switching_to, channel.name),
+                channelName = channel.name,
             ) { handoffBitmap ->
                 completeSwitchToCctvWebPlayer(channel, handoffBitmap)
             }
