@@ -862,6 +862,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         restoreChromeVisibility()
         if (revealed) return
         revealed = true
+        gestureController.isRevealed = true
         val fadeLastFrame = hasVisibleLastFrame()
         val hasOverlay = ::loadingOverlay.isInitialized && loadingOverlay.isOverlayVisible
         if (!hasOverlay && !fadeLastFrame) return

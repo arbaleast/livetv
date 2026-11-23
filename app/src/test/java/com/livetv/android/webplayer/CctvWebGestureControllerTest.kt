@@ -240,4 +240,28 @@ class CctvWebGestureControllerTest {
         controller.onTouchDown(x = 500f, y = 500f, viewWidthPx = 1000)
         assertEquals(GestureAction.ToggleLockButton, controller.onTouchUp())
     }
+
+    @Test
+    fun `tap toggles controls after overlay reveal timeout even when playback has not started`() {
+        val controller = CctvWebGestureController(touchSlopPx = 24f).apply {
+            isPlaying = false
+            isRevealed = true
+            isNativeControlsVisible = false
+        }
+
+        assertTrue("撤幕后即使尚未起播也应拦截单击呼出控制栏", controller.shouldCaptureTap())
+        controller.onTouchDown(x = 500f, y = 500f, viewWidthPx = 1000)
+        assertEquals(GestureAction.ToggleTopBar, controller.onTouchUp())
+
+        // 原控模式下仍透传给网页
+        controller.isNativeControlsVisible = true
+        assertFalse(controller.shouldCaptureTap())
+        controller.onTouchDown(x = 500f, y = 500f, viewWidthPx = 1000)
+        assertEquals(GestureAction.PassToWebView, controller.onTouchUp())
+
+        // reset() 必须清除 isRevealed
+        controller.reset()
+        assertFalse(controller.isRevealed)
+        assertFalse(controller.shouldCaptureTap())
+    }
 }

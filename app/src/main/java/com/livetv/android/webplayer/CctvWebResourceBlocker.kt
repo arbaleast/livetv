@@ -160,8 +160,8 @@ internal object CctvWebResourceBlocker {
     }
 
     /**
-     * 精确匹配纯外围社交分享、二维码、滚动条、收藏、PC/白顶导航与 `sbu_hc.js` 脚本文件名/路径后缀，
-     * 避免跨 DEPA 目录号漏网，同时绝不误伤核心或合规广告脚本。
+     * 精确匹配纯外围社交分享、二维码、滚动条、收藏与 PC/白顶导航脚本文件名/路径后缀，
+     * 避免跨 DEPA 目录号漏网，同时绝不误伤核心、反爬自举（`sbu_hc.js`）或合规广告脚本。
      */
     private fun isPeripheralSocialOrNavScript(lowerPath: String): Boolean {
         if (!lowerPath.endsWith(".js")) return false
@@ -176,7 +176,6 @@ internal object CctvWebResourceBlocker {
         "jquery.qrcode.min.js",
         "shareindex.js",
         "zhibo_shoucang.js",
-        "sbu_hc.js",
     )
 
     private fun isNonEssentialPageCss(lowerPath: String): Boolean {

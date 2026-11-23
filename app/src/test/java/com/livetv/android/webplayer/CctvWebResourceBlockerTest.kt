@@ -106,7 +106,6 @@ class CctvWebResourceBlockerTest {
             "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA9999/zhibo_shoucang.js",
             "https://r.img.cctvpic.com/common/pc_nav/index.js",
             "https://r.img.cctvpic.com/newcctv/containingPages/2019whitetop/index.js",
-            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA1567091909687313/sbu_hc.js",
         )
         blockedJsSamples.forEach { url ->
             assertEquals("应拦截外围 JS: $url", CctvWebResourceBlocker.BlockResponseKind.EMPTY_JS, CctvWebResourceBlocker.matchUrl(url))
@@ -153,6 +152,7 @@ class CctvWebResourceBlockerTest {
             "https://p1.img.cctvpic.com/photoAlbum/templet/common/DEPA1486437585241505/configtool.js",
             "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA1486437585241505/configtoolV1.1.js",
             "https://www.cctv.com/js/cntv_Advertise.js",
+            "https://tv.cctv.com/_ws_sbu/sbu_hc.js",
         )
         mustAllow.forEach { url ->
             assertNull("核心/合规资源绝不可拦截: $url", CctvWebResourceBlocker.matchUrl(url))

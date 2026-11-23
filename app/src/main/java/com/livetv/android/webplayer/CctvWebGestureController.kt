@@ -42,6 +42,7 @@ class CctvWebGestureController(
     }
 
     var isPlaying: Boolean = false
+    var isRevealed: Boolean = false
     var isNativeControlsVisible: Boolean = false
     var isScreenLocked: Boolean = false
 
@@ -56,10 +57,11 @@ class CctvWebGestureController(
     private var volumeAccumulator = 0f
     private var maxVolume = 0
 
-    fun shouldCaptureTap(): Boolean = isScreenLocked || (isPlaying && !isNativeControlsVisible)
+    fun shouldCaptureTap(): Boolean = isScreenLocked || ((isPlaying || isRevealed) && !isNativeControlsVisible)
 
     fun reset() {
         isPlaying = false
+        isRevealed = false
         isNativeControlsVisible = false
         clearActiveTouch()
     }
