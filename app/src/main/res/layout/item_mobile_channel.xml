@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 紧凑横向卡片：左徽章 + 中文案 + 右侧序号/收藏/上次播放点 -->
+<!-- 暗黑影院风频道卡：上下双行左对齐（短台号 / 定位副标题）+ 右侧收藏星与最近观看光点，无徽章无序号 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/channel_card_root"
     android:layout_width="match_parent"
@@ -8,26 +8,16 @@
     android:clickable="true"
     android:focusable="true"
     android:gravity="center_vertical"
-    android:minHeight="72dp"
+    android:minHeight="64dp"
     android:orientation="horizontal"
-    android:paddingStart="12dp"
+    android:paddingStart="14dp"
     android:paddingTop="10dp"
     android:paddingEnd="10dp"
     android:paddingBottom="10dp">
 
-    <TextView
-        android:id="@+id/channel_badge"
-        android:layout_width="38dp"
-        android:layout_height="38dp"
-        android:gravity="center"
-        android:importantForAccessibility="no"
-        android:textSize="13sp"
-        android:textStyle="bold" />
-
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
         android:layout_weight="1"
         android:orientation="vertical">
 
@@ -37,8 +27,8 @@
             android:layout_height="wrap_content"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="@color/mobile_text_primary"
-            android:textSize="14sp"
+            android:textColor="@color/mobile_home_text_primary"
+            android:textSize="15sp"
             android:textStyle="bold" />
 
         <TextView
@@ -48,49 +38,34 @@
             android:layout_marginTop="2dp"
             android:ellipsize="end"
             android:maxLines="1"
-            android:textColor="@color/mobile_text_secondary"
-            android:textSize="11sp" />
+            android:textColor="@color/mobile_home_text_secondary"
+            android:textSize="12sp" />
     </LinearLayout>
 
     <LinearLayout
         android:layout_width="wrap_content"
-        android:layout_height="match_parent"
+        android:layout_height="wrap_content"
         android:layout_marginStart="6dp"
-        android:gravity="end|top"
-        android:orientation="vertical">
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
         <TextView
-            android:id="@+id/channel_index"
+            android:id="@+id/channel_favorite_mark"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textColor="@color/mobile_text_tertiary"
-            android:textSize="11sp" />
+            android:importantForAccessibility="no"
+            android:text="@string/player_touch_favorited"
+            android:textColor="@color/mobile_home_text_secondary"
+            android:textSize="11sp"
+            android:visibility="gone" />
 
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/channel_favorite_mark"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:importantForAccessibility="no"
-                android:text="@string/player_touch_favorited"
-                android:textColor="@color/accent"
-                android:textSize="11sp"
-                android:visibility="gone" />
-
-            <View
-                android:id="@+id/channel_playing_dot"
-                android:layout_width="6dp"
-                android:layout_height="6dp"
-                android:layout_marginStart="4dp"
-                android:background="@drawable/bg_mobile_playing_dot"
-                android:importantForAccessibility="no"
-                android:visibility="gone" />
-        </LinearLayout>
+        <View
+            android:id="@+id/channel_playing_dot"
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:layout_marginStart="4dp"
+            android:background="@drawable/bg_mobile_playing_dot"
+            android:importantForAccessibility="no"
+            android:visibility="gone" />
     </LinearLayout>
 </LinearLayout>

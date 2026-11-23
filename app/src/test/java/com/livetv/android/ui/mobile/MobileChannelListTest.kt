@@ -478,4 +478,111 @@ class MobileChannelListTest {
         assertEquals(emptyList<MobileRow>(), MobileChannelList.searchRows(categories, "   "))
     }
 
+    // ---------------- 方案 B：继续观看主卡 + 2x2 分类胶囊 + 双行无截断排版 + 3 列频道墙 ----------------
+
+    @Test
+    fun `resolveContinueWatching returns last played channel when history hits and safe fallback when empty`() {
+        val cctv1 = Channel(id = "cctv:cctv1", name = "CCTV-1 综合", description = "", streamUrl = "")
+        val cctv4 = Channel(id = "cctv:cctv4", name = "CCTV-4 中文国际", description = "", streamUrl = "")
+        val hunan = Channel(id = "mgtv:280", name = "湖南经视", description = "", streamUrl = "")
+        val categories = listOf(
+            category(MobileChannelCategoryPolicy.ID_CCTV, "央视", listOf(cctv1, cctv4)),
+            category(MobileChannelCategoryPolicy.ID_SATELLITE, "卫视·芒果", listOf(hunan)),
+        )
+
+        // 命中历史记录：显示「继续观看」+ 对应频道全称
+        val withHistory = MobileChannelList.resolveContinueWatching(categories, lastPlayedChannelId = "cctv:cctv4")
+        assertTrue(withHistory.hasHistory)
+        assertEquals("继续观看", withHistory.badgeLabel)
+        assertEquals(cctv4, withHistory.targetChannel)
+        assertEquals("CCTV-4 中文国际", withHistory.primaryTitle)
+        assertEquals("央视", withHistory.secondarySubtitle)
+
+        // 首次使用无历史记录：回退首个推荐频道并显示「开始观看」，不报错不造假
+        val noHistory = MobileChannelList.resolveContinueWatching(categories, lastPlayedChannelId = null)
+        assertFalse(noHistory.hasHistory)
+        assertEquals("开始观看", noHistory.badgeLabel)
+        assertEquals(cctv1, noHistory.targetChannel)
+        assertEquals("CCTV-1 综合", noHistory.primaryTitle)
+
+        // 目录尚未加载完成时安全降级
+        val emptyCatalog = MobileChannelList.resolveContinueWatching(emptyList(), lastPlayedChannelId = "cctv:cctv1")
+        assertFalse(emptyCatalog.hasHistory)
+        assertNull(emptyCatalog.targetChannel)
+    }
+
+    @Test
+    fun `buildHomeCategoryCapsules always outputs 2x2 core capsules including Favorites even when empty`() {
+        val cctv1 = channel("cctv:cctv1", "CCTV-1 综合")
+        val cctv4 = channel("cctv:cctv4", "CCTV-4 中文国际")
+        val hunan = channel("mgtv:280", "湖南经视")
+        val categories = listOf(
+            category(MobileChannelCategoryPolicy.ID_CCTV, "央视", listOf(cctv1, cctv4)),
+            category(MobileChannelCategoryPolicy.ID_SATELLITE, "卫视·芒果", listOf(hunan)),
+        )
+
+        val capsulesNoFav = MobileChannelList.buildHomeCategoryCapsules(
+            categories = categories,
+            favoriteIds = emptySet(),
+            selectedCategoryId = MobileChannelList.FAVORITE_CATEGORY_ID,
+        )
+        assertEquals(
+            listOf(
+                null,
+                MobileChannelList.FAVORITE_CATEGORY_ID,
+                MobileChannelCategoryPolicy.ID_CCTV,
+                MobileChannelCategoryPolicy.ID_SATELLITE,
+            ),
+            capsulesNoFav.map { it.id },
+        )
+        assertEquals(listOf("全部", "收藏", "央视", "卫视·芒果"), capsulesNoFav.map { it.name })
+        assertEquals(listOf(3, 0, 2, 1), capsulesNoFav.map { it.count })
+        assertTrue("点击空收藏胶囊时应保持收藏选中态以展示空态提示", capsulesNoFav[1].selected)
+        assertEquals(
+            MobileChannelList.FAVORITE_CATEGORY_ID,
+            MobileChannelList.resolveHomeCategorySelection(categories, MobileChannelList.FAVORITE_CATEGORY_ID),
+        )
+    }
+
+    @Test
+    fun `resolveCardTypography splits station code and positioning into two lines to eliminate truncation`() {
+        val cctv4 = Channel(id = "cctv:cctv4", name = "CCTV-4 中文国际", description = "", streamUrl = "")
+        val typo4 = MobileChannelList.resolveCardTypography(cctv4, "央视")
+        assertEquals("CCTV-4", typo4.title)
+        assertEquals("中文国际", typo4.subtitle)
+
+        val cctv11 = Channel(id = "cctv:cctv11", name = "CCTV-11 戏曲", description = "", streamUrl = "")
+        val typo11 = MobileChannelList.resolveCardTypography(cctv11, "央视")
+        assertEquals("CCTV-11", typo11.title)
+        assertEquals("戏曲", typo11.subtitle)
+
+        val hunan = Channel(id = "mgtv:280", name = "湖南经视", description = "湖南经视", streamUrl = "")
+        val typoHunan = MobileChannelList.resolveCardTypography(hunan, "卫视·芒果")
+        assertEquals("湖南经视", typoHunan.title)
+        assertEquals("卫视·芒果", typoHunan.subtitle)
+    }
+
+    @Test
+    fun `buildWallRows and resolveHomeWallSpanCount support 3-column flat channel wall`() {
+        val cctv1 = channel("cctv:cctv1", "CCTV-1 综合")
+        val hunan = channel("mgtv:280", "湖南经视")
+        val categories = listOf(
+            category(MobileChannelCategoryPolicy.ID_CCTV, "央视", listOf(cctv1)),
+            category(MobileChannelCategoryPolicy.ID_SATELLITE, "卫视·芒果", listOf(hunan)),
+        )
+
+        val allWall = MobileChannelList.buildWallRows(categories, favoriteIds = setOf("mgtv:280"), selectedCategoryId = null)
+        assertEquals(listOf("cctv:cctv1", "mgtv:280"), allWall.map { it.channel.id })
+
+        val favWall = MobileChannelList.buildWallRows(
+            categories,
+            favoriteIds = setOf("mgtv:280"),
+            selectedCategoryId = MobileChannelList.FAVORITE_CATEGORY_ID,
+        )
+        assertEquals(listOf("mgtv:280"), favWall.map { it.channel.id })
+
+        assertEquals(3, MobileChannelList.resolveHomeWallSpanCount(555))
+        assertEquals(3, MobileChannelList.resolveHomeWallSpanCount(480))
+    }
+
 }

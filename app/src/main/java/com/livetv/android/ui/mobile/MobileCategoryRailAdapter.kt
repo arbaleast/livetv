@@ -73,7 +73,8 @@ class MobileCategoryRailAdapter(
         fun bind(item: MobileChannelList.RailItem) {
             nameView.text = item.name
             countView.text = item.count.toString()
-            countView.visibility = if (item.count > 0) View.VISIBLE else View.GONE
+            // 宽屏 2x2 胶囊只显示分类名；竖屏顶部胶囊条保留数量角标
+            countView.visibility = if (horizontal && item.count > 0) View.VISIBLE else View.GONE
             root.isSelected = item.selected
             nameView.isSelected = item.selected
             countView.isSelected = item.selected

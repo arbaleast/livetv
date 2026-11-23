@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 分类胶囊文字：选中纯白 #FFFFFFFF，未选中次级灰白 #99FFFFFF -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_selected="true" android:color="@android:color/white" />
-    <item android:color="@color/mobile_text_secondary" />
+    <item android:state_selected="true" android:color="@color/mobile_home_text_primary" />
+    <item android:color="@color/mobile_home_text_secondary" />
 </selector>

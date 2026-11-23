@@ -74,6 +74,9 @@
     <string name="mobile_loading_channels">正在加载频道列表…</string>
     <string name="mobile_empty_channels">暂无可播放的频道，可点右上角「订阅源」添加 M3U 地址</string>
     <string name="mobile_total_channels">共 %1$d 台</string>
+    <string name="mobile_favorites_empty">还没有收藏的频道，长按任意频道卡片即可收藏</string>
+    <string name="mobile_continue_empty">暂无频道</string>
+    <string name="mobile_continue_desc">%1$s：%2$s</string>
     <string name="mobile_all_categories">全部</string>
     <string name="mobile_category_count">%1$d 台</string>
     <string name="mobile_search_hint">搜索频道名或分类…</string>

@@ -1,26 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 左侧分类导航项（宽屏/横屏）：竖排胶囊 + 数量角标 -->
+<!-- 左侧 2x2 分类胶囊项（宽屏/横屏）：仅显示分类名（数量角标默认隐藏，避免挤压截断） -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/category_rail_item"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginStart="8dp"
-    android:layout_marginTop="4dp"
-    android:layout_marginEnd="8dp"
+    android:layout_marginStart="4dp"
+    android:layout_marginEnd="4dp"
     android:background="@drawable/bg_mobile_category_pill"
     android:clickable="true"
     android:focusable="true"
-    android:gravity="center_vertical"
-    android:minHeight="48dp"
-    android:orientation="vertical"
-    android:paddingStart="10dp"
+    android:gravity="center"
+    android:minHeight="44dp"
+    android:orientation="horizontal"
+    android:paddingStart="8dp"
     android:paddingTop="6dp"
-    android:paddingEnd="10dp"
+    android:paddingEnd="8dp"
     android:paddingBottom="6dp">
 
     <TextView
         android:id="@+id/rail_category_name"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:ellipsize="end"
         android:maxLines="1"
@@ -31,7 +30,8 @@
         android:id="@+id/rail_category_count"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="1dp"
+        android:layout_marginStart="4dp"
         android:textColor="@color/selector_mobile_rail_count_text"
-        android:textSize="11sp" />
+        android:textSize="11sp"
+        android:visibility="gone" />
 </LinearLayout>

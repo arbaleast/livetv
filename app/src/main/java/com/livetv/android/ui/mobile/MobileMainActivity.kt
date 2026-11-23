@@ -57,6 +57,9 @@ class MobileMainActivity : AppCompatActivity() {
 
         /** 顶栏收起/展开动画时长。 */
         private const val HEADER_ANIM_MS = 180L
+
+        /** 宽屏左侧分类胶囊网格列数（2x2）。 */
+        private const val HOME_CAPSULE_SPAN_COUNT = 2
     }
 
     private lateinit var binding: ActivityMobileMainBinding
@@ -69,7 +72,6 @@ class MobileMainActivity : AppCompatActivity() {
     private var currentRows: List<MobileRow> = emptyList()
     private var currentSpanCount = 2
     private var selectedCategoryId: String? = null
-    private var accentColors: IntArray = IntArray(0)
     private var catalogLoading = false
 
     /** 上次播放的频道 id（用于卡片高亮与蓝点标识）；与播放页双向同步。 */
@@ -129,7 +131,6 @@ class MobileMainActivity : AppCompatActivity() {
         pendingScrollPosition = savedInstanceState?.getInt(STATE_SCROLL_POSITION, RecyclerView.NO_POSITION)
             ?: RecyclerView.NO_POSITION
         pendingScrollOffset = savedInstanceState?.getInt(STATE_SCROLL_OFFSET, 0) ?: 0
-        accentColors = loadAccentColors()
 
         setupList()
         setupHeaderActions()
@@ -161,6 +162,7 @@ class MobileMainActivity : AppCompatActivity() {
         if (latestPlayed != lastPlayedChannelId) {
             lastPlayedChannelId = latestPlayed
             channelAdapter.setLastPlayedChannelId(latestPlayed)
+            updateContinueCard()
         }
         val latestFavorites = MobileUiPreferences.getFavoriteChannelIds(this)
         if (latestFavorites != favoriteIds) {
@@ -338,9 +340,12 @@ class MobileMainActivity : AppCompatActivity() {
     private fun setReloadingState(reloading: Boolean) {
         binding.mobileRefresh.isEnabled = !reloading
         binding.mobileRefresh.alpha = if (reloading) 0.5f else 1f
-        binding.mobileRefresh.text = getString(
-            if (reloading) R.string.mobile_action_refreshing else R.string.mobile_action_refresh,
-        )
+        // 宽屏首页刷新按钮为图标按钮（无文字），仅竖屏文字按钮切换「刷新 / 刷新中…」
+        if (!isFloatingHeaderMode()) {
+            binding.mobileRefresh.text = getString(
+                if (reloading) R.string.mobile_action_refreshing else R.string.mobile_action_refresh,
+            )
+        }
     }
 
     /** 重新加载频道目录（CCTV + MGTV 分槽合并）；失败时保留旧列表。 */
@@ -386,18 +391,18 @@ class MobileMainActivity : AppCompatActivity() {
             horizontal = isTopBar,
             onCategoryClick = ::selectCategory,
         )
-        binding.rvCategories.layoutManager = LinearLayoutManager(
-            this,
-            if (isTopBar) RecyclerView.HORIZONTAL else RecyclerView.VERTICAL,
-            false,
-        )
+        binding.rvCategories.layoutManager = if (isTopBar) {
+            LinearLayoutManager(this, RecyclerView.HORIZONTAL, false)
+        } else {
+            // 宽屏左侧栏：紧凑 2x2 分类胶囊
+            GridLayoutManager(this, HOME_CAPSULE_SPAN_COUNT)
+        }
         binding.rvCategories.adapter = railAdapter
         binding.rvCategories.setHasFixedSize(false)
         binding.rvCategories.itemAnimator = null
 
         channelAdapter = MobileChannelAdapter(
             rows = emptyList(),
-            accentColors = accentColors,
             onChannelClick = ::openChannel,
             lastPlayedChannelId = lastPlayedChannelId,
             favoriteChannelIds = favoriteIds,
@@ -452,9 +457,13 @@ class MobileMainActivity : AppCompatActivity() {
         if (widthPx <= 0) return
         val density = resources.displayMetrics.density
         val availableWidthPx = widthPx - binding.rvChannels.paddingStart - binding.rvChannels.paddingEnd
-        val spanCount = MobileChannelList.gridSpanCount(
-            MobileChannelList.pxToDp(availableWidthPx, density),
-        )
+        val widthDp = MobileChannelList.pxToDp(availableWidthPx, density)
+        val spanCount = if (isFloatingHeaderMode()) {
+            // 宽屏首页：固定 3 列频道墙
+            MobileChannelList.resolveHomeWallSpanCount(widthDp)
+        } else {
+            MobileChannelList.gridSpanCount(widthDp)
+        }
         val current = (binding.rvChannels.layoutManager as? GridLayoutManager)?.spanCount
         if (current == spanCount) return
 
@@ -603,7 +612,11 @@ class MobileMainActivity : AppCompatActivity() {
 
     private fun applyCategories() {
         displayCategories = MobileChannelList.prependFavoritesCategory(categories, favoriteIds)
-        selectedCategoryId = MobileChannelList.resolveSelectedCategoryId(displayCategories, selectedCategoryId)
+        selectedCategoryId = if (isFloatingHeaderMode()) {
+            MobileChannelList.resolveHomeCategorySelection(categories, selectedCategoryId)
+        } else {
+            MobileChannelList.resolveSelectedCategoryId(displayCategories, selectedCategoryId)
+        }
 
         // 总台数按基础目录计算，避免“收藏”虚拟分组重复计数
         val totalChannels = categories.sumOf { it.channels.size }
@@ -612,15 +625,48 @@ class MobileMainActivity : AppCompatActivity() {
         railAdapter.updateItems(buildDisplayRailItems())
         scrollRailToSelected()
         applyFilter()
+        updateHomeHeader()
+        updateContinueCard()
     }
 
     private fun buildDisplayRailItems(): List<MobileChannelList.RailItem> {
+        if (isFloatingHeaderMode()) {
+            // 宽屏首页：全部 / 收藏 / 央视 / 卫视·芒果 2x2 胶囊（收藏为空也保留，点击展示友好空态）
+            return MobileChannelList.buildHomeCategoryCapsules(categories, favoriteIds, selectedCategoryId)
+        }
         val raw = MobileChannelList.buildRailItems(displayCategories, selectedCategoryId)
         val totalChannels = categories.sumOf { it.channels.size }
         // 修正“全部”项角标为真实总台数（不含收藏重复计数）
         return raw.mapIndexed { index, item ->
             if (index == 0 && item.id == null) item.copy(count = totalChannels) else item
         }
+    }
+
+    /** 宽屏右侧顶栏：左侧显示当前选中分类标题（竖屏保持品牌标题不变）。 */
+    private fun updateHomeHeader() {
+        if (!isFloatingHeaderMode()) return
+        val title = buildDisplayRailItems().firstOrNull { it.selected }?.name
+        binding.topTitle.text = title ?: getString(R.string.app_name)
+    }
+
+    /**
+     * 刷新左侧「继续观看」主卡：命中最近观看频道则展示「继续观看」+ 频道全称，
+     * 无历史时降级为「开始观看」推荐首个频道；目录为空时整卡禁用，不造假。
+     */
+    private fun updateContinueCard() {
+        val card = binding.homeContinueCard ?: return
+        val state = MobileChannelList.resolveContinueWatching(categories, lastPlayedChannelId)
+        val target = state.targetChannel
+        binding.homeContinueBadge?.text = state.badgeLabel
+        binding.homeContinueTitle?.text = target?.name ?: getString(R.string.mobile_continue_empty)
+        card.isEnabled = target != null
+        card.alpha = if (target != null) 1f else 0.5f
+        card.contentDescription = getString(
+            R.string.mobile_continue_desc,
+            state.badgeLabel,
+            target?.name ?: getString(R.string.mobile_continue_empty),
+        )
+        card.setOnClickListener { target?.let(::openChannel) }
     }
 
     private fun selectCategory(categoryId: String?) {
@@ -632,6 +678,7 @@ class MobileMainActivity : AppCompatActivity() {
         railAdapter.updateItems(buildDisplayRailItems())
         scrollRailToSelected()
         applyFilter()
+        updateHomeHeader()
         showTopHeader(animate = true)
         binding.rvChannels.scrollToPosition(0)
     }
@@ -648,6 +695,9 @@ class MobileMainActivity : AppCompatActivity() {
         val trimmedQuery = searchQuery.trim()
         val rows = if (isSearchMode && trimmedQuery.isNotEmpty()) {
             MobileChannelList.searchRows(categories, trimmedQuery)
+        } else if (isFloatingHeaderMode()) {
+            // 宽屏首页：平铺 3 列频道墙（全部 / 收藏 / 指定大类）
+            MobileChannelList.buildWallRows(categories, favoriteIds, selectedCategoryId)
         } else {
             // 「全部」视图不重复展示“收藏”卡片分段，仅在左侧/顶部「收藏」分组下展示收藏网格
             val sourceCategories = if (selectedCategoryId == null) categories else displayCategories
@@ -662,6 +712,8 @@ class MobileMainActivity : AppCompatActivity() {
             binding.emptyView.visibility = if (showLoading) View.GONE else View.VISIBLE
             binding.emptyView.text = if (isSearchMode && trimmedQuery.isNotEmpty()) {
                 getString(R.string.mobile_search_empty, trimmedQuery)
+            } else if (selectedCategoryId == MobileChannelList.FAVORITE_CATEGORY_ID && categories.isNotEmpty()) {
+                getString(R.string.mobile_favorites_empty)
             } else {
                 getString(R.string.mobile_empty_channels)
             }
@@ -721,15 +773,7 @@ class MobileMainActivity : AppCompatActivity() {
         lastPlayedChannelId = channelId
         channelAdapter.setLastPlayedChannelId(channelId)
         MobileUiPreferences.setLastPlayedChannelId(this, channelId)
-    }
-
-    private fun loadAccentColors(): IntArray {
-        val typed = resources.obtainTypedArray(R.array.mobile_badge_accents)
-        try {
-            return IntArray(typed.length()) { typed.getColor(it, 0) }
-        } finally {
-            typed.recycle()
-        }
+        updateContinueCard()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

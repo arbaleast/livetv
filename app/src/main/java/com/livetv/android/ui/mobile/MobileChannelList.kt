@@ -314,6 +314,150 @@ object MobileChannelList {
         return rows
     }
 
+    // ---------------- 方案 B：继续观看主卡 + 2x2 分类胶囊 + 3 列频道墙（纯函数） ----------------
+
+    const val LABEL_CONTINUE_WATCHING = "继续观看"
+    const val LABEL_START_WATCHING = "开始观看"
+
+    /** 宽屏频道墙固定 3 列。 */
+    const val HOME_WALL_SPAN_COUNT = 3
+
+    /** 「继续观看」主卡的展示状态：无历史记录时降级为「开始观看」，目录为空时 [targetChannel] 为 null。 */
+    data class ContinueWatchingState(
+        val hasHistory: Boolean,
+        val badgeLabel: String,
+        val targetChannel: Channel?,
+        val primaryTitle: String,
+        val secondarySubtitle: String,
+    )
+
+    /**
+     * 按最近观看频道 id 解析「继续观看」主卡；命中历史时展示该频道全称，
+     * 否则回退目录首个频道作为「开始观看」推荐（不造假数据）。
+     */
+    fun resolveContinueWatching(
+        categories: List<ChannelCategory>,
+        lastPlayedChannelId: String?,
+    ): ContinueWatchingState {
+        val id = lastPlayedChannelId?.trim().orEmpty()
+        if (id.isNotEmpty()) {
+            for (category in categories) {
+                val hit = category.channels.firstOrNull { it.id == id }
+                if (hit != null) {
+                    return ContinueWatchingState(
+                        hasHistory = true,
+                        badgeLabel = LABEL_CONTINUE_WATCHING,
+                        targetChannel = hit,
+                        primaryTitle = hit.name,
+                        secondarySubtitle = category.name,
+                    )
+                }
+            }
+        }
+        val fallbackCategory = categories.firstOrNull { it.channels.isNotEmpty() }
+        val fallback = fallbackCategory?.channels?.firstOrNull()
+        return ContinueWatchingState(
+            hasHistory = false,
+            badgeLabel = LABEL_START_WATCHING,
+            targetChannel = fallback,
+            primaryTitle = fallback?.name.orEmpty(),
+            secondarySubtitle = fallbackCategory?.name.orEmpty(),
+        )
+    }
+
+    /**
+     * 首页分类胶囊：固定输出 `全部`、`收藏`（无收藏时数量为 0，仍可选中以展示友好空态）、
+     * 之后依次为各非空大类（央视 / 卫视·芒果 / 其他）。
+     */
+    fun buildHomeCategoryCapsules(
+        categories: List<ChannelCategory>,
+        favoriteIds: Set<String>,
+        selectedCategoryId: String?,
+    ): List<RailItem> {
+        val distinct = categories.flatMap { it.channels }.distinctBy { it.id }
+        val items = mutableListOf<RailItem>()
+        items += RailItem(
+            id = null,
+            name = ALL_CATEGORY_NAME,
+            count = distinct.size,
+            selected = selectedCategoryId == null,
+        )
+        items += RailItem(
+            id = FAVORITE_CATEGORY_ID,
+            name = FAVORITE_CATEGORY_NAME,
+            count = distinct.count { it.id in favoriteIds },
+            selected = selectedCategoryId == FAVORITE_CATEGORY_ID,
+        )
+        categories.forEach { category ->
+            if (category.channels.isEmpty()) return@forEach
+            items += RailItem(
+                id = category.id,
+                name = category.name,
+                count = category.channels.size,
+                selected = category.id == selectedCategoryId,
+            )
+        }
+        return items
+    }
+
+    /** 宽屏首页的选中分类校验：「收藏」即使为空也保持选中（用于展示空态），其余沿用 [resolveSelectedCategoryId]。 */
+    fun resolveHomeCategorySelection(
+        categories: List<ChannelCategory>,
+        selectedCategoryId: String?,
+    ): String? =
+        if (selectedCategoryId == FAVORITE_CATEGORY_ID) {
+            FAVORITE_CATEGORY_ID
+        } else {
+            resolveSelectedCategoryId(categories, selectedCategoryId)
+        }
+
+    /** 频道卡片双行排版：短台号/简称 + 定位副标题。 */
+    data class CardTypography(val title: String, val subtitle: String)
+
+    private val STATION_CODE_PREFIX = Regex("^(\\p{L}+-?\\d+\\p{L}*)\\s+(.+)$")
+
+    /**
+     * `CCTV-4 中文国际` → (`CCTV-4`, `中文国际`)；不含台号的名称（如 `湖南经视`）
+     * 主标题保持全称、副标题回落到所属分类名，避免单行拥挤被截断。
+     */
+    fun resolveCardTypography(channel: Channel, categoryName: String): CardTypography {
+        val name = channel.name.trim()
+        val match = STATION_CODE_PREFIX.find(name)
+        if (match != null) {
+            return CardTypography(title = match.groupValues[1], subtitle = match.groupValues[2].trim())
+        }
+        return CardTypography(title = name, subtitle = categoryName.trim())
+    }
+
+    /** 宽屏平铺频道墙：`null` = 全部（去重平铺）、收藏 = 命中收藏 id、其余 = 指定大类。 */
+    fun buildWallRows(
+        categories: List<ChannelCategory>,
+        favoriteIds: Set<String>,
+        selectedCategoryId: String?,
+    ): List<MobileRow.ChannelCard> {
+        val seen = HashSet<String>()
+        val rows = mutableListOf<MobileRow.ChannelCard>()
+        for (category in categories) {
+            if (selectedCategoryId != null &&
+                selectedCategoryId != FAVORITE_CATEGORY_ID &&
+                category.id != selectedCategoryId
+            ) {
+                continue
+            }
+            for (channel in category.channels) {
+                if (selectedCategoryId == FAVORITE_CATEGORY_ID && channel.id !in favoriteIds) continue
+                if (seen.add(channel.id)) {
+                    rows += MobileRow.ChannelCard(channel, category.id, category.name)
+                }
+            }
+        }
+        return rows
+    }
+
+    /** 宽屏首页频道墙列数（固定 3 列）。 */
+    @Suppress("UNUSED_PARAMETER")
+    fun resolveHomeWallSpanCount(screenWidthDp: Int): Int = HOME_WALL_SPAN_COUNT
+
     /** 启用左侧分类导航栏的最小屏幕宽度（dp）；小于该宽度时降级为顶部横向分类条，避免挤压手机竖屏网格。 */
     const val LEFT_RAIL_MIN_WIDTH_DP = 600
 

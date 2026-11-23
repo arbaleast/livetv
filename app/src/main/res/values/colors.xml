@@ -7,7 +7,18 @@
     <color name="search_highlight">#0D47A1</color>
 
     <!-- 手机端 / 播放页触控浮层的暗色调色板 -->
-    <color name="mobile_background">#0B0E14</color>
+    <color name="mobile_background">#090B0E</color>
+    <!-- 方案 B 暗黑影院风首页：卡片 / 胶囊 / 图标按钮 / 文字层级 -->
+    <color name="mobile_home_card_bg">#0EFFFFFF</color>
+    <color name="mobile_home_card_playing_bg">#1AFFFFFF</color>
+    <color name="mobile_home_card_playing_stroke">#40FFFFFF</color>
+    <color name="mobile_home_capsule_selected">#2EFFFFFF</color>
+    <color name="mobile_home_capsule_selected_stroke">#59FFFFFF</color>
+    <color name="mobile_home_capsule_normal">#12FFFFFF</color>
+    <color name="mobile_home_icon_bg">#14FFFFFF</color>
+    <color name="mobile_home_divider">#0FFFFFFF</color>
+    <color name="mobile_home_text_primary">#FFFFFFFF</color>
+    <color name="mobile_home_text_secondary">#99FFFFFF</color>
     <color name="mobile_card_background">#151A23</color>
     <color name="mobile_card_pressed">#1E2533</color>
     <color name="mobile_card_stroke">#232B3A</color>

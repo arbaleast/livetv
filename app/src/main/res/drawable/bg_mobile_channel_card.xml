@@ -1,34 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 频道卡片：默认细描边；`state_focused` 亮色焦点描边；`state_selected`（上次播放）强调色描边 -->
+<!-- 暗黑影院风频道卡：半透明暗卡 #0EFFFFFF + 12dp 圆角、无厚重描边；最近观看加克制柔和亮边；焦点态白色描边 -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
-    android:color="@color/mobile_card_pressed">
+    android:color="@color/mobile_home_icon_bg">
     <item>
         <selector>
             <item android:state_focused="true">
                 <shape android:shape="rectangle">
-                    <solid android:color="@color/mobile_card_pressed" />
-                    <corners android:radius="14dp" />
+                    <solid android:color="@color/mobile_home_card_playing_bg" />
+                    <corners android:radius="12dp" />
                     <stroke
                         android:width="2dp"
-                        android:color="@color/mobile_text_primary" />
+                        android:color="@color/mobile_home_text_primary" />
                 </shape>
             </item>
             <item android:state_selected="true">
                 <shape android:shape="rectangle">
-                    <solid android:color="@color/mobile_card_background" />
-                    <corners android:radius="14dp" />
+                    <solid android:color="@color/mobile_home_card_playing_bg" />
+                    <corners android:radius="12dp" />
                     <stroke
-                        android:width="1.5dp"
-                        android:color="@color/mobile_accent" />
+                        android:width="1dp"
+                        android:color="@color/mobile_home_card_playing_stroke" />
                 </shape>
             </item>
             <item>
                 <shape android:shape="rectangle">
-                    <solid android:color="@color/mobile_card_background" />
-                    <corners android:radius="14dp" />
-                    <stroke
-                        android:width="1dp"
-                        android:color="@color/mobile_card_stroke" />
+                    <solid android:color="@color/mobile_home_card_bg" />
+                    <corners android:radius="12dp" />
                 </shape>
             </item>
         </selector>

@@ -1,8 +1,7 @@
 package com.livetv.android.ui.mobile
 
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.livetv.android.R
@@ -15,14 +14,13 @@ import com.livetv.android.domain.model.Channel
  *
  * 与 TV 端的 `ChannelCardPresenter`（Leanback）互不影响，两端各自维护展示逻辑。
  *
- * 卡片视觉：36dp 圆角方形徽章（分类强调色）+ 频道序号 + 频道名 + 副标题。
- * 徽章底色/描边按分类强调色程序化生成，因此这里只需要拿到一组强调色即可。
+ * 卡片视觉（暗黑影院风）：半透明暗卡 + 上下双行左对齐排版（短台号 / 定位副标题），
+ * 不再有彩色徽章与递增序号；最近观看以克制亮边与小光点标识。
  */
 class MobileChannelAdapter(
     rows: List<MobileRow>,
-    private val accentColors: IntArray,
     private val onChannelClick: (Channel) -> Unit,
-    /** 上次播放的频道 id：用于给卡片加"最近播放"高亮边框与蓝点。 */
+    /** 上次播放的频道 id：用于给卡片加\"最近播放\"柔和亮边与光点。 */
     private var lastPlayedChannelId: String? = null,
     /** 已收藏的频道 id 集合：用于展示卡片星标。 */
     private var favoriteChannelIds: Set<String> = emptySet(),
@@ -34,17 +32,13 @@ class MobileChannelAdapter(
 
     private var rows: List<MobileRow> = rows
 
-    /** 每个频道卡片在可见列表中的序号（1 起），用于右上角的 `01` / `02` 编号。 */
-    private var ordinals: IntArray = buildOrdinals(rows)
-
     /** 原地更新行数据，避免重建 Adapter 导致 ViewHolder 复用池失效。 */
     fun updateRows(newRows: List<MobileRow>) {
         rows = newRows
-        ordinals = buildOrdinals(newRows)
         notifyDataSetChanged()
     }
 
-    /** 更新"上次播放"高亮（仅局部刷新受影响的卡片，避免整表闪烁）。 */
+    /** 更新\"上次播放\"高亮（仅局部刷新受影响的卡片，避免整表闪烁）。 */
     fun setLastPlayedChannelId(channelId: String?) {
         if (lastPlayedChannelId == channelId) return
         val previous = lastPlayedChannelId
@@ -70,18 +64,6 @@ class MobileChannelAdapter(
         }
     }
 
-    private fun buildOrdinals(source: List<MobileRow>): IntArray {
-        val result = IntArray(source.size)
-        var counter = 0
-        source.forEachIndexed { index, row ->
-            if (row is MobileRow.ChannelCard) {
-                counter += 1
-                result[index] = counter
-            }
-        }
-        return result
-    }
-
     override fun getItemCount(): Int = rows.size
 
     override fun getItemViewType(position: Int): Int = when (rows[position]) {
@@ -98,7 +80,6 @@ class MobileChannelAdapter(
 
             else -> ChannelViewHolder(
                 binding = ItemMobileChannelBinding.inflate(inflater, parent, false),
-                accentColors = accentColors,
                 onChannelClick = onChannelClick,
                 onChannelLongClick = onChannelLongClick,
                 onDpadUp = onDpadUp,
@@ -111,7 +92,6 @@ class MobileChannelAdapter(
             is MobileRow.CategoryHeader -> (holder as HeaderViewHolder).bind(row)
             is MobileRow.ChannelCard -> (holder as ChannelViewHolder).bind(
                 card = row,
-                ordinal = ordinals[position],
                 isLastPlayed = row.channel.id == lastPlayedChannelId,
                 isFavorite = row.channel.id in favoriteChannelIds,
             )
@@ -131,7 +111,6 @@ class MobileChannelAdapter(
 
     class ChannelViewHolder(
         private val binding: ItemMobileChannelBinding,
-        private val accentColors: IntArray,
         private val onChannelClick: (Channel) -> Unit,
         private val onChannelLongClick: ((Channel) -> Unit)? = null,
         private val onDpadUp: ((Int) -> Boolean)? = null,
@@ -139,31 +118,23 @@ class MobileChannelAdapter(
 
         fun bind(
             card: MobileRow.ChannelCard,
-            ordinal: Int,
             isLastPlayed: Boolean = false,
             isFavorite: Boolean = false,
         ) {
             val channel = card.channel
             binding.root.isSelected = isLastPlayed
-            val accent = accentColorFor(card.categoryName)
 
-            binding.channelBadge.text = MobileChannelList.extractChannelBadge(channel.name)
-            applyBadgeStyle(binding.channelBadge, accent)
-            binding.channelIndex.text = MobileChannelList.formatChannelIndex(ordinal)
-            binding.channelName.text = channel.name
-            binding.channelPlayingDot.visibility =
-                if (isLastPlayed) android.view.View.VISIBLE else android.view.View.GONE
-            binding.channelFavoriteMark.visibility =
-                if (isFavorite) android.view.View.VISIBLE else android.view.View.GONE
-
-            // 副标题只展示"用户能看懂"的信息；没有有效简介时整行隐藏，主标题自然垂直居中
-            val subtitle = MobileChannelList.sanitizeSubtitle(channel)
-            if (subtitle == null) {
-                binding.channelDescription.visibility = android.view.View.GONE
+            // 上下双行：短台号/简称 + 定位副标题，避免单行挤压截断
+            val typography = MobileChannelList.resolveCardTypography(channel, card.categoryName)
+            binding.channelName.text = typography.title
+            if (typography.subtitle.isBlank()) {
+                binding.channelDescription.visibility = View.GONE
             } else {
-                binding.channelDescription.visibility = android.view.View.VISIBLE
-                binding.channelDescription.text = subtitle
+                binding.channelDescription.visibility = View.VISIBLE
+                binding.channelDescription.text = typography.subtitle
             }
+            binding.channelPlayingDot.visibility = if (isLastPlayed) View.VISIBLE else View.GONE
+            binding.channelFavoriteMark.visibility = if (isFavorite) View.VISIBLE else View.GONE
 
             // 无障碍描述统一走字符串资源（含状态后缀占位符），避免硬编码文案
             val context = binding.root.context
@@ -195,40 +166,6 @@ class MobileChannelAdapter(
                     true
                 } ?: false
             }
-        }
-
-        /**
-         * 分类强调色：同一分类始终得到同一个颜色（由 `categoryAccentIndex` 稳定映射）。
-         */
-        private fun accentColorFor(categoryName: String): Int {
-            if (accentColors.isEmpty()) return DEFAULT_ACCENT
-            val index = MobileChannelList.categoryAccentIndex(categoryName)
-            return accentColors[index % accentColors.size]
-        }
-
-        /**
-         * 徽章背景：低饱和分类色底 + 1dp 同色边框，文字用原色，保证暗色背景下仍然克制。
-         */
-        private fun applyBadgeStyle(badge: android.widget.TextView, accent: Int) {
-            val density = badge.resources.displayMetrics.density
-            val shape = GradientDrawable()
-            shape.shape = GradientDrawable.RECTANGLE
-            shape.cornerRadius = 10f * density
-            shape.setColor(withAlpha(accent, 0.16f))
-            shape.setStroke((1f * density).toInt().coerceAtLeast(1), withAlpha(accent, 0.55f))
-            badge.background = shape
-            badge.setTextColor(accent)
-        }
-
-        private fun withAlpha(color: Int, factor: Float): Int = Color.argb(
-            (Color.alpha(color) * factor).toInt().coerceIn(0, 255),
-            Color.red(color),
-            Color.green(color),
-            Color.blue(color),
-        )
-
-        companion object {
-            private const val DEFAULT_ACCENT = 0xFF3B82F6.toInt()
         }
     }
 

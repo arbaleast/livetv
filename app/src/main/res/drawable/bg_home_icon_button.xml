@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 顶栏图标按钮：圆形暗底 #14FFFFFF；4dp inset 保证 48dp 触控热区而视觉为 40dp -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="4dp">
+    <ripple android:color="#26FFFFFF">
+        <item>
+            <shape android:shape="oval">
+                <solid android:color="@color/mobile_home_icon_bg" />
+            </shape>
+        </item>
+    </ripple>
+</inset>

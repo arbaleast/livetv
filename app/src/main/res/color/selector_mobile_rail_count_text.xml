@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 分类数量角标文字色：选中态浅蓝（对深蓝底约 4.9:1），未选中态次级灰（约 6.0:1） -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:color="@color/mobile_category_selected_count" android:state_selected="true" />
-    <item android:color="@color/mobile_text_tertiary" />
+    <item android:color="@color/mobile_home_text_primary" android:state_selected="true" />
+    <item android:color="@color/mobile_home_text_secondary" />
 </selector>
