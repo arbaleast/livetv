@@ -38,7 +38,7 @@
                 android:layout_width="40dp"
                 android:layout_height="40dp"
                 android:layout_gravity="top|center_horizontal"
-                android:layout_marginTop="14dp"
+                android:layout_marginTop="16dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/ic_home_play_ring" />
 
@@ -280,17 +280,39 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
-        <TextView
-            android:id="@+id/empty_view"
+        <LinearLayout
+            android:id="@+id/empty_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
             android:gravity="center"
+            android:orientation="vertical"
             android:paddingStart="24dp"
             android:paddingEnd="24dp"
-            android:text="@string/mobile_empty_channels"
-            android:textColor="@color/mobile_home_text_secondary"
-            android:textSize="14sp"
-            android:visibility="gone" />
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/empty_view"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="@string/mobile_empty_channels"
+                android:textColor="@color/mobile_home_text_secondary"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/btn_empty_retry"
+                style="@style/WidgetLiveTvHeaderAction"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:background="@drawable/bg_mobile_action_button"
+                android:minWidth="120dp"
+                android:minHeight="48dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
+                android:text="@string/mobile_action_retry"
+                android:visibility="gone" />
+        </LinearLayout>
     </FrameLayout>
 </LinearLayout>

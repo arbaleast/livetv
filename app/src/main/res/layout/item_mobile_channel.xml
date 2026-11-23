@@ -56,7 +56,7 @@
             android:importantForAccessibility="no"
             android:text="@string/player_touch_favorited"
             android:textColor="@color/mobile_home_text_secondary"
-            android:textSize="11sp"
+            android:textSize="12sp"
             android:visibility="gone" />
 
         <View

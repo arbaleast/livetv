@@ -101,6 +101,7 @@ class MobileMainActivity : AppCompatActivity() {
     private var headerHidden = false
 
     private var accumulatedDy = 0
+    private var lastOpenChannelElapsedMs = 0L
 
     private val searchBackCallback = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() {
@@ -259,6 +260,7 @@ class MobileMainActivity : AppCompatActivity() {
 
     private fun setupHeaderActions() {
         binding.mobileRefresh.setOnClickListener { reloadCatalogs() }
+        binding.btnEmptyRetry.setOnClickListener { reloadCatalogs() }
 
         val expandHeaderOnFocus = View.OnFocusChangeListener { _, hasFocus ->
             if (hasFocus && isFloatingHeaderMode()) {
@@ -427,6 +429,14 @@ class MobileMainActivity : AppCompatActivity() {
         binding.rvChannels.itemAnimator = null
         binding.rvChannels.addItemDecoration(GridSpacingDecoration())
         setGridLayoutManager(currentSpanCount)
+        binding.rvChannels.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (isSearchMode && newState == RecyclerView.SCROLL_STATE_DRAGGING) {
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.hideSoftInputFromWindow(binding.editSearch.windowToken, 0)
+                }
+            }
+        })
         if (isFloatingHeaderMode()) {
             binding.rvChannels.addOnScrollListener(headerHideOnScrollListener())
             binding.layoutTopHeaderContainer.post {
@@ -709,20 +719,23 @@ class MobileMainActivity : AppCompatActivity() {
             binding.rvChannels.visibility = View.GONE
             val showLoading = !isSearchMode && catalogLoading && categories.isEmpty()
             binding.loadingView.visibility = if (showLoading) View.VISIBLE else View.GONE
-            binding.emptyView.visibility = if (showLoading) View.GONE else View.VISIBLE
-            binding.emptyView.text = if (isSearchMode && trimmedQuery.isNotEmpty()) {
-                getString(R.string.mobile_search_empty, trimmedQuery)
-            } else if (selectedCategoryId == MobileChannelList.FAVORITE_CATEGORY_ID && categories.isNotEmpty()) {
-                getString(R.string.mobile_favorites_empty)
-            } else {
-                getString(R.string.mobile_empty_channels)
+            binding.emptyContainer.visibility = if (showLoading) View.GONE else View.VISIBLE
+            val isSearchEmpty = isSearchMode && trimmedQuery.isNotEmpty()
+            val isFavoritesEmpty =
+                selectedCategoryId == MobileChannelList.FAVORITE_CATEGORY_ID && categories.isNotEmpty()
+            binding.emptyView.text = when {
+                isSearchEmpty -> getString(R.string.mobile_search_empty, trimmedQuery)
+                isFavoritesEmpty -> getString(R.string.mobile_favorites_empty)
+                else -> getString(R.string.mobile_empty_channels)
             }
+            binding.btnEmptyRetry.visibility =
+                if (!showLoading && !isSearchEmpty && !isFavoritesEmpty) View.VISIBLE else View.GONE
             showTopHeader(animate = false)
             return
         }
 
         binding.loadingView.visibility = View.GONE
-        binding.emptyView.visibility = View.GONE
+        binding.emptyContainer.visibility = View.GONE
         binding.rvChannels.visibility = View.VISIBLE
         channelAdapter.updateRows(rows)
         if (isFloatingHeaderMode()) {
@@ -746,6 +759,9 @@ class MobileMainActivity : AppCompatActivity() {
     }
 
     private fun openChannel(channel: Channel) {
+        val nowMs = android.os.SystemClock.elapsedRealtime()
+        if (nowMs - lastOpenChannelElapsedMs < 500L) return
+        lastOpenChannelElapsedMs = nowMs
         if (channel.id.startsWith(CctvWebChannel.CHANNEL_PREFIX)) {
             MobilePlayerTransitionHelper.dismissOtherEngineBeforeLaunch(CctvWebPlayerActivity::class.java)
             startActivity(

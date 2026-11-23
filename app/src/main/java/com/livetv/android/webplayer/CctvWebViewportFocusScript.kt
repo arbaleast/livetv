@@ -494,14 +494,22 @@ object CctvWebViewportFocusScript {
 })();
 """.trimIndent()
 
-    /** 预热槽转正解除静音脚本：切到前台后恢复音轨。 */
+    /** 预热槽转正解除静音脚本：切到前台后恢复音轨并在暂停时唤醒播放。 */
     val UNMUTE_MEDIA_SCRIPT: String = """
 (function () {
   window.__livetvMuted = false;
   var els = document.querySelectorAll('video,audio');
   for (var i = 0; i < els.length; i++) {
-    els[i].muted = false;
-    els[i].volume = 1;
+    var el = els[i];
+    el.muted = false;
+    el.removeAttribute('muted');
+    el.volume = 1;
+    if (el.paused && el.readyState >= 2) {
+      try {
+        var p = el.play();
+        if (p && typeof p.catch === 'function') { p.catch(function () {}); }
+      } catch (e) {}
+    }
   }
 })();
 """.trimIndent()

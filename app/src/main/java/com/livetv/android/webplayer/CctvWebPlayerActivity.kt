@@ -144,7 +144,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private val vodEndedPollRunnable = Runnable { pollVodEndedState() }
     private val warmPoolPrepareRunnable = Runnable { prepareWarmSlot() }
     private val warmPoolPollRunnable = Runnable { pollWarmSlotState() }
-    private val previousSlotExpireRunnable = Runnable { destroyPreviousSlot() }
+    private val previousSlotExpireRunnable = Runnable {
+        destroyPreviousSlot()
+        scheduleWarmSlotPrepare()
+    }
 
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
@@ -1883,6 +1886,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     }
 
     private fun prepareWarmSlot() {
+        if (previousSlot != null) return
         if (!CctvWebWarmPoolPolicy.shouldWarm(
                 isPlaying = isPlaying,
                 revealed = revealed,
@@ -2004,10 +2008,20 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         promoted.alpha = 1f
         promoted.isFocusable = true
         promoted.isClickable = true
+        promoted.onResume()
         promoted.bringToFront()
+        promoted.requestFocus()
         promoted.requestLayout()
         applyRequestedVideoFrameRate(promoted)
         promoted.evaluateJavascript(CctvWebViewportFocusScript.UNMUTE_MEDIA_SCRIPT, null)
+        mainHandler.postDelayed(
+            {
+                if (webView === promoted && !isFinishing && !isDestroyed) {
+                    promoted.evaluateJavascript(CctvWebViewportFocusScript.UNMUTE_MEDIA_SCRIPT, null)
+                }
+            },
+            UNMUTE_RETRY_DELAY_MS,
+        )
         if (nativeControlsVisible && !isInPictureInPictureMode) {
             promoted.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
             chrome.setWebNativeControlsVisible(true, revealTopBar = false)
@@ -2071,6 +2085,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         channelName: String,
         url: String,
     ) {
+        destroyWarmSlot()
         destroyPreviousSlot()
         oldView.evaluateJavascript(CctvWebViewportFocusScript.MUTE_MEDIA_SCRIPT, null)
         oldView.visibility = View.INVISIBLE
@@ -2173,7 +2188,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         private const val VOD_ENDED_POLL_INTERVAL_MS = 1_500L
         private const val WARM_POOL_PREPARE_DELAY_MS = 1_800L
         private const val WARM_POOL_POLL_MS = 300L
-        private const val PREVIOUS_SLOT_TTL_MS = 20_000L
+        private const val PREVIOUS_SLOT_TTL_MS = 12_000L
+        private const val UNMUTE_RETRY_DELAY_MS = 250L
         private const val OVERLAY_FADE_MS = MobileLoadingScenePolicy.FADE_DURATION_MS
         private const val PIXEL_COPY_TIMEOUT_MS = 180L
         private const val MAX_LAST_FRAME_EDGE_PX = 1280
