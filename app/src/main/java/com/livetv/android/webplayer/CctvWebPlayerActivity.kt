@@ -123,8 +123,28 @@ class CctvWebPlayerActivity : AppCompatActivity() {
     private var supportsPip = false
     private var isSwitchingEngine = false
 
+    private data class WarmSlot(
+        val channelId: String,
+        val channelName: String,
+        val url: String,
+        val webView: WebView,
+        var isPlaying: Boolean = false,
+        var failed: Boolean = false,
+    )
+
+    private var warmSlot: WarmSlot? = null
+    private var previousSlot: WarmSlot? = null
+    private var previousActiveWasPlayingForKeep: Boolean = false
+    private var previousActiveChannelIdForKeep: String? = null
+    private var previousActiveChannelNameForKeep: String? = null
+    private var previousActiveChannelUrlForKeep: String? = null
+    private var lastSwitchDirection: Int = 1
+
     private val backgroundSuspendRunnable = Runnable { suspendWebViewInBackground() }
     private val vodEndedPollRunnable = Runnable { pollVodEndedState() }
+    private val warmPoolPrepareRunnable = Runnable { prepareWarmSlot() }
+    private val warmPoolPollRunnable = Runnable { pollWarmSlotState() }
+    private val previousSlotExpireRunnable = Runnable { destroyPreviousSlot() }
 
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
@@ -169,7 +189,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         if (!revealed && elapsed >= focusTimeoutMs) {
             reveal(generation)
         }
-        val nextDelay = if (elapsed >= SLOW_POLL_AFTER_MS) SLOW_POLL_INTERVAL_MS else POLL_INTERVAL_MS
+        val nextDelay = when {
+            elapsed >= SLOW_POLL_AFTER_MS -> SLOW_POLL_INTERVAL_MS
+            elapsed < 3_000L -> FAST_POLL_INTERVAL_MS
+            else -> POLL_INTERVAL_MS
+        }
 
         view.evaluateJavascript(CctvWebViewportFocusScript.CHECK_STATE_SCRIPT) { raw ->
             if (!switchGeneration.isCurrent(generation)) return@evaluateJavascript
@@ -467,6 +491,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
+            setSupportZoom(false)
+            builtInZoomControls = false
+            displayZoomControls = false
             allowFileAccess = false
             allowContentAccess = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -488,8 +515,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 if (request.isForMainFrame) return super.shouldInterceptRequest(view, request)
                 val uri = request.url
-                MobileLoadingScenePolicy.classifyCctvNetworkSignal(uri.host, uri.path)?.let { stage ->
-                    notifyObservedNetworkStage(stage)
+                if (webView === view) {
+                    MobileLoadingScenePolicy.classifyCctvNetworkSignal(uri.host, uri.path)?.let { stage ->
+                        notifyObservedNetworkStage(stage)
+                    }
                 }
                 val blocked = CctvWebResourceBlocker.match(uri.host, uri.path, uri.query)
                 if (blocked != null) {
@@ -502,6 +531,15 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                         mapOf("Access-Control-Allow-Origin" to "*"),
                         ByteArrayInputStream(blocked.body),
                     )
+                }
+                CctvWebStaticResourceCache.getOrFetch(
+                    url = uri.toString(),
+                    method = request.method,
+                    host = uri.host,
+                    path = uri.path,
+                    requestHeaders = request.requestHeaders,
+                )?.let { cached ->
+                    return cached
                 }
                 return super.shouldInterceptRequest(view, request)
             }
@@ -518,6 +556,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
             override fun onPageCommitVisible(view: WebView, url: String) {
                 if (url == ABOUT_BLANK) return
+                if (warmSlot?.webView === view) {
+                    injectWarmSlotScripts(view)
+                    return
+                }
+                if (previousSlot?.webView === view) return
                 val navGen = webViewNavigationGeneration
                 if (!switchGeneration.isCurrent(navGen)) return
                 injectFocusScript(view, navGen)
@@ -525,6 +568,11 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 if (url == ABOUT_BLANK) return
+                if (warmSlot?.webView === view) {
+                    injectWarmSlotScripts(view)
+                    return
+                }
+                if (previousSlot?.webView === view) return
                 val navGen = webViewNavigationGeneration
                 if (!switchGeneration.isCurrent(navGen)) return
                 injectFocusScript(view, navGen)
@@ -536,6 +584,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 error: WebResourceError,
             ) {
                 if (!request.isForMainFrame) return
+                if (warmSlot?.webView === view || previousSlot?.webView === view) return slotError(view)
                 val navGen = webViewNavigationGeneration
                 if (!switchGeneration.isCurrent(navGen)) return
                 awaitingPageCommit = false
@@ -549,11 +598,12 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 errorResponse: WebResourceResponse,
             ) {
                 if (!request.isForMainFrame) return
-                val navGen = webViewNavigationGeneration
-                if (!switchGeneration.isCurrent(navGen)) return
-                awaitingPageCommit = false
-                Log.w(TAG, "main frame http: " + errorResponse.statusCode + " gen=" + navGen)
-                showLoadFailure(R.string.cctv_web_load_failed, navGen)
+                if (view !== webView) return slotError(view)
+                if (switchGeneration.isCurrent(webViewNavigationGeneration)) {
+                    awaitingPageCommit = false
+                    Log.w(TAG, "main frame http: " + errorResponse.statusCode + " gen=" + webViewNavigationGeneration)
+                    showLoadFailure(R.string.cctv_web_load_failed, webViewNavigationGeneration)
+                }
             }
 
             override fun onRenderProcessGone(
@@ -565,13 +615,25 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                     "renderer gone: crash=" + detail.didCrash() +
                         " priority=" + detail.rendererPriorityAtExit(),
                 )
-                cancelPendingPixelCopy()
-                clearLastFrameView()
                 (view.parent as? ViewGroup)?.removeView(view)
                 view.webChromeClient = null
-                webChromeClient = null
                 view.removeAllViews()
                 view.destroy()
+                if (warmSlot?.webView === view) {
+                    mainHandler.removeCallbacks(warmPoolPollRunnable)
+                    warmSlot = null
+                    return true
+                }
+                if (previousSlot?.webView === view) {
+                    mainHandler.removeCallbacks(previousSlotExpireRunnable)
+                    previousSlot = null
+                    return true
+                }
+                cancelPendingPixelCopy()
+                clearLastFrameView()
+                destroyWarmSlot()
+                destroyPreviousSlot()
+                webChromeClient = null
                 if (webView === view) webView = null
                 suspendedInBackground = false
                 mainHandler.removeCallbacks(backgroundSuspendRunnable)
@@ -863,6 +925,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         if (revealed) return
         revealed = true
         gestureController.isRevealed = true
+        if (isPlaying) {
+            scheduleWarmSlotPrepare()
+        }
         val fadeLastFrame = hasVisibleLastFrame()
         val hasOverlay = ::loadingOverlay.isInitialized && loadingOverlay.isOverlayVisible
         if (!hasOverlay && !fadeLastFrame) return
@@ -885,9 +950,36 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         startedAt = System.currentTimeMillis()
         mainHandler.removeCallbacks(revealTimeoutRunnable)
         mainHandler.postDelayed(revealTimeoutRunnable, CctvWebChannel.focusTimeoutMs(channelId))
-        applyUserAgentForChannel(view, channelId)
-        view.stopLoading()
-        view.loadUrl(url)
+        // 跳跃切台时改用全新 WebView 实例并销毁旧实例：
+        // 1. 彻底隔离前一台（尤其是桌面端 cctv3/6/8 与移动端页面互切）的视口缩放状态，消除画面放大；
+        // 2. 避免旧页 WASM/MSE/WebAudio 同步卸载拖慢新台自举。
+        val fresh = if (webView === view) runCatching { buildWebView() }.getOrNull() else null
+        if (fresh != null) {
+            fresh.visibility = View.VISIBLE
+            touchContainer.addView(fresh, matchParent())
+            webView = fresh
+            val prevId = previousActiveChannelIdForKeep
+            val prevName = previousActiveChannelNameForKeep
+            val prevUrl = previousActiveChannelUrlForKeep
+            if (previousActiveWasPlayingForKeep &&
+                prevId != null &&
+                prevName != null &&
+                prevUrl != null &&
+                CctvWebChannel.keyOf(prevId) != null &&
+                !CctvWebChannel.isVodPoolChannel(prevId) &&
+                CctvWebChannel.keyOf(prevId) != CctvWebChannel.keyOf(channelId)
+            ) {
+                keepAsPreviousSlot(view, prevId, prevName, prevUrl)
+            } else {
+                destroySingleWebView(view)
+            }
+            applyUserAgentForChannel(fresh, channelId)
+            fresh.loadUrl(url)
+        } else {
+            applyUserAgentForChannel(view, channelId)
+            view.stopLoading()
+            view.loadUrl(url)
+        }
     }
 
     private fun captureLastFrameAndLoad(view: WebView, channelId: String, url: String, generation: Long) {
@@ -898,10 +990,17 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             return
         }
         // 同步取消全部外框/抽屉动画并将整个 chrome 浮层置 View.GONE，
-        // 通过 Choreographer 连续等待 2 个 Vsync 帧确保 RenderThread 已向 SurfaceFlinger 提交纯净视频帧
+        // 等待 1 个 Vsync 帧提交后立即截图并启动加载，降低串行等待
         chrome.dismissAllImmediately()
-        chrome.rootView.visibility = View.GONE
-        val secondVsyncCallback = Choreographer.FrameCallback {
+        val wasChromeGone = chrome.rootView.visibility == View.GONE
+        if (!wasChromeGone) {
+            chrome.rootView.visibility = View.GONE
+        }
+        if (wasChromeGone) {
+            requestPixelCopyForLastFrame(view, channelId, url, generation)
+            return
+        }
+        val vsyncCallback = Choreographer.FrameCallback {
             pendingChoreographerCallback = null
             if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
                 restoreChromeVisibility()
@@ -909,17 +1008,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             }
             requestPixelCopyForLastFrame(view, channelId, url, generation)
         }
-        val firstVsyncCallback = Choreographer.FrameCallback {
-            if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) {
-                pendingChoreographerCallback = null
-                restoreChromeVisibility()
-                return@FrameCallback
-            }
-            pendingChoreographerCallback = secondVsyncCallback
-            Choreographer.getInstance().postFrameCallback(secondVsyncCallback)
-        }
-        pendingChoreographerCallback = firstVsyncCallback
-        Choreographer.getInstance().postFrameCallback(firstVsyncCallback)
+        pendingChoreographerCallback = vsyncCallback
+        Choreographer.getInstance().postFrameCallback(vsyncCallback)
     }
 
     private fun requestPixelCopyForLastFrame(
@@ -1070,6 +1160,9 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         }
         chrome.setPlaying(true)
         updateAutoPipParams()
+        if (revealed) {
+            scheduleWarmSlotPrepare()
+        }
         if (CctvWebChannel.isVodPoolChannel(currentChannelId)) {
             activeVodEndedGeneration = generation
             mainHandler.removeCallbacks(vodEndedPollRunnable)
@@ -1128,6 +1221,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
                 if (targetUrl == null) {
                     Toast.makeText(this, R.string.cctv_web_unsupported, Toast.LENGTH_SHORT).show()
                 } else {
+                    updateSwitchDirection(currentChannelId, action.channelId)
                     chrome.dismissAllImmediately()
                     reloadChannel(action.channelId, action.channelName, targetUrl)
                 }
@@ -1144,6 +1238,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         val generation = switchGeneration.nextGeneration()
         val wasPlaying = isPlaying
         isSwitchingEngine = true
+        destroyWarmSlot()
+        destroyPreviousSlot()
         updateAutoPipParams()
         cancelPendingPixelCopy()
         mainHandler.removeCallbacks(pollRunnable)
@@ -1341,7 +1437,37 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         mainHandler.removeCallbacks(pollRunnable)
         mainHandler.removeCallbacks(vodEndedPollRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
+        mainHandler.removeCallbacks(warmPoolPrepareRunnable)
+        mainHandler.removeCallbacks(warmPoolPollRunnable)
 
+        val matchedPreviousSlot = previousSlot?.takeIf {
+            !fromCrossEngineSwitch &&
+                !it.failed &&
+                CctvWebChannel.keyOf(it.channelId) == CctvWebChannel.keyOf(channelId)
+        }
+        if (matchedPreviousSlot != null) {
+            previousSlot = null
+            mainHandler.removeCallbacks(previousSlotExpireRunnable)
+            promoteWarmSlot(matchedPreviousSlot, channelId, channelName, generation, fromPreviousSlot = true)
+            return
+        }
+
+        val matchedWarmSlot = warmSlot?.takeIf {
+            !fromCrossEngineSwitch &&
+                !it.failed &&
+                CctvWebChannel.keyOf(it.channelId) == CctvWebChannel.keyOf(channelId)
+        }
+        if (matchedWarmSlot != null) {
+            promoteWarmSlot(matchedWarmSlot, channelId, channelName, generation, fromPreviousSlot = false)
+            return
+        }
+        destroyWarmSlot()
+        previousActiveWasPlayingForKeep = wasPlaying
+        previousActiveChannelIdForKeep = currentChannelId
+        previousActiveChannelNameForKeep = currentChannelName
+        previousActiveChannelUrlForKeep = CctvWebChannel.liveUrl(currentChannelId)
+
+        val previousChannelId = currentChannelId
         currentChannelId = channelId
         currentChannelName = CctvWebSwitchPolicy.resolveChannelName(
             channelId = channelId,
@@ -1349,6 +1475,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             fallbackName = channelName,
         )
         MobileUiPreferences.setLastPlayedChannelId(this, channelId)
+        MobileUiPreferences.recordCctvSwitch(this, previousChannelId, channelId)
         chrome.setTitle(displayTitleForCurrentChannel())
         chrome.setCatalog(categories, currentChannelId)
         updateFavoriteUi()
@@ -1476,6 +1603,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         mainHandler.removeCallbacks(pollRunnable)
         mainHandler.removeCallbacks(vodEndedPollRunnable)
         mainHandler.removeCallbacks(revealTimeoutRunnable)
+        destroyWarmSlot()
+        destroyPreviousSlot()
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_WAIVED, true)
         view.stopLoading()
         view.loadUrl(ABOUT_BLANK)
@@ -1585,6 +1714,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         if (isInPictureInPictureMode) {
             Log.i(TAG, "entered picture-in-picture mode")
+            destroyWarmSlot()
+            destroyPreviousSlot()
             chrome.setPictureInPictureMode(true)
             if (nativeControlsVisible) {
                 // 小窗期间临时隐藏官方网页控件避免遮挡视频（不改写持久化偏好）
@@ -1607,10 +1738,23 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         mainHandler.removeCallbacks(pollRunnable)
         mainHandler.removeCallbacks(vodEndedPollRunnable)
         if (!isInPictureInPictureMode) {
+            destroyWarmSlot()
+            destroyPreviousSlot()
             webView?.onPause()
             webView?.pauseTimers()
         }
         super.onPause()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= TRIM_MEMORY_RUNNING_LOW) {
+            destroyWarmSlot()
+            destroyPreviousSlot()
+        }
+        if (level >= TRIM_MEMORY_RUNNING_CRITICAL) {
+            CctvWebStaticResourceCache.clear()
+        }
     }
 
     override fun onStop() {
@@ -1694,20 +1838,293 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         switchGeneration.nextGeneration()
         cancelPendingPixelCopy()
         clearLastFrameView()
+        destroyWarmSlot()
+        destroyPreviousSlot()
         mainHandler.removeCallbacksAndMessages(null)
         webView?.let { view ->
-            (view.parent as? ViewGroup)?.removeView(view)
-            view.onPause()
-            view.pauseTimers()
-            view.stopLoading()
-            view.webChromeClient = null
-            webChromeClient = null
-            view.loadUrl(ABOUT_BLANK)
-            view.clearHistory()
-            view.removeAllViews()
-            view.destroy()
+            destroySingleWebView(view)
         }
+        webChromeClient = null
         webView = null
+    }
+
+    // ---------------- 1-Slot 静音相邻台预热池 ----------------
+
+    private fun updateSwitchDirection(fromChannelId: String?, toChannelId: String?) {
+        val fromKey = CctvWebChannel.keyOf(fromChannelId) ?: return
+        val toKey = CctvWebChannel.keyOf(toChannelId) ?: return
+        val liveKeys = categories.asSequence()
+            .flatMap { it.channels.asSequence() }
+            .mapNotNull { CctvWebChannel.keyOf(it.id) }
+            .distinct()
+            .toList()
+        val fromIdx = liveKeys.indexOf(fromKey)
+        val toIdx = liveKeys.indexOf(toKey)
+        if (fromIdx >= 0 && toIdx >= 0 && fromIdx != toIdx) {
+            lastSwitchDirection = if (toIdx > fromIdx) 1 else -1
+        }
+    }
+
+    private fun scheduleWarmSlotPrepare() {
+        mainHandler.removeCallbacks(warmPoolPrepareRunnable)
+        if (!CctvWebWarmPoolPolicy.shouldWarm(
+                isPlaying = isPlaying,
+                revealed = revealed,
+                isInPictureInPictureMode = isInPictureInPictureMode,
+                suspendedInBackground = suspendedInBackground,
+                isFinishingOrDestroyed = isFinishing || isDestroyed,
+                isSwitchingEngine = isSwitchingEngine,
+                currentChannelId = currentChannelId,
+            )
+        ) {
+            return
+        }
+        mainHandler.postDelayed(warmPoolPrepareRunnable, WARM_POOL_PREPARE_DELAY_MS)
+    }
+
+    private fun prepareWarmSlot() {
+        if (!CctvWebWarmPoolPolicy.shouldWarm(
+                isPlaying = isPlaying,
+                revealed = revealed,
+                isInPictureInPictureMode = isInPictureInPictureMode,
+                suspendedInBackground = suspendedInBackground,
+                isFinishingOrDestroyed = isFinishing || isDestroyed,
+                isSwitchingEngine = isSwitchingEngine,
+                currentChannelId = currentChannelId,
+            )
+        ) {
+            return
+        }
+        val nextChannel = CctvWebWarmPoolPolicy.pickNextChannel(
+            currentChannelId = currentChannelId,
+            categories = categories,
+            direction = lastSwitchDirection,
+            frequencies = MobileUiPreferences.getCctvChannelFrequencies(this),
+            transitions = MobileUiPreferences.getCctvChannelTransitions(this),
+            favorites = MobileUiPreferences.getFavoriteChannelIds(this),
+        ) ?: return
+        prepareWarmSlotForChannel(nextChannel, reason = "predict dir=$lastSwitchDirection")
+    }
+
+    private fun prepareWarmSlotForChannel(nextChannel: Channel, reason: String) {
+        val nextUrl = CctvWebChannel.liveUrl(nextChannel.id) ?: return
+        val existing = warmSlot
+        if (existing != null &&
+            !existing.failed &&
+            CctvWebChannel.keyOf(existing.channelId) == CctvWebChannel.keyOf(nextChannel.id)
+        ) {
+            return
+        }
+
+        destroyWarmSlot()
+        val warmView = runCatching { buildWebView() }.getOrNull() ?: return
+        warmView.visibility = View.INVISIBLE
+        warmView.alpha = 0f
+        warmView.isFocusable = false
+        warmView.isClickable = false
+        warmView.settings.userAgentString = CctvWebUserAgent.resolveForChannel(baseUserAgent, nextChannel.id)
+        touchContainer.addView(warmView, 0, matchParent())
+
+        warmSlot = WarmSlot(
+            channelId = nextChannel.id,
+            channelName = nextChannel.name,
+            url = nextUrl,
+            webView = warmView,
+        )
+        warmView.loadUrl(nextUrl)
+        Log.i(TAG, "warmPool prepare ch=${nextChannel.id} ($reason)")
+    }
+
+    private fun injectWarmSlotScripts(view: WebView) {
+        if (warmSlot?.webView !== view) return
+        view.evaluateJavascript(CctvWebViewportFocusScript.MUTE_MEDIA_SCRIPT, null)
+        view.evaluateJavascript(CctvWebViewportFocusScript.FOCUS_SCRIPT, null)
+        view.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
+        mainHandler.removeCallbacks(warmPoolPollRunnable)
+        mainHandler.postDelayed(warmPoolPollRunnable, WARM_POOL_POLL_MS)
+    }
+
+    private fun pollWarmSlotState() {
+        val slot = warmSlot ?: return
+        if (slot.isPlaying || slot.failed) return
+        slot.webView.evaluateJavascript(CctvWebViewportFocusScript.CHECK_STATE_SCRIPT) { raw ->
+            val currentSlot = warmSlot ?: return@evaluateJavascript
+            if (currentSlot !== slot || currentSlot.failed) return@evaluateJavascript
+            if (raw?.trim()?.trim('"') == STATE_PLAYING) {
+                currentSlot.isPlaying = true
+                Log.i(TAG, "warmPool ready ch=${currentSlot.channelId}")
+            } else {
+                mainHandler.removeCallbacks(warmPoolPollRunnable)
+                mainHandler.postDelayed(warmPoolPollRunnable, WARM_POOL_POLL_MS)
+            }
+        }
+    }
+
+    private fun promoteWarmSlot(
+        slot: WarmSlot,
+        channelId: String,
+        channelName: String,
+        generation: Long,
+        fromPreviousSlot: Boolean = false,
+    ) {
+        if (!fromPreviousSlot) {
+            warmSlot = null
+        }
+        mainHandler.removeCallbacks(warmPoolPollRunnable)
+        mainHandler.removeCallbacks(warmPoolPrepareRunnable)
+
+        val oldView = webView
+        val wasOldPlaying = isPlaying
+        val previousChannelId = currentChannelId
+        val previousChannelName = currentChannelName
+        val previousChannelUrl = CctvWebChannel.liveUrl(previousChannelId)
+        currentChannelId = channelId
+        currentChannelName = CctvWebSwitchPolicy.resolveChannelName(
+            channelId = channelId,
+            categories = categories,
+            fallbackName = channelName,
+        )
+        currentVodUrl = null
+        currentVodTitle = null
+        MobileUiPreferences.setLastPlayedChannelId(this, channelId)
+        MobileUiPreferences.recordCctvSwitch(this, previousChannelId, channelId)
+        chrome.setTitle(displayTitleForCurrentChannel())
+        chrome.setCatalog(categories, currentChannelId)
+        updateFavoriteUi()
+
+        nativeControlsVisible = MobileUiPreferences.isCctvWebControlsVisible(this)
+        gestureController.reset()
+        gestureController.isNativeControlsVisible = nativeControlsVisible
+        chrome.hideError()
+        chrome.dismissAllImmediately()
+
+        val promoted = slot.webView
+        promoted.setInitialScale(0)
+        promoted.visibility = View.VISIBLE
+        promoted.alpha = 1f
+        promoted.isFocusable = true
+        promoted.isClickable = true
+        promoted.bringToFront()
+        promoted.requestLayout()
+        applyRequestedVideoFrameRate(promoted)
+        promoted.evaluateJavascript(CctvWebViewportFocusScript.UNMUTE_MEDIA_SCRIPT, null)
+        if (nativeControlsVisible && !isInPictureInPictureMode) {
+            promoted.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
+            chrome.setWebNativeControlsVisible(true, revealTopBar = false)
+        } else {
+            promoted.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_ON_SCRIPT, null)
+            chrome.setWebNativeControlsVisible(false, revealTopBar = false)
+        }
+
+        webView = promoted
+        if (oldView != null && oldView !== promoted) {
+            if (wasOldPlaying &&
+                previousChannelUrl != null &&
+                CctvWebChannel.keyOf(previousChannelId) != null &&
+                !CctvWebChannel.isVodPoolChannel(previousChannelId) &&
+                CctvWebChannel.keyOf(previousChannelId) != CctvWebChannel.keyOf(channelId)
+            ) {
+                keepAsPreviousSlot(oldView, previousChannelId, previousChannelName, previousChannelUrl)
+            } else {
+                destroySingleWebView(oldView)
+            }
+        }
+
+        hasLoadFailure = false
+        awaitingPageCommit = false
+        startedAt = System.currentTimeMillis()
+        updateAutoPipParams()
+
+        if (slot.isPlaying) {
+            isPlaying = true
+            revealed = true
+            gestureController.isPlaying = true
+            gestureController.isRevealed = true
+            clearLastFrameView()
+            if (::loadingOverlay.isInitialized) {
+                loadingOverlay.hide(animate = false)
+            }
+            chrome.setPlaying(true)
+            restoreChromeVisibility()
+            scheduleWarmSlotPrepare()
+            val tag = if (fromPreviousSlot) "previousSlot instant swap" else "warmPool instant swap"
+            Log.i(TAG, "$tag gen=$generation ch=$channelId")
+        } else {
+            isPlaying = false
+            revealed = false
+            chrome.setPlaying(false)
+            showOverlay(
+                translucentForLastFrame = false,
+                scene = MobileLoadingScene.SCENE_B_CCTV_SWITCH,
+                generation = generation,
+            )
+            activeTimeoutGeneration = generation
+            mainHandler.postDelayed(revealTimeoutRunnable, CctvWebChannel.focusTimeoutMs(channelId))
+            schedulePoll(generation, POLL_INTERVAL_MS)
+            Log.i(TAG, "warmPool warm-in-progress promote gen=$generation ch=$channelId")
+        }
+    }
+
+    private fun keepAsPreviousSlot(
+        oldView: WebView,
+        channelId: String,
+        channelName: String,
+        url: String,
+    ) {
+        destroyPreviousSlot()
+        oldView.evaluateJavascript(CctvWebViewportFocusScript.MUTE_MEDIA_SCRIPT, null)
+        oldView.visibility = View.INVISIBLE
+        oldView.alpha = 0f
+        oldView.isFocusable = false
+        oldView.isClickable = false
+        previousSlot = WarmSlot(
+            channelId = channelId,
+            channelName = channelName,
+            url = url,
+            webView = oldView,
+            isPlaying = true,
+        )
+        mainHandler.postDelayed(previousSlotExpireRunnable, PREVIOUS_SLOT_TTL_MS)
+        Log.i(TAG, "previousSlot keep ch=$channelId ttl=${PREVIOUS_SLOT_TTL_MS}ms")
+    }
+
+    private fun destroyPreviousSlot() {
+        mainHandler.removeCallbacks(previousSlotExpireRunnable)
+        val slot = previousSlot ?: return
+        previousSlot = null
+        destroySingleWebView(slot.webView)
+    }
+
+    private fun slotError(view: WebView) {
+        warmSlot?.takeIf { it.webView === view }?.let { slot ->
+            slot.failed = true
+            destroyWarmSlot()
+        }
+        previousSlot?.takeIf { it.webView === view }?.let { slot ->
+            slot.failed = true
+            destroyPreviousSlot()
+        }
+    }
+
+    private fun destroyWarmSlot() {
+        mainHandler.removeCallbacks(warmPoolPrepareRunnable)
+        mainHandler.removeCallbacks(warmPoolPollRunnable)
+        val slot = warmSlot ?: return
+        warmSlot = null
+        destroySingleWebView(slot.webView)
+    }
+
+    private fun destroySingleWebView(view: WebView) {
+        (view.parent as? ViewGroup)?.removeView(view)
+        view.onPause()
+        // 注意：WebView.pauseTimers() 是进程级全局开关，严禁在单实例销毁/预热槽回收时调用，
+        // 否则会冻结前台正在播放或新转正 WebView 的全部 JS 定时器导致黑屏。
+        view.stopLoading()
+        view.webChromeClient = null
+        view.loadUrl(ABOUT_BLANK)
+        view.clearHistory()
+        view.removeAllViews()
+        view.destroy()
     }
 
     override fun onDestroy() {
@@ -1749,10 +2166,14 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         private const val STATE_PLAYING = "playing"
         private const val STATE_READY = "ready"
 
+        private const val FAST_POLL_INTERVAL_MS = 40L
         private const val POLL_INTERVAL_MS = 80L
         private const val SLOW_POLL_AFTER_MS = 15_000L
         private const val SLOW_POLL_INTERVAL_MS = 1_000L
         private const val VOD_ENDED_POLL_INTERVAL_MS = 1_500L
+        private const val WARM_POOL_PREPARE_DELAY_MS = 1_800L
+        private const val WARM_POOL_POLL_MS = 300L
+        private const val PREVIOUS_SLOT_TTL_MS = 20_000L
         private const val OVERLAY_FADE_MS = MobileLoadingScenePolicy.FADE_DURATION_MS
         private const val PIXEL_COPY_TIMEOUT_MS = 180L
         private const val MAX_LAST_FRAME_EDGE_PX = 1280

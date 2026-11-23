@@ -462,4 +462,47 @@ object CctvWebViewportFocusScript {
   }
 })();
 """.trimIndent()
+
+    /** 预热槽静音脚本：立即并持续将当前与后续创建的 video/audio 静音，防止后台预热漏音。 */
+    val MUTE_MEDIA_SCRIPT: String = """
+(function () {
+  window.__livetvMuted = true;
+  function enforceMute(root) {
+    if (!window.__livetvMuted || !root || !root.querySelectorAll) { return; }
+    var els = root.querySelectorAll('video,audio');
+    for (var i = 0; i < els.length; i++) {
+      els[i].muted = true;
+      els[i].volume = 0;
+    }
+  }
+  enforceMute(document);
+  if (!window.__livetvMuteHooked) {
+    window.__livetvMuteHooked = true;
+    var guard = function (e) {
+      if (!window.__livetvMuted) { return; }
+      var t = e && e.target;
+      if (t && (t.tagName === 'VIDEO' || t.tagName === 'AUDIO')) {
+        if (!t.muted) { t.muted = true; }
+        if (t.volume !== 0) { t.volume = 0; }
+      }
+    };
+    document.addEventListener('play', guard, true);
+    document.addEventListener('playing', guard, true);
+    document.addEventListener('loadedmetadata', guard, true);
+    document.addEventListener('volumechange', guard, true);
+  }
+})();
+""".trimIndent()
+
+    /** 预热槽转正解除静音脚本：切到前台后恢复音轨。 */
+    val UNMUTE_MEDIA_SCRIPT: String = """
+(function () {
+  window.__livetvMuted = false;
+  var els = document.querySelectorAll('video,audio');
+  for (var i = 0; i < els.length; i++) {
+    els[i].muted = false;
+    els[i].volume = 1;
+  }
+})();
+""".trimIndent()
 }

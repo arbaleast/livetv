@@ -15,12 +15,14 @@ class MobilePlayerChromePolicyTest {
         val mgtv = PlayerChromeCapabilities.MGTV
         assertTrue(mgtv.showTransportControls)
         assertTrue(mgtv.showAspectRatio)
+        assertTrue(mgtv.showVideoEnhance)
         assertFalse(mgtv.showWebControlToggle)
         assertFalse(mgtv.showReload)
 
         val cctv = PlayerChromeCapabilities.CCTV
         assertFalse(cctv.showTransportControls)
         assertFalse(cctv.showAspectRatio)
+        assertFalse(cctv.showVideoEnhance)
         assertTrue(cctv.showWebControlToggle)
         assertTrue(cctv.showReload)
     }

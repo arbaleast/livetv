@@ -75,4 +75,30 @@ class MobileUiPreferencesTest {
         assertTrue(src.contains("fun setCctvWebControlsVisible("))
         assertTrue(src.contains("cctv_web_controls_visible"))
     }
+
+    @Test
+    fun `video enhance mode preference defaults to OFF and persists round-trip`() {
+        val backend = InMemoryStore()
+        val store = MobileUiPreferenceStore(backend)
+        assertEquals("off", store.getVideoEnhanceModeStorageValue())
+
+        store.setVideoEnhanceModeStorageValue("standard")
+        assertEquals("standard", MobileUiPreferenceStore(backend).getVideoEnhanceModeStorageValue())
+
+        store.setVideoEnhanceModeStorageValue("strong")
+        assertEquals("strong", MobileUiPreferenceStore(backend).getVideoEnhanceModeStorageValue())
+    }
+
+    @Test
+    fun `video info overlay preference defaults to true and persists round-trip`() {
+        val backend = InMemoryStore()
+        val store = MobileUiPreferenceStore(backend)
+        assertTrue(store.isVideoInfoVisible())
+
+        store.setVideoInfoVisible(false)
+        assertFalse(MobileUiPreferenceStore(backend).isVideoInfoVisible())
+
+        store.setVideoInfoVisible(true)
+        assertTrue(MobileUiPreferenceStore(backend).isVideoInfoVisible())
+    }
 }

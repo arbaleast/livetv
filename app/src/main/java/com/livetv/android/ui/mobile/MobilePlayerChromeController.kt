@@ -38,6 +38,8 @@ internal class MobilePlayerChromeController(
         fun onNextChannel() {}
         fun onTogglePlayPause() {}
         fun onCycleAspect() {}
+        fun onCycleVideoEnhance() {}
+        fun onToggleVideoInfo() {}
         fun onToggleWebControls() {}
         fun onReload() {}
         fun onEnterPip() {}
@@ -113,6 +115,8 @@ internal class MobilePlayerChromeController(
         binding.chromePlayPause.visibility = transportVis
         binding.chromeNext.visibility = transportVis
 
+        binding.chromeInfo.visibility = if (capabilities.showVideoEnhance) View.VISIBLE else View.GONE
+        binding.chromeEnhance.visibility = if (capabilities.showVideoEnhance) View.VISIBLE else View.GONE
         binding.chromeAspect.visibility = if (capabilities.showAspectRatio) View.VISIBLE else View.GONE
         binding.chromeWebControls.visibility = if (capabilities.showWebControlToggle) View.VISIBLE else View.GONE
         binding.chromeWebControls.contentDescription =
@@ -155,6 +159,14 @@ internal class MobilePlayerChromeController(
         }
         binding.chromeReload.setOnClickListener {
             callbacks.onReload()
+            rescheduleAutoHideIfNeeded()
+        }
+        binding.chromeInfo.setOnClickListener {
+            callbacks.onToggleVideoInfo()
+            rescheduleAutoHideIfNeeded()
+        }
+        binding.chromeEnhance.setOnClickListener {
+            callbacks.onCycleVideoEnhance()
             rescheduleAutoHideIfNeeded()
         }
         binding.chromeAspect.setOnClickListener {
@@ -206,6 +218,15 @@ internal class MobilePlayerChromeController(
                 binding.chromeLock.layoutParams = lp
             }
         }
+        (binding.chromeVideoInfo.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+            val targetStart = (14 * density).toInt() + cutout.left
+            val targetTop = (64 * density).toInt() + cutout.top
+            if (lp.marginStart != targetStart || lp.topMargin != targetTop) {
+                lp.marginStart = targetStart
+                lp.topMargin = targetTop
+                binding.chromeVideoInfo.layoutParams = lp
+            }
+        }
     }
 
     // ---------------- 状态更新 ----------------
@@ -238,6 +259,7 @@ internal class MobilePlayerChromeController(
             hideViewImmediately(binding.chromeHud)
             hideViewImmediately(binding.chromeDrawerScrim)
             hideViewImmediately(binding.chromeDrawerPanel)
+            hideViewImmediately(binding.chromeVideoInfo)
             binding.chromeDrawerPanel.translationX = 0f
             binding.chromeErrorCard.visibility = View.GONE
         } else {
@@ -272,6 +294,21 @@ internal class MobilePlayerChromeController(
 
     fun updateAspectLabel(label: String) {
         binding.chromeAspectLabel.text = label
+    }
+
+    fun updateEnhanceLabel(label: String, active: Boolean) {
+        binding.chromeEnhanceLabel.text = label
+        binding.chromeEnhance.isSelected = active
+    }
+
+    fun updateVideoInfoOverlay(visible: Boolean, text: String?) {
+        binding.chromeInfo.isSelected = visible
+        if (!visible || text.isNullOrBlank() || stateMachine.state.isInPictureInPicture) {
+            binding.chromeVideoInfo.visibility = View.GONE
+        } else {
+            binding.chromeVideoInfo.text = text
+            binding.chromeVideoInfo.visibility = View.VISIBLE
+        }
     }
 
     fun setPlaying(playing: Boolean) {

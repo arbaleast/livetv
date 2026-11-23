@@ -8,6 +8,8 @@ import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -21,9 +23,13 @@ import com.livetv.android.domain.stream.Clock
 import com.livetv.android.domain.stream.StaticStreamResolver
 import com.livetv.android.domain.stream.StreamRefreshCoordinator
 import com.livetv.android.domain.stream.StreamResolver
+import com.livetv.android.domain.stream.StreamTypeDetector
 import com.livetv.android.domain.stream.SystemClock
+import com.livetv.android.media.Anime4kCnnGlEffect
 import com.livetv.android.media.NoRetryOnClientErrorPolicy
 import com.livetv.android.media.ScopedHeaderDataSourceFactory
+import com.livetv.android.util.VideoEnhanceMode
+import com.livetv.android.util.VideoEnhancePolicy
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -84,6 +90,9 @@ class PlayerManager(
         /** logcat tag：播放/会话诊断。 */
         private const val TAG = "LiveTvPlayer"
 
+        /** 向动态源（如 MGTV）请求首选清晰度编号（3=720P），服务端未开放时自动回退至最高可用清晰度。 */
+        private const val DEFAULT_PREFERRED_DEFINITION = "3"
+
     }
 
     private val appContext: Context = context.applicationContext
@@ -92,6 +101,8 @@ class PlayerManager(
     private val retryHandler = Handler(Looper.getMainLooper())
 
     private var player: ExoPlayer? = null
+    private var videoEnhanceMode: VideoEnhanceMode = VideoEnhanceMode.OFF
+    private var hasAppliedVideoEffectsOnce: Boolean = false
 
     /** 当前播放的频道。 */
     var currentChannel: Channel? = null
@@ -156,8 +167,33 @@ class PlayerManager(
     /** ExoPlayer 实例创建或释放时的回调，供 UI 绑定/解绑 `PlayerView.player`。 */
     var onPlayerChanged: ((ExoPlayer?) -> Unit)? = null
 
+    /** 视频流格式/尺寸变更回调，供信息浮层即时刷新。 */
+    var onVideoMetadataChanged: (() -> Unit)? = null
+
+    data class VideoInfoSnapshot(
+        val inputWidth: Int,
+        val inputHeight: Int,
+        val outputWidth: Int,
+        val outputHeight: Int,
+        val formatFps: Float,
+        val codecMime: String?,
+        val videoCodecs: String?,
+        val bitrateBps: Int,
+        val audioMime: String?,
+        val audioCodecs: String?,
+        val audioBitrateBps: Int,
+        val renderedFrames: Int,
+        val droppedFrames: Int,
+        val bufferedMs: Long,
+        val streamHost: String?,
+        val streamType: String,
+        val enhanceMode: VideoEnhanceMode,
+        val glPipelineActive: Boolean,
+    )
+
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            onVideoMetadataChanged?.invoke()
             dispatch(
                 when (playbackState) {
                     Player.STATE_BUFFERING -> PlaybackEvent.Buffering
@@ -172,7 +208,16 @@ class PlayerManager(
             if (isPlaying) {
                 markPlaying()
             }
+            onVideoMetadataChanged?.invoke()
             dispatch(if (isPlaying) PlaybackEvent.Playing else PlaybackEvent.Paused)
+        }
+
+        override fun onVideoSizeChanged(videoSize: VideoSize) {
+            onVideoMetadataChanged?.invoke()
+        }
+
+        override fun onTracksChanged(tracks: Tracks) {
+            onVideoMetadataChanged?.invoke()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -189,9 +234,13 @@ class PlayerManager(
      */
     fun start(channel: Channel?) {
         if (player == null) {
+            hasAppliedVideoEffectsOnce = false
             player = ExoPlayer.Builder(appContext).build().apply {
                 playWhenReady = true
                 addListener(playerListener)
+                if (VideoEnhancePolicy.shouldApplyOnPlayerStart(videoEnhanceMode)) {
+                    applyEffectsToPlayer(this, videoEnhanceMode)
+                }
             }
         }
         onPlayerChanged?.invoke(player)
@@ -222,6 +271,58 @@ class PlayerManager(
     }
 
     // ---------------- 频道 / 源操作 ----------------
+
+    fun getVideoInfoSnapshot(): VideoInfoSnapshot? {
+        val activePlayer = player ?: return null
+        val format = activePlayer.videoFormat
+        val audioFormat = activePlayer.audioFormat
+        val size = activePlayer.videoSize
+        val inputW = format?.width?.takeIf { it > 0 } ?: size.width
+        val inputH = format?.height?.takeIf { it > 0 } ?: size.height
+        val counters = activePlayer.videoDecoderCounters
+        val activeUrl = activeSession?.url ?: currentChannel?.streamUrl
+        val host = activeUrl?.let { runCatching { Uri.parse(it).host }.getOrNull() }
+        val isHls = activeUrl != null &&
+            (activeSession?.mimeType == StreamTypeDetector.MIME_HLS || StreamTypeDetector.isLikelyHlsUrl(activeUrl))
+        return VideoInfoSnapshot(
+            inputWidth = inputW,
+            inputHeight = inputH,
+            outputWidth = size.width,
+            outputHeight = size.height,
+            formatFps = format?.frameRate ?: -1f,
+            codecMime = format?.sampleMimeType,
+            videoCodecs = format?.codecs,
+            bitrateBps = format?.bitrate ?: -1,
+            audioMime = audioFormat?.sampleMimeType,
+            audioCodecs = audioFormat?.codecs,
+            audioBitrateBps = audioFormat?.bitrate ?: -1,
+            renderedFrames = counters?.renderedOutputBufferCount ?: 0,
+            droppedFrames = counters?.droppedBufferCount ?: 0,
+            bufferedMs = activePlayer.totalBufferedDuration.coerceAtLeast(0L),
+            streamHost = host,
+            streamType = if (isHls) "HLS" else "Progressive",
+            enhanceMode = videoEnhanceMode,
+            glPipelineActive = hasAppliedVideoEffectsOnce,
+        )
+    }
+
+    fun setVideoEnhanceMode(mode: VideoEnhanceMode) {
+        videoEnhanceMode = mode
+        val activePlayer = player ?: return
+        if (mode == VideoEnhanceMode.OFF && !hasAppliedVideoEffectsOnce) {
+            return
+        }
+        applyEffectsToPlayer(activePlayer, mode)
+    }
+
+    private fun applyEffectsToPlayer(targetPlayer: ExoPlayer, mode: VideoEnhanceMode) {
+        if (mode == VideoEnhanceMode.OFF) {
+            targetPlayer.setVideoEffects(emptyList())
+        } else {
+            hasAppliedVideoEffectsOnce = true
+            targetPlayer.setVideoEffects(listOf(Anime4kCnnGlEffect(mode)))
+        }
+    }
 
     /**
      * 切换到指定频道：**丢弃旧频道的重试状态**，从主源重新开始。
@@ -318,7 +419,10 @@ class PlayerManager(
      * - 动态频道（`mgtv:` 等没有静态地址的频道）解析失败：返回 `Failed`，由调用方直接 Fatal。
      */
     private fun resolveSession(channel: Channel): SessionResolution {
-        val result = streamCoordinator.prepareForPlayback(channel)
+        val result = streamCoordinator.prepareForPlayback(
+            channel,
+            preferredDefinition = DEFAULT_PREFERRED_DEFINITION,
+        )
         if (result is com.livetv.android.domain.stream.StreamResolveResult.Success) {
             val stream = result.stream
             return SessionResolution.Ready(
@@ -461,7 +565,11 @@ class PlayerManager(
             if (channel != null) {
                 val generation = generationGate.current()
                 resolutionExecutor.execute {
-                    val action = streamCoordinator.onPlaybackHttpError(channel, mapped.code)
+                    val action = streamCoordinator.onPlaybackHttpError(
+                        channel,
+                        mapped.code,
+                        preferredDefinition = DEFAULT_PREFERRED_DEFINITION,
+                    )
                     retryHandler.post {
                         if (!generationGate.isCurrent(generation) || currentChannel !== channel) return@post
                         when (action) {

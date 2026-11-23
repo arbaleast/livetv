@@ -60,6 +60,9 @@ import com.livetv.android.util.PlayerOrientationPolicy
 import com.livetv.android.util.PlayerTouchGestureMath
 import com.livetv.android.util.TvChannelRouteAction
 import com.livetv.android.util.TvChannelRoutePolicy
+import com.livetv.android.util.VideoEnhanceMode
+import com.livetv.android.util.VideoEnhancePolicy
+import com.livetv.android.util.VideoEnhanceStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -87,6 +90,9 @@ class PlayerActivity : AppCompatActivity() {
 
         /** TV 端左上角频道名自动隐藏的延迟（毫秒）。 */
         const val CHANNEL_NAME_AUTO_HIDE_DELAY_MS = 4_000L
+
+        /** 触控端实时视频信息条刷新间隔（毫秒）。 */
+        private const val VIDEO_INFO_REFRESH_INTERVAL_MS = 1_000L
 
         /** TV 端频道抽屉滑入滑出时长（毫秒）。 */
         private const val DRAWER_ANIM_MS = 220L
@@ -131,6 +137,22 @@ class PlayerActivity : AppCompatActivity() {
 
     /** 当前画面比例模式（触控端切换）。 */
     private var aspectMode = PlayerTouchGestureMath.AspectMode.FIT
+    private var videoEnhanceMode = VideoEnhanceMode.OFF
+    private var isVideoInfoVisible = true
+    private var lastVideoInfoFrames = -1
+    private var lastVideoInfoSampleMs = 0L
+    private var lastRxBytes = -1L
+    private var measuredFps = 0f
+    private var measuredSpeedKbps = 0f
+
+    private val videoInfoRefreshRunnable = object : Runnable {
+        override fun run() {
+            refreshVideoInfoOverlay()
+            if (isTouchDevice && isVideoInfoVisible && !isFinishing && !isDestroyed) {
+                binding.root.postDelayed(this, VIDEO_INFO_REFRESH_INTERVAL_MS)
+            }
+        }
+    }
 
     /** 触控端防误触锁屏标记。 */
     private var isScreenLocked = false
@@ -190,6 +212,22 @@ class PlayerActivity : AppCompatActivity() {
             it.onPlayerChanged = { exoPlayer -> binding.playerView.player = exoPlayer }
             it.onRetrying = { retryCount, maxRetries -> showRetryingHint(retryCount, maxRetries) }
             it.onSwitchingSource = { showSwitchingSourceHint() }
+            it.onVideoMetadataChanged = {
+                if (isTouchDevice) {
+                    refreshVideoInfoOverlay()
+                }
+            }
+            videoEnhanceMode = if (isTouchDevice) {
+                MobileUiPreferences.getVideoEnhanceMode(this)
+            } else {
+                VideoEnhanceMode.OFF
+            }
+            isVideoInfoVisible = if (isTouchDevice) {
+                MobileUiPreferences.isVideoInfoVisible(this)
+            } else {
+                false
+            }
+            it.setVideoEnhanceMode(videoEnhanceMode)
         }
 
         setupChannelDrawer()
@@ -279,7 +317,11 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        resetVideoInfoSampling()
         playerManager.start(currentChannel)
+        if (isTouchDevice) {
+            scheduleVideoInfoRefresh()
+        }
     }
 
     override fun onResume() {
@@ -315,11 +357,13 @@ class PlayerActivity : AppCompatActivity() {
             hideSystemUi()
             ViewCompat.requestApplyInsets(binding.playerRoot)
             updateAutoPipParams()
+            scheduleVideoInfoRefresh()
         }
     }
 
     override fun onStop() {
         super.onStop()
+        binding.root.removeCallbacks(videoInfoRefreshRunnable)
         mobileLoadingOverlay?.hide(animate = false)
         playerManager.stop()
     }
@@ -991,6 +1035,8 @@ class PlayerActivity : AppCompatActivity() {
                 override fun onNextChannel() = switchChannel(direction = 1)
                 override fun onTogglePlayPause() = togglePlayPauseWithFeedback()
                 override fun onCycleAspect() = cycleAspectMode()
+                override fun onCycleVideoEnhance() = cycleVideoEnhanceMode()
+                override fun onToggleVideoInfo() = toggleVideoInfoOverlay()
                 override fun onEnterPip() = enterPipIfEligible(fromUserAction = true)
                 override fun onErrorRetry() = playerManager.manualReset()
                 override fun onLockStateChanged(locked: Boolean) {
@@ -1022,6 +1068,8 @@ class PlayerActivity : AppCompatActivity() {
             },
         )
         setupTouchGestures()
+        updateVideoEnhanceUi(showHud = false)
+        scheduleVideoInfoRefresh()
         mobileChrome?.setPipButtonVisible(supportsPip)
         mobileChrome?.dismissAllImmediately()
     }
@@ -1189,6 +1237,148 @@ class PlayerActivity : AppCompatActivity() {
         val label = getString(labelRes)
         mobileChrome?.updateAspectLabel(label)
         mobileChrome?.showHudText(label)
+    }
+
+    private fun resetVideoInfoSampling() {
+        lastVideoInfoFrames = -1
+        lastVideoInfoSampleMs = 0L
+        lastRxBytes = -1L
+        measuredFps = 0f
+        measuredSpeedKbps = 0f
+    }
+
+    private fun cycleVideoEnhanceMode() {
+        videoEnhanceMode = videoEnhanceMode.next()
+        MobileUiPreferences.setVideoEnhanceMode(this, videoEnhanceMode)
+        playerManager.setVideoEnhanceMode(videoEnhanceMode)
+        updateVideoEnhanceUi(showHud = true)
+        refreshVideoInfoOverlay()
+    }
+
+    private fun toggleVideoInfoOverlay() {
+        isVideoInfoVisible = !isVideoInfoVisible
+        MobileUiPreferences.setVideoInfoVisible(this, isVideoInfoVisible)
+        scheduleVideoInfoRefresh()
+    }
+
+    private fun scheduleVideoInfoRefresh() {
+        binding.root.removeCallbacks(videoInfoRefreshRunnable)
+        refreshVideoInfoOverlay()
+        if (isTouchDevice && isVideoInfoVisible) {
+            binding.root.postDelayed(videoInfoRefreshRunnable, VIDEO_INFO_REFRESH_INTERVAL_MS)
+        }
+    }
+
+    private fun refreshVideoInfoOverlay() {
+        if (!isTouchDevice) return
+        if (!isVideoInfoVisible) {
+            mobileChrome?.updateVideoInfoOverlay(visible = false, text = null)
+            return
+        }
+        val snap = playerManager.getVideoInfoSnapshot()
+        if (snap == null || snap.inputWidth <= 0 || snap.inputHeight <= 0) {
+            mobileChrome?.updateVideoInfoOverlay(visible = true, text = null)
+            return
+        }
+        val nowMs = System.currentTimeMillis()
+        val rxBytes = android.net.TrafficStats.getUidRxBytes(android.os.Process.myUid())
+        if (lastVideoInfoSampleMs > 0L && snap.renderedFrames >= lastVideoInfoFrames) {
+            val dtMs = nowMs - lastVideoInfoSampleMs
+            if (dtMs >= 400L) {
+                measuredFps = (snap.renderedFrames - lastVideoInfoFrames) * 1000f / dtMs.toFloat()
+                if (rxBytes >= 0L && lastRxBytes >= 0L && rxBytes >= lastRxBytes) {
+                    measuredSpeedKbps = (rxBytes - lastRxBytes) * 8f / dtMs.toFloat()
+                }
+                lastVideoInfoFrames = snap.renderedFrames
+                lastRxBytes = rxBytes
+                lastVideoInfoSampleMs = nowMs
+            }
+        } else {
+            lastVideoInfoFrames = snap.renderedFrames
+            lastRxBytes = rxBytes
+            lastVideoInfoSampleMs = nowMs
+        }
+
+        val status = VideoEnhancePolicy.resolveStatus(snap.enhanceMode, snap.inputWidth, snap.inputHeight)
+        val scale = VideoEnhancePolicy.scaleFactorForSource(snap.enhanceMode, snap.inputWidth, snap.inputHeight)
+        val statusDetail = when (status) {
+            VideoEnhanceStatus.OFF -> if (snap.glPipelineActive) {
+                "${getString(R.string.player_video_info_status_off)} (GL 直通)"
+            } else {
+                "${getString(R.string.player_video_info_status_off)} (api=3)"
+            }
+            VideoEnhanceStatus.ACTIVE_STANDARD -> {
+                val model = if (scale == 4) "Restore_M + Upscale_M+S" else "Restore_M + Upscale_M"
+                "${getString(R.string.player_video_info_status_standard, scale)} ($model)"
+            }
+            VideoEnhanceStatus.ACTIVE_STRONG -> {
+                val model = if (scale == 4) "Restore_L + Upscale_M+S" else "Restore_L + Upscale_M"
+                "${getString(R.string.player_video_info_status_strong, scale)} ($model)"
+            }
+            VideoEnhanceStatus.BYPASSED_HIGH_RES -> getString(R.string.player_video_info_status_bypass)
+        }
+        val outW = if (scale > 1) {
+            if (snap.outputWidth > snap.inputWidth) snap.outputWidth else snap.inputWidth * scale
+        } else {
+            snap.inputWidth
+        }
+        val outH = if (scale > 1) {
+            if (snap.outputHeight > snap.inputHeight) snap.outputHeight else snap.inputHeight * scale
+        } else {
+            snap.inputHeight
+        }
+        val fpsVal = if (measuredFps >= 1f) measuredFps else snap.formatFps
+        val fpsPart = if (fpsVal > 0f) String.format(java.util.Locale.US, "%.2f", fpsVal) else "--"
+        val resLine = if (scale > 1) {
+            "${snap.inputWidth}×${snap.inputHeight}@$fpsPart → ${outW}×${outH} (${scale}x)"
+        } else {
+            "${snap.inputWidth}×${snap.inputHeight}@$fpsPart"
+        }
+
+        val vMime = buildString {
+            append(snap.codecMime ?: "unknown")
+            if (!snap.videoCodecs.isNullOrBlank()) append(";codecs=\"").append(snap.videoCodecs).append('"')
+        }
+        val aMime = buildString {
+            append(snap.audioMime ?: "none")
+            if (!snap.audioCodecs.isNullOrBlank()) append(";codecs=\"").append(snap.audioCodecs).append('"')
+        }
+        val codecPart = VideoEnhancePolicy.formatCodecLabel(snap.codecMime)
+        val vBitrate = if (snap.bitrateBps > 0) "${snap.bitrateBps / 1000} Kbps" else "--"
+        val aBitrate = if (snap.audioBitrateBps > 0) "${snap.audioBitrateBps / 1000} Kbps" else "--"
+        val totalFrames = snap.renderedFrames + snap.droppedFrames
+        val bufSec = String.format(java.util.Locale.US, "%.1fs", snap.bufferedMs / 1000.0)
+        val netSpeed = if (measuredSpeedKbps >= 1000f) {
+            String.format(java.util.Locale.US, "%.2f Mbps", measuredSpeedKbps / 1000f)
+        } else {
+            String.format(java.util.Locale.US, "%.0f Kbps", measuredSpeedKbps)
+        }
+
+        val infoText = buildString {
+            appendLine("Mime Type: $vMime, $aMime")
+            appendLine("Player: Media3 ExoPlayer (${snap.streamType})")
+            appendLine("Resolution: $resLine")
+            appendLine("Video DataRate: $vBitrate [$codecPart]")
+            appendLine("Audio DataRate: $aBitrate")
+            appendLine("Buffer / Dropped: $bufSec · ${snap.droppedFrames} / $totalFrames")
+            appendLine("Video Host: ${snap.streamHost ?: "--"}")
+            appendLine("Network Speed: $netSpeed")
+            append("Super Res: $statusDetail")
+        }
+        mobileChrome?.updateVideoInfoOverlay(visible = true, text = infoText)
+    }
+
+    private fun updateVideoEnhanceUi(showHud: Boolean) {
+        val labelRes = when (videoEnhanceMode) {
+            VideoEnhanceMode.OFF -> R.string.player_enhance_off
+            VideoEnhanceMode.STANDARD -> R.string.player_enhance_standard
+            VideoEnhanceMode.STRONG -> R.string.player_enhance_strong
+        }
+        val label = getString(labelRes)
+        mobileChrome?.updateEnhanceLabel(label, active = videoEnhanceMode != VideoEnhanceMode.OFF)
+        if (showHud) {
+            mobileChrome?.showHudText(getString(R.string.player_enhance_hud_format, label))
+        }
     }
 
     private fun toggleOrientation() {

@@ -11,6 +11,8 @@ data class PlayerChromeCapabilities(
     val showTransportControls: Boolean,
     /** 是否显示画面比例切换按钮（FIT / FILL / ZOOM）。 */
     val showAspectRatio: Boolean,
+    /** 是否显示底栏 AI 画质增强胶囊（仅原生 Media3 引擎启用）。 */
+    val showVideoEnhance: Boolean,
     /** 是否在顶栏显示 CCTV 专属「原控 / 纯画」切换胶囊。 */
     val showWebControlToggle: Boolean,
     /** 是否在底栏显示刷新重载按钮（CCTV 网页重载）。 */
@@ -20,6 +22,7 @@ data class PlayerChromeCapabilities(
         val MGTV = PlayerChromeCapabilities(
             showTransportControls = true,
             showAspectRatio = true,
+            showVideoEnhance = true,
             showWebControlToggle = false,
             showReload = false,
         )
@@ -27,6 +30,7 @@ data class PlayerChromeCapabilities(
         val CCTV = PlayerChromeCapabilities(
             showTransportControls = false,
             showAspectRatio = false,
+            showVideoEnhance = false,
             showWebControlToggle = true,
             showReload = true,
         )

@@ -47,6 +47,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-effect:1.4.1")
 
     // 纯 JVM 单元测试（app/src/test）；不引入模拟器/仪器测试依赖
     testImplementation("junit:junit:4.13.2")

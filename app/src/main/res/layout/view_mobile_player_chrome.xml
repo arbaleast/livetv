@@ -4,6 +4,29 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
+    <!-- 左上角常驻 Stats for Nerds 视频信息面板（可通过底栏「信息」开关，不拦截触控） -->
+    <TextView
+        android:id="@+id/chrome_video_info"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="14dp"
+        android:layout_marginTop="64dp"
+        android:background="@drawable/bg_player_info_panel"
+        android:clickable="false"
+        android:focusable="false"
+        android:fontFamily="monospace"
+        android:lineSpacingExtra="2dp"
+        android:maxLines="12"
+        android:maxWidth="320dp"
+        android:paddingStart="10dp"
+        android:paddingTop="6dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="6dp"
+        android:textColor="#E6FFFFFF"
+        android:textSize="10.5sp"
+        android:visibility="gone" />
+
     <!-- 顶栏：渐变暗角 + 返回 / 频道名 / 静态 LIVE 胶囊 / 收藏 / 原控(CCTV) / 选台 -->
     <LinearLayout
         android:id="@+id/chrome_top_bar"
@@ -202,63 +225,125 @@
             android:src="@drawable/ic_player_refresh"
             android:visibility="gone" />
 
-        <View
+        <HorizontalScrollView
             android:layout_width="0dp"
-            android:layout_height="1dp"
-            android:layout_weight="1" />
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:layout_weight="1"
+            android:fillViewport="true"
+            android:overScrollMode="never"
+            android:scrollbars="none">
 
-        <LinearLayout
-            android:id="@+id/chrome_aspect"
-            android:layout_width="wrap_content"
-            android:layout_height="36dp"
-            android:background="@drawable/bg_player_pill_button"
-            android:clickable="true"
-            android:contentDescription="@string/player_cd_aspect"
-            android:focusable="true"
-            android:gravity="center"
-            android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:visibility="gone">
-
-            <ImageView
-                android:layout_width="16dp"
-                android:layout_height="16dp"
-                android:importantForAccessibility="no"
-                android:src="@drawable/ic_player_aspect" />
-
-            <TextView
-                android:id="@+id/chrome_aspect_label"
+            <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="5dp"
-                android:fontFamily="sans-serif-medium"
-                android:text="@string/player_touch_aspect_fit"
-                android:textColor="@android:color/white"
-                android:textSize="12sp" />
-        </LinearLayout>
+                android:gravity="end|center_vertical"
+                android:orientation="horizontal">
 
-        <ImageButton
-            android:id="@+id/chrome_pip"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_player_circle_button"
-            android:contentDescription="@string/player_cd_pip"
-            android:padding="9dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ic_player_pip" />
+                <TextView
+                    android:id="@+id/chrome_info"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="6dp"
+                    android:background="@drawable/bg_player_pill_button"
+                    android:clickable="true"
+                    android:contentDescription="@string/player_cd_video_info"
+                    android:focusable="true"
+                    android:fontFamily="sans-serif-medium"
+                    android:gravity="center"
+                    android:paddingStart="9dp"
+                    android:paddingEnd="9dp"
+                    android:text="@string/player_video_info_button"
+                    android:textColor="@android:color/white"
+                    android:textSize="12sp"
+                    android:visibility="gone" />
 
-        <ImageButton
-            android:id="@+id/chrome_rotate"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_marginStart="8dp"
-            android:background="@drawable/bg_player_circle_button"
-            android:contentDescription="@string/player_cd_rotate"
-            android:padding="9dp"
-            android:scaleType="fitCenter"
-            android:src="@drawable/ic_player_rotate" />
+                <LinearLayout
+                    android:id="@+id/chrome_enhance"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="6dp"
+                    android:background="@drawable/bg_player_pill_button"
+                    android:clickable="true"
+                    android:contentDescription="@string/player_cd_enhance"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:paddingStart="9dp"
+                    android:paddingEnd="9dp"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_player_enhance" />
+
+                    <TextView
+                        android:id="@+id/chrome_enhance_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="sans-serif-medium"
+                        android:text="@string/player_enhance_off"
+                        android:textColor="@android:color/white"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/chrome_aspect"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:background="@drawable/bg_player_pill_button"
+                    android:clickable="true"
+                    android:contentDescription="@string/player_cd_aspect"
+                    android:focusable="true"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:paddingStart="9dp"
+                    android:paddingEnd="9dp"
+                    android:visibility="gone">
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_player_aspect" />
+
+                    <TextView
+                        android:id="@+id/chrome_aspect_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="4dp"
+                        android:fontFamily="sans-serif-medium"
+                        android:text="@string/player_touch_aspect_fit"
+                        android:textColor="@android:color/white"
+                        android:textSize="12sp" />
+                </LinearLayout>
+
+                <ImageButton
+                    android:id="@+id/chrome_pip"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_player_circle_button"
+                    android:contentDescription="@string/player_cd_pip"
+                    android:padding="9dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_pip" />
+
+                <ImageButton
+                    android:id="@+id/chrome_rotate"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_player_circle_button"
+                    android:contentDescription="@string/player_cd_rotate"
+                    android:padding="9dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_rotate" />
+            </LinearLayout>
+        </HorizontalScrollView>
     </LinearLayout>
 
     <!-- 左侧垂直居中悬浮 44dp 圆形锁屏按钮 -->

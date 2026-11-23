@@ -52,10 +52,90 @@ internal class MobileUiPreferenceStore(
         backend.putBoolean(KEY_CCTV_WEB_CONTROLS_VISIBLE, visible)
     }
 
+    /** 实时画质增强档位持久化读写（默认 `off`）。 */
+    fun getVideoEnhanceModeStorageValue(): String =
+        backend.getString(KEY_VIDEO_ENHANCE_MODE, "off") ?: "off"
+
+    fun setVideoEnhanceModeStorageValue(storageValue: String) {
+        backend.putString(KEY_VIDEO_ENHANCE_MODE, storageValue)
+    }
+
+    /** 视频播放信息悬浮条是否显示（默认 `true`）。 */
+    fun isVideoInfoVisible(): Boolean =
+        backend.getBoolean(KEY_VIDEO_INFO_VISIBLE, true)
+
+    fun setVideoInfoVisible(visible: Boolean) {
+        backend.putBoolean(KEY_VIDEO_INFO_VISIBLE, visible)
+    }
+
+    /** 记录 CCTV 频道访问频次与跳转习惯（from -> to），用于概率命中预热。 */
+    fun recordCctvSwitch(fromChannelId: String?, toChannelId: String) {
+        val toKey = normalizeCctvKey(toChannelId) ?: return
+        val freqs = parseCountMap(backend.getString(KEY_CCTV_CHANNEL_FREQ, null)).toMutableMap()
+        freqs[toKey] = (freqs[toKey] ?: 0) + 1
+        backend.putString(KEY_CCTV_CHANNEL_FREQ, encodeCountMap(decayIfNeeded(freqs), MAX_FREQ_ENTRIES))
+
+        val fromKey = normalizeCctvKey(fromChannelId)
+        if (fromKey != null && fromKey != toKey) {
+            val trans = parseCountMap(backend.getString(KEY_CCTV_CHANNEL_TRANSITIONS, null)).toMutableMap()
+            val edge = "$fromKey>$toKey"
+            trans[edge] = (trans[edge] ?: 0) + 1
+            backend.putString(
+                KEY_CCTV_CHANNEL_TRANSITIONS,
+                encodeCountMap(decayIfNeeded(trans), MAX_TRANSITION_ENTRIES),
+            )
+        }
+    }
+
+    fun getCctvChannelFrequencies(): Map<String, Int> =
+        parseCountMap(backend.getString(KEY_CCTV_CHANNEL_FREQ, null))
+
+    fun getCctvChannelTransitions(): Map<String, Int> =
+        parseCountMap(backend.getString(KEY_CCTV_CHANNEL_TRANSITIONS, null))
+
+    private fun normalizeCctvKey(channelId: String?): String? {
+        val raw = channelId?.trim()?.lowercase()?.removePrefix("cctv:").orEmpty()
+        return raw.takeIf { it.isNotEmpty() && !it.contains(',') && !it.contains('=') && !it.contains('>') }
+    }
+
+    private fun decayIfNeeded(map: MutableMap<String, Int>): Map<String, Int> {
+        val maxVal = map.values.maxOrNull() ?: 0
+        if (maxVal <= DECAY_THRESHOLD) return map
+        return map.mapValues { (_, v) -> maxOf(1, v / 2) }
+    }
+
+    private fun parseCountMap(raw: String?): Map<String, Int> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        val out = LinkedHashMap<String, Int>()
+        raw.split(',').forEach { entry ->
+            val idx = entry.indexOf('=')
+            if (idx <= 0 || idx >= entry.length - 1) return@forEach
+            val key = entry.substring(0, idx).trim()
+            val count = entry.substring(idx + 1).trim().toIntOrNull() ?: return@forEach
+            if (key.isNotEmpty() && count > 0) {
+                out[key] = count
+            }
+        }
+        return out
+    }
+
+    private fun encodeCountMap(map: Map<String, Int>, limit: Int): String =
+        map.entries
+            .sortedByDescending { it.value }
+            .take(limit)
+            .joinToString(",") { "${it.key}=${it.value}" }
+
     companion object {
         const val KEY_LAST_PLAYED = "last_played_channel_id"
         const val KEY_FAVORITES = "favorite_channel_ids"
         const val KEY_CCTV_WEB_CONTROLS_VISIBLE = "cctv_web_controls_visible"
+        const val KEY_VIDEO_ENHANCE_MODE = "video_enhance_mode"
+        const val KEY_VIDEO_INFO_VISIBLE = "video_info_visible"
+        const val KEY_CCTV_CHANNEL_FREQ = "cctv_channel_freq"
+        const val KEY_CCTV_CHANNEL_TRANSITIONS = "cctv_channel_transitions"
+        private const val MAX_FREQ_ENTRIES = 24
+        private const val MAX_TRANSITION_ENTRIES = 32
+        private const val DECAY_THRESHOLD = 500
     }
 }
 
@@ -90,6 +170,39 @@ object MobileUiPreferences {
     fun setCctvWebControlsVisible(context: Context, visible: Boolean) {
         store(context).setCctvWebControlsVisible(visible)
     }
+
+    /** 读取画质增强档位（默认 [com.livetv.android.util.VideoEnhanceMode.OFF]）。 */
+    fun getVideoEnhanceMode(context: Context): com.livetv.android.util.VideoEnhanceMode =
+        com.livetv.android.util.VideoEnhanceMode.fromStorageValue(
+            store(context).getVideoEnhanceModeStorageValue()
+        )
+
+    /** 持久化保存画质增强档位。 */
+    fun setVideoEnhanceMode(context: Context, mode: com.livetv.android.util.VideoEnhanceMode) {
+        store(context).setVideoEnhanceModeStorageValue(mode.storageValue)
+    }
+
+    /** 读取视频播放信息悬浮条是否显示（默认 `true`）。 */
+    fun isVideoInfoVisible(context: Context): Boolean =
+        store(context).isVideoInfoVisible()
+
+    /** 持久化保存视频播放信息悬浮条开关。 */
+    fun setVideoInfoVisible(context: Context, visible: Boolean) {
+        store(context).setVideoInfoVisible(visible)
+    }
+
+    /** 记录 CCTV 频道访问频次与跳转习惯（from -> to）。 */
+    fun recordCctvSwitch(context: Context, fromChannelId: String?, toChannelId: String) {
+        store(context).recordCctvSwitch(fromChannelId, toChannelId)
+    }
+
+    /** 读取 CCTV 频道访问频次表（key 为规范化频道 key，如 `cctv1`）。 */
+    fun getCctvChannelFrequencies(context: Context): Map<String, Int> =
+        store(context).getCctvChannelFrequencies()
+
+    /** 读取 CCTV 频道跳转频次表（key 为 `from>to`）。 */
+    fun getCctvChannelTransitions(context: Context): Map<String, Int> =
+        store(context).getCctvChannelTransitions()
 
     private fun store(context: Context): MobileUiPreferenceStore =
         MobileUiPreferenceStore(SharedPrefsBackend(prefs(context)))

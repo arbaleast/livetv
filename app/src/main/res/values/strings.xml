@@ -108,6 +108,17 @@
     <string name="player_touch_aspect_fit">适应</string>
     <string name="player_touch_aspect_fill">铺满</string>
     <string name="player_touch_aspect_zoom">裁剪</string>
+    <string name="player_cd_enhance">切换 AI 画质增强</string>
+    <string name="player_enhance_off">超分 关</string>
+    <string name="player_enhance_standard">AI 超分</string>
+    <string name="player_enhance_strong">AI 强力</string>
+    <string name="player_enhance_hud_format">画质增强：%1$s</string>
+    <string name="player_cd_video_info">切换视频信息显示</string>
+    <string name="player_video_info_button">信息</string>
+    <string name="player_video_info_status_off">原生直出</string>
+    <string name="player_video_info_status_standard">AI 超分 %1$dx</string>
+    <string name="player_video_info_status_strong">AI 强力 %1$dx</string>
+    <string name="player_video_info_status_bypass">原画直通(&gt;=1080p)</string>
     <string name="player_touch_rotate">横竖屏</string>
     <string name="player_touch_lock">锁屏</string>
     <string name="player_touch_unlock">解锁</string>
