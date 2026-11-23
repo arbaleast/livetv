@@ -95,13 +95,14 @@ internal object CctvWebResourceBlocker {
         if (h == "qvb.qcloud.com" || h.endsWith(".qvb.qcloud.com")) return BlockResponseKind.NO_CONTENT
 
         // 2. 埋点、统计与分享/唤端 SDK（注意：严禁拦截官方广告脚本）
-        if (p.endsWith("/html5player_analysis_lib.js")) {
+        if (p.endsWith("/html5player_analysis_lib.js") || isPeripheralSocialOrNavScript(p)) {
             return BlockResponseKind.EMPTY_JS
         }
         if (h == "js.data.cctv.com" ||
             h == "s.yangshipin.cn" ||
             h == "o.alicdn.com" ||
             h == "res.wx.qq.com" ||
+            h == "res2.wx.qq.com" ||
             h == "g.alicdn.com"
         ) {
             return BlockResponseKind.EMPTY_JS
@@ -157,6 +158,26 @@ internal object CctvWebResourceBlocker {
 
         return null
     }
+
+    /**
+     * 精确匹配纯外围社交分享、二维码、滚动条、收藏、PC/白顶导航与 `sbu_hc.js` 脚本文件名/路径后缀，
+     * 避免跨 DEPA 目录号漏网，同时绝不误伤核心或合规广告脚本。
+     */
+    private fun isPeripheralSocialOrNavScript(lowerPath: String): Boolean {
+        if (!lowerPath.endsWith(".js")) return false
+        val fileName = lowerPath.substringAfterLast('/')
+        if (fileName.startsWith("jweixin-") || fileName.contains("tinyscrollbar")) return true
+        if (fileName in PERIPHERAL_EXACT_JS_FILENAMES) return true
+        return lowerPath.endsWith("/pc_nav/index.js") || lowerPath.endsWith("whitetop/index.js")
+    }
+
+    private val PERIPHERAL_EXACT_JS_FILENAMES = setOf(
+        "dingtalk.js",
+        "jquery.qrcode.min.js",
+        "shareindex.js",
+        "zhibo_shoucang.js",
+        "sbu_hc.js",
+    )
 
     private fun isNonEssentialPageCss(lowerPath: String): Boolean {
         if (!lowerPath.endsWith(".css")) return false

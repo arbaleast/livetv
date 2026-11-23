@@ -95,6 +95,18 @@ class CctvWebResourceBlockerTest {
             "https://js.data.cctv.com/__aplus_plugin_cctv.js,aplus_plugin_aplus_u.js",
             "https://s.yangshipin.cn/CCTVVideo/cctvh5-trace/cctvh5-trace.min.js",
             "https://o.alicdn.com/QTSDK/quicktracking-sdk/qt_web.umd.js",
+            // 外围分享、微信/钉钉 SDK、二维码、滚动条、收藏、PC/白顶导航与 sbu_hc（含跨 DEPA/CDN 路径）
+            "https://res2.wx.qq.com/open/js/jweixin-1.4.0.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA0000/jweixin-1.6.0.js",
+            "https://g.alicdn.com/dingding/dingtalk-jsapi/2.10.3/dingtalk.open.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA0000/dingtalk.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA9999/jquery.qrcode.min.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA9999/shareindex.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA9999/jquery.tinyscrollbar.min.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA9999/zhibo_shoucang.js",
+            "https://r.img.cctvpic.com/common/pc_nav/index.js",
+            "https://r.img.cctvpic.com/newcctv/containingPages/2019whitetop/index.js",
+            "https://r.img.cctvpic.com/photoAlbum/templet/common/DEPA1567091909687313/sbu_hc.js",
         )
         blockedJsSamples.forEach { url ->
             assertEquals("应拦截外围 JS: $url", CctvWebResourceBlocker.BlockResponseKind.EMPTY_JS, CctvWebResourceBlocker.matchUrl(url))
