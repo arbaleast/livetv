@@ -63,4 +63,31 @@ class MgtvProviderTest {
         assertEquals(listOf("mgtv:287", "mgtv:221", "mgtv:344"), allIds)
         assertEquals("不应产生重复频道", allIds.size, allIds.toSet().size)
     }
+
+    @Test
+    fun `denylisted camera id is dropped while other channels keep their grouping`() {
+        val provider = providerWith(MgtvSanitizedFixtures.CATEGORY_WITH_DENYLISTED_CHANNEL)
+        provider.loadMgtvCategories()
+
+        val categories = provider.toDomainCategories()
+
+        assertEquals(listOf("卫视台", "地方台"), categories.map { it.name })
+        assertEquals("卫视台 应保留正常频道", listOf("mgtv:287"), categories[0].channels.map { it.id })
+        assertEquals("地方台 不应受影响", listOf("mgtv:280"), categories[1].channels.map { it.id })
+        assertEquals(
+            "229 必须被过滤",
+            false,
+            categories.flatMap { it.channels }.any { it.id == "mgtv:229" },
+        )
+    }
+
+    @Test
+    fun `denylisted channel never leaks back through the aggregator rescue path`() {
+        val provider = providerWith(MgtvSanitizedFixtures.CATEGORY_WITH_DENYLISTED_CHANNEL)
+        provider.loadMgtvCategories()
+
+        val ids = provider.toDomainCategories().flatMap { it.channels }.map { it.id }
+
+        assertEquals(listOf("mgtv:287", "mgtv:280"), ids)
+    }
 }

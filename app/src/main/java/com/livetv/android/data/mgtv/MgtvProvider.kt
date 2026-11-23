@@ -57,18 +57,24 @@ class MgtvProvider(
             .map { it.cameraId }
             .toSet()
 
-        val categories = keptCategories.map { cat ->
-            ChannelCategory(
-                id = "mgtv:${cat.id}",
-                name = cat.name,
-                channels = cat.channels.map { it.toDomainChannel() },
-            )
-        }
+        val categories = keptCategories
+            .map { cat ->
+                ChannelCategory(
+                    id = "mgtv:${cat.id}",
+                    name = cat.name,
+                    channels = cat.channels
+                        .filterNot { it.cameraId in DENYLIST_CAMERA_IDS }
+                        .map { it.toDomainChannel() },
+                )
+            }
+            // 黑名单过滤后可能出现空分类，直接丢弃，避免出现没有卡片的空分组
+            .filter { it.channels.isNotEmpty() }
 
         val orphanChannels = cachedCategories
             .filter { it.id in AGGREGATOR_CATEGORY_IDS || it.name in AGGREGATOR_CATEGORY_NAMES }
             .flatMap { it.channels }
             .filter { it.cameraId !in keptChannelIds }
+            .filterNot { it.cameraId in DENYLIST_CAMERA_IDS }
             .distinctBy { it.cameraId }
             .map { it.toDomainChannel() }
 
@@ -93,6 +99,15 @@ class MgtvProvider(
     companion object {
         /** 聚合分类（内容基本是其它分类的重复集合），不整段展示。 */
         private val AGGREGATOR_CATEGORY_IDS = setOf("2100001")
+
+        /**
+         * 上游 CDN 已失效的频道黑名单（cameraId）。
+         *
+         * `229 国际频道`：取流接口正常返回 padal 节点，但该节点 302 错跳到
+         * `http://hlsal-ldvt.../KLGXHMPP360.m3u8`（频道 id 都不对）并返回 403；
+         * npuk「换节点重试」也不换节点。上游修复后把这里清空即可恢复。
+         */
+        private val DENYLIST_CAMERA_IDS = setOf("229")
 
         /** 兜底：若服务端换了分类 id，按名称再挡一次。 */
         private val AGGREGATOR_CATEGORY_NAMES = setOf("热门")

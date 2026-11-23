@@ -512,6 +512,25 @@ class MobileChannelListTest {
     }
 
     @Test
+    fun `denylisted channel left in favorites or history degrades safely`() {
+        val cctv1 = Channel(id = "cctv:cctv1", name = "CCTV-1 综合", description = "", streamUrl = "")
+        val hunan = Channel(id = "mgtv:280", name = "湖南经视", description = "", streamUrl = "")
+        val categories = listOf(
+            category(MobileChannelCategoryPolicy.ID_CCTV, "央视", listOf(cctv1)),
+            category(MobileChannelCategoryPolicy.ID_SATELLITE, "卫视·芒果", listOf(hunan)),
+        )
+
+        // 收藏里残留已下架的 mgtv:229：不产生空的「收藏」分组，分类原样返回
+        assertEquals(categories, MobileChannelList.prependFavoritesCategory(categories, setOf("mgtv:229")))
+
+        // 「上次观看」残留 mgtv:229：不回放失效频道，安全回退到首个推荐
+        val state = MobileChannelList.resolveContinueWatching(categories, lastPlayedChannelId = "mgtv:229")
+        assertFalse(state.hasHistory)
+        assertEquals(cctv1, state.targetChannel)
+        assertEquals("开始观看", state.badgeLabel)
+    }
+
+    @Test
     fun `buildHomeCategoryCapsules always outputs 2x2 core capsules including Favorites even when empty`() {
         val cctv1 = channel("cctv:cctv1", "CCTV-1 综合")
         val cctv4 = channel("cctv:cctv4", "CCTV-4 中文国际")
