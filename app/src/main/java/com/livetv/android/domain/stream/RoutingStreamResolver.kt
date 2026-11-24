@@ -22,6 +22,15 @@ class RoutingStreamResolver(
         return resolver.resolve(channel, preferredDefinition)
     }
 
+    override fun resolveWithOptions(
+        channel: Channel,
+        preferredDefinition: String?,
+        rotateNode: Boolean,
+    ): StreamResolveResult {
+        val resolver = if (isMgtvChannel(channel)) mgtvResolver else fallbackResolver
+        return resolver.resolveWithOptions(channel, preferredDefinition, rotateNode)
+    }
+
     fun isMgtvChannel(channel: Channel): Boolean = channel.id.startsWith(mgtvChannelPrefix)
 
     companion object {

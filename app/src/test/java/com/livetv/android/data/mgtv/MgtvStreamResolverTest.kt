@@ -131,4 +131,37 @@ class MgtvStreamResolverTest {
         val failure = result as StreamResolveResult.Failure
         assertEquals(StreamResolveError.UNSUPPORTED_SOURCE, failure.error)
     }
+
+    @Test
+    fun `does not send stale npuk on fresh resolve and rotates past same failed host`() {
+        val sentNpuks = mutableListOf<String?>()
+        var call = 0
+        val fetcher = MgtvSourceFetcher { _, _, npuk ->
+            sentNpuks += npuk
+            call++
+            val (host, nextNpuk) = when (call) {
+                1 -> "padal.qing.mgtv.com" to "npuk-1"
+                2 -> "padal.qing.mgtv.com" to "npuk-2"
+                3 -> "padal.qing.mgtv.com" to "npuk-3"
+                else -> "padqq.qing.mgtv.com" to "npuk-4"
+            }
+            MgtvSourceFetchResult.RawJson(
+                """{"code":"0","data":{"sources":[{"url":"https://$host/live.m3u8","format":".m3u8","hdcp":0,"isp2p":0,"name":"高清","definition":"2","npuk":"$nextNpuk"}]}}""",
+            )
+        }
+        val resolver = MgtvStreamResolver(sourceFetcher = fetcher)
+
+        val first = resolver.resolve(channel, null) as StreamResolveResult.Success
+        assertTrue(first.stream.url.contains("padal.qing.mgtv.com"))
+
+        // Fresh resolve must not send npuk-1
+        resolver.resolve(channel, null)
+        assertEquals(listOf(null, null), sentNpuks)
+
+        // 403 rotation sends npuk-2, sees padal again, chases once with npuk-3 and lands on padqq
+        sentNpuks.clear()
+        val rotated = resolver.resolveWithOptions(channel, null, rotateNode = true) as StreamResolveResult.Success
+        assertEquals(listOf("npuk-2", "npuk-3"), sentNpuks)
+        assertTrue(rotated.stream.url.contains("padqq.qing.mgtv.com"))
+    }
 }

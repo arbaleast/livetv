@@ -609,6 +609,7 @@ class PlayerManager(
      */
     private fun applyResolvedStream(stream: com.livetv.android.domain.stream.ResolvedStream) {
         val channel = currentChannel ?: return
+        Log.i(TAG, "403 重解析就绪：channel=${channel.id} host=${Uri.parse(stream.url).host.orEmpty()}")
         activeSession = PlaybackSession(
             url = stream.url,
             headers = stream.headers,

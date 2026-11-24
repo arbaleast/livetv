@@ -69,7 +69,7 @@ class StreamRefreshCoordinator(
                     RefreshAction.FastFail(403, StreamResolveError.HTTP_FORBIDDEN)
                 } else {
                     forbiddenRefreshCount += 1
-                    when (val result = resolveAndCache(channel, preferredDefinition, resetRefreshBudget = false)) {
+                    when (val result = resolveAndCache(channel, preferredDefinition, resetRefreshBudget = false, rotateNode = true)) {
                         is StreamResolveResult.Success -> RefreshAction.Reconnect(result.stream)
                         is StreamResolveResult.Failure -> RefreshAction.FastFail(403, result.error)
                     }
@@ -97,11 +97,12 @@ class StreamRefreshCoordinator(
         channel: Channel,
         preferredDefinition: String?,
         resetRefreshBudget: Boolean,
+        rotateNode: Boolean = false,
     ): StreamResolveResult {
         if (resetRefreshBudget) {
             forbiddenRefreshCount = 0
         }
-        val result = resolver.resolve(channel, preferredDefinition)
+        val result = resolver.resolveWithOptions(channel, preferredDefinition, rotateNode)
         if (result is StreamResolveResult.Success) {
             cachedChannelId = channel.id
             cachedStream = result.stream

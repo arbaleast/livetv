@@ -48,12 +48,19 @@ class MgtvStreamResolver(
     private val allowedHeaderHosts: Set<String> = DEFAULT_ALLOWED_HEADER_HOSTS,
 ) : StreamResolver {
 
-    /** 每个频道上一次响应里的 npuk：用于"换节点重试"。 */
+    /** 每个频道上一次响应里的 npuk 与 host：仅在 `rotateNode = true`（403 重解析）时用于换节点。 */
     private val lastNpuk = ConcurrentHashMap<String, String>()
+    private val lastHost = ConcurrentHashMap<String, String>()
 
     override fun resolve(
         channel: Channel,
         preferredDefinition: String?,
+    ): StreamResolveResult = resolveWithOptions(channel, preferredDefinition, rotateNode = false)
+
+    override fun resolveWithOptions(
+        channel: Channel,
+        preferredDefinition: String?,
+        rotateNode: Boolean,
     ): StreamResolveResult {
         val cameraId = extractCameraId(channel)
         if (cameraId.isEmpty()) {
@@ -63,9 +70,32 @@ class MgtvStreamResolver(
             )
         }
 
-        // 记住上一次响应给出的 npuk：重解析时带回去，服务端才会换一个 CDN 节点。
-        val previousNpuk = lastNpuk[cameraId]
-        return when (val fetched = sourceFetcher.fetchSourceJson(cameraId, preferredDefinition, previousNpuk)) {
+        // 仅在 403 换节点重试时带回上一次的 npuk，防止冷切/新会话把正常节点切走
+        val failedHost = if (rotateNode) lastHost[cameraId] else null
+        val previousNpuk = if (rotateNode) lastNpuk[cameraId] else null
+        val first = resolveOnce(cameraId, preferredDefinition, previousNpuk)
+        if (rotateNode &&
+            failedHost != null &&
+            first is StreamResolveResult.Success &&
+            extractHost(first.stream.url) == failedHost
+        ) {
+            // 若换节点首次仍命中同一失效 Host（如 padal），用本次新 npuk 再追跳 1 次
+            val nextNpuk = lastNpuk[cameraId]
+            if (!nextNpuk.isNullOrBlank() && nextNpuk != previousNpuk) {
+                val second = resolveOnce(cameraId, preferredDefinition, nextNpuk)
+                if (second is StreamResolveResult.Success) {
+                    return second
+                }
+            }
+        }
+        return first
+    }
+
+    private fun resolveOnce(
+        cameraId: String,
+        preferredDefinition: String?,
+        npuk: String?,
+    ): StreamResolveResult = when (val fetched = sourceFetcher.fetchSourceJson(cameraId, preferredDefinition, npuk)) {
 
             is MgtvSourceFetchResult.AuthUnavailable -> StreamResolveResult.Failure(
                 error = StreamResolveError.AUTH_UNAVAILABLE,
@@ -89,7 +119,6 @@ class MgtvStreamResolver(
 
             is MgtvSourceFetchResult.RawJson -> parseAndSelect(fetched.body, preferredDefinition, cameraId)
         }
-    }
 
     private fun parseAndSelect(
         rawJson: String,
@@ -116,8 +145,9 @@ class MgtvStreamResolver(
                 message = "no eligible non-P2P/non-HDCP HTTPS .m3u8 source available",
             )
 
-        // 记录本次的 npuk，供下一次"换节点重试"使用
+        // 记录本次的 npuk 与 host，供后续 403 "换节点重试" 使用
         selected.npuk.takeIf { it.isNotBlank() }?.let { lastNpuk[cameraId] = it }
+        extractHost(selected.url)?.let { lastHost[cameraId] = it }
 
         val effectiveExpireSec = if (selected.urlExpireDurationSec <= 0L) {
             FALLBACK_EXPIRE_DURATION_SEC
@@ -163,5 +193,8 @@ class MgtvStreamResolver(
                 raw
             }
         }
+
+        private fun extractHost(url: String): String? =
+            runCatching { java.net.URI(url).host?.lowercase(java.util.Locale.US) }.getOrNull()
     }
 }

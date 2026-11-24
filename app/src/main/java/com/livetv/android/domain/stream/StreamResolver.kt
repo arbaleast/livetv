@@ -10,6 +10,16 @@ interface StreamResolver {
         channel: Channel,
         preferredDefinition: String? = null,
     ): StreamResolveResult
+
+    /**
+     * 带节点轮换标志的解析入口：仅在播放遇到 403/401 需要切换 CDN 节点时传 `rotateNode = true`，
+     * 避免新会话携带旧缓存的 `npuk` 反而从正常节点被切走。
+     */
+    fun resolveWithOptions(
+        channel: Channel,
+        preferredDefinition: String? = null,
+        rotateNode: Boolean = false,
+    ): StreamResolveResult = resolve(channel, preferredDefinition)
 }
 
 /**
