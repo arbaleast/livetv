@@ -14,7 +14,7 @@
 
 | 播放页控制浮层（超分 / 画面比例 / 信息 / 画中画） |
 | :---: |
-| <img src="docs/images/player-overlay.png" alt="播放页控制浮层" width="640" /> |
+| <img src="docs/images/player-overlay.jpg" alt="播放页控制浮层" width="640" /> |
 
 ---
 
