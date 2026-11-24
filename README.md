@@ -6,6 +6,18 @@
 
 ---
 
+## 界面预览
+
+| 手机竖屏首页 | 手机横屏双栏（继续观看 + 频道墙） |
+| :---: | :---: |
+| <img src="docs/images/home-portrait.png" alt="手机竖屏首页" width="220" /> | <img src="docs/images/home-landscape.png" alt="手机横屏双栏首页" width="480" /> |
+
+| 播放页控制浮层（超分 / 画面比例 / 信息 / 画中画） |
+| :---: |
+| <img src="docs/images/player-overlay.png" alt="播放页控制浮层" width="640" /> |
+
+---
+
 ## 核心特性
 
 - **双端自适应入口**（`MainActivity`）：自动识别设备形态，Android TV 进入 Leanback 横向浏览界面，手机/平板进入暗黑影院风触控首页（竖屏网格 / 横屏双栏「继续观看 + 频道墙」）。
