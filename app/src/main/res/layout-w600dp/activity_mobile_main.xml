@@ -4,6 +4,7 @@
   左侧约 30%「继续观看」主卡 + 2x2 分类胶囊；右侧约 70% 精简顶栏（分类标题 + 图标化搜索/刷新）+ 3 列暗黑频道墙。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/mobile_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -175,7 +176,7 @@
                         android:layout_height="48dp"
                         android:background="@drawable/bg_home_icon_button"
                         android:contentDescription="@string/mobile_action_search"
-                        android:drawableStart="@drawable/ic_home_search"
+                        app:drawableStartCompat="@drawable/ic_home_search"
                         android:paddingStart="12dp"
                         android:paddingEnd="12dp" />
 
@@ -187,7 +188,7 @@
                         android:layout_marginStart="4dp"
                         android:background="@drawable/bg_home_icon_button"
                         android:contentDescription="@string/mobile_action_refresh"
-                        android:drawableStart="@drawable/ic_home_refresh"
+                        app:drawableStartCompat="@drawable/ic_home_refresh"
                         android:paddingStart="12dp"
                         android:paddingEnd="12dp" />
                 </LinearLayout>

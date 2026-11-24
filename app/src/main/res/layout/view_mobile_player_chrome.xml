@@ -65,7 +65,6 @@
                 android:id="@+id/chrome_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="0"
                 android:ellipsize="end"
                 android:fontFamily="sans-serif-medium"
                 android:maxLines="1"

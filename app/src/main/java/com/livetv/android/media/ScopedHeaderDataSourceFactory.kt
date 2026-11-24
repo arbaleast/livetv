@@ -119,8 +119,8 @@ private class ScopedHeaderDataSource(
 
     /** 302 的 Location 头（大小写不敏感）。 */
     private fun locationOf(error: HttpDataSource.InvalidResponseCodeException): String? =
-        error.headerFields?.entries
-            ?.firstOrNull { it.key.equals("Location", ignoreCase = true) }
+        error.headerFields.entries
+            .firstOrNull { it.key.equals("Location", ignoreCase = true) }
             ?.value?.firstOrNull()
             ?.trim()
 

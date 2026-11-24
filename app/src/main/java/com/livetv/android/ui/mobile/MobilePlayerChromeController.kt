@@ -1,8 +1,11 @@
 package com.livetv.android.ui.mobile
 
 import android.content.res.ColorStateList
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.view.MotionEvent
+import android.view.TouchDelegate
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.view.WindowInsetsCompat
@@ -107,6 +110,7 @@ internal class MobilePlayerChromeController(
         applyCapabilitySlots()
         setupDrawerLists()
         bindClickListeners()
+        setupPillTouchTargets()
     }
 
     private fun applyCapabilitySlots() {
@@ -707,6 +711,78 @@ internal class MobilePlayerChromeController(
             .start()
     }
 
+    private fun setupPillTouchTargets() {
+        val pillViews = listOf(
+            binding.chromeWebControls,
+            binding.chromeChannels,
+            binding.chromeInfo,
+            binding.chromeEnhance,
+            binding.chromeAspect,
+            binding.chromeErrorRetry,
+            binding.chromeErrorChannels,
+        )
+        val byParent = pillViews.groupBy { it.parent as? ViewGroup }
+        for ((parent, children) in byParent) {
+            if (parent == null) continue
+            val composite = CompositeTouchDelegate(parent)
+            parent.touchDelegate = composite
+            val updateDelegates = {
+                val minSizePx = (MIN_TOUCH_TARGET_DP * parent.resources.displayMetrics.density).toInt()
+                val active = buildList {
+                    for (child in children) {
+                        if (child.visibility != View.VISIBLE || child.width == 0 || child.height == 0) {
+                            continue
+                        }
+                        val hitRect = Rect()
+                        child.getHitRect(hitRect)
+                        val extraY = ((minSizePx - hitRect.height()).coerceAtLeast(0) + 1) / 2
+                        val extraX = ((minSizePx - hitRect.width()).coerceAtLeast(0) + 1) / 2
+                        hitRect.inset(-extraX, -extraY)
+                        add(TouchDelegate(hitRect, child))
+                    }
+                }
+                composite.setDelegates(active)
+            }
+            parent.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                updateDelegates()
+            }
+            parent.post(updateDelegates)
+        }
+    }
+
+    private class CompositeTouchDelegate(host: View) : TouchDelegate(Rect(), host) {
+        private val delegates = mutableListOf<TouchDelegate>()
+        private var activeDelegate: TouchDelegate? = null
+
+        fun setDelegates(newDelegates: List<TouchDelegate>) {
+            delegates.clear()
+            delegates.addAll(newDelegates)
+            activeDelegate = null
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            return when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    activeDelegate = null
+                    for (delegate in delegates) {
+                        if (delegate.onTouchEvent(event)) {
+                            activeDelegate = delegate
+                            return true
+                        }
+                    }
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> activeDelegate?.onTouchEvent(event) ?: false
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val handled = activeDelegate?.onTouchEvent(event) ?: false
+                    activeDelegate = null
+                    handled
+                }
+                else -> activeDelegate?.onTouchEvent(event) ?: false
+            }
+        }
+    }
+
     fun release() {
         handler.removeCallbacksAndMessages(null)
         binding.chromeTopBar.animate().cancel()
@@ -718,6 +794,7 @@ internal class MobilePlayerChromeController(
     }
 
     companion object {
+        private const val MIN_TOUCH_TARGET_DP = 48
         private const val DRAWER_WIDTH_DP = 280
         private const val DRAWER_STABLE_BOTTOM_MARGIN_DP = 8
         private const val FAVORITE_ACTIVE_TINT = 0xFFFBBF24.toInt()
