@@ -44,11 +44,6 @@ jobs:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
           log-accepted-android-sdk-licenses: true
 
-      - name: Install SDK platform and build-tools
-        run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-
       - name: Run Lint & Unit Tests
         run: ./gradlew lintDebug testDebugUnitTest --console=plain --no-daemon
 

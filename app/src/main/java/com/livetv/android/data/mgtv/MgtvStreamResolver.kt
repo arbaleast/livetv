@@ -8,6 +8,7 @@ import com.livetv.android.domain.stream.StreamResolveError
 import com.livetv.android.domain.stream.StreamResolveResult
 import com.livetv.android.domain.stream.StreamResolver
 import com.livetv.android.domain.stream.StreamTypeDetector
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * MGTV 播放源获取抽象（便于测试注入脱敏 fixture，并在无合规授权时显式熔断返回 `AuthUnavailable`）。
@@ -48,7 +49,7 @@ class MgtvStreamResolver(
 ) : StreamResolver {
 
     /** 每个频道上一次响应里的 npuk：用于"换节点重试"。 */
-    private val lastNpuk = HashMap<String, String>()
+    private val lastNpuk = ConcurrentHashMap<String, String>()
 
     override fun resolve(
         channel: Channel,

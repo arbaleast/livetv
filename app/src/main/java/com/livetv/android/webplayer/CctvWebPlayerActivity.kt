@@ -321,7 +321,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         ensureCatalogLoaded()
 
         awaitingPageCommit = true
-        beginWebViewLoad(created, channelId, pageUrl, generation)
+        beginWebViewLoad(created, channelId, pageUrl, generation, reuseExistingView = true)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -946,7 +946,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         )
     }
 
-    private fun beginWebViewLoad(view: WebView, channelId: String, url: String, generation: Long) {
+    private fun beginWebViewLoad(
+        view: WebView,
+        channelId: String,
+        url: String,
+        generation: Long,
+        reuseExistingView: Boolean = false,
+    ) {
         if (!switchGeneration.isCurrent(generation) || isFinishing || isDestroyed) return
         webViewNavigationGeneration = generation
         activeTimeoutGeneration = generation
@@ -956,7 +962,7 @@ class CctvWebPlayerActivity : AppCompatActivity() {
         // 跳跃切台时改用全新 WebView 实例并销毁旧实例：
         // 1. 彻底隔离前一台（尤其是桌面端 cctv3/6/8 与移动端页面互切）的视口缩放状态，消除画面放大；
         // 2. 避免旧页 WASM/MSE/WebAudio 同步卸载拖慢新台自举。
-        val fresh = if (webView === view) runCatching { buildWebView() }.getOrNull() else null
+        val fresh = if (!reuseExistingView && webView === view) runCatching { buildWebView() }.getOrNull() else null
         if (fresh != null) {
             fresh.visibility = View.VISIBLE
             touchContainer.addView(fresh, matchParent())
@@ -1539,9 +1545,13 @@ class CctvWebPlayerActivity : AppCompatActivity() {
 
     private fun showLoadFailure(messageRes: Int, generation: Long) {
         if (!switchGeneration.isCurrent(generation)) return
-        cancelPendingPixelCopy()
-        mainHandler.removeCallbacksAndMessages(null)
         awaitingPageCommit = false
+        cancelPendingPixelCopy()
+        mainHandler.removeCallbacks(pollRunnable)
+        mainHandler.removeCallbacks(revealTimeoutRunnable)
+        mainHandler.removeCallbacks(vodEndedPollRunnable)
+        mainHandler.removeCallbacks(warmPoolPrepareRunnable)
+        mainHandler.removeCallbacks(warmPoolPollRunnable)
         suspendedInBackground = false
         hasLoadFailure = true
         updateAutoPipParams()

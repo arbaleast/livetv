@@ -121,8 +121,18 @@ private class Anime4kCnnShaderProgram(
         val height: Int,
     )
 
+    private class PassBindLocations(
+        val texLoc: Int,
+        val sizeLoc: Int,
+        val ptLoc: Int,
+    )
+
     private var activePasses: List<Anime4kCnnGlEffect.ShaderPass> = emptyList()
     private var programs: IntArray = IntArray(0)
+    private var bindLocations: Array<Array<PassBindLocations>> = emptyArray()
+    private val prevFbo = IntArray(1)
+    private val prevVao = IntArray(1)
+    private val prevViewport = IntArray(4)
     private val targets = LinkedHashMap<String, Target>()
     private var vaoId: Int = 0
     private var inputWidth: Int = 0
@@ -145,8 +155,17 @@ private class Anime4kCnnShaderProgram(
             activePasses = desiredPasses
             programs = IntArray(desiredPasses.size)
             ensureVao()
-            for (i in desiredPasses.indices) {
-                programs[i] = linkProgram(VERTEX_SHADER, desiredPasses[i].fragSrc)
+            bindLocations = Array(desiredPasses.size) { i ->
+                val prog = linkProgram(VERTEX_SHADER, desiredPasses[i].fragSrc)
+                programs[i] = prog
+                Array(desiredPasses[i].binds.size) { b ->
+                    val bindName = desiredPasses[i].binds[b]
+                    PassBindLocations(
+                        texLoc = GLES30.glGetUniformLocation(prog, "${bindName}_tex"),
+                        sizeLoc = GLES30.glGetUniformLocation(prog, "${bindName}_size"),
+                        ptLoc = GLES30.glGetUniformLocation(prog, "${bindName}_pt"),
+                    )
+                }
             }
             currentScale = scale
         }
@@ -157,9 +176,6 @@ private class Anime4kCnnShaderProgram(
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         if (activePasses.isEmpty() || programs.isEmpty()) return
 
-        val prevFbo = IntArray(1)
-        val prevVao = IntArray(1)
-        val prevViewport = IntArray(4)
         GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, prevFbo, 0)
         GLES30.glGetIntegerv(GLES30.GL_VERTEX_ARRAY_BINDING, prevVao, 0)
         GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, prevViewport, 0)
@@ -207,19 +223,12 @@ private class Anime4kCnnShaderProgram(
                     bw = t.width
                     bh = t.height
                 }
+                val locs = bindLocations[i][b]
                 GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + b)
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texId)
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, "${bindName}_tex"), b)
-                GLES30.glUniform2f(
-                    GLES30.glGetUniformLocation(prog, "${bindName}_size"),
-                    bw.toFloat(),
-                    bh.toFloat(),
-                )
-                GLES30.glUniform2f(
-                    GLES30.glGetUniformLocation(prog, "${bindName}_pt"),
-                    1.0f / bw.toFloat(),
-                    1.0f / bh.toFloat(),
-                )
+                GLES30.glUniform1i(locs.texLoc, b)
+                GLES30.glUniform2f(locs.sizeLoc, bw.toFloat(), bh.toFloat())
+                GLES30.glUniform2f(locs.ptLoc, 1.0f / bw.toFloat(), 1.0f / bh.toFloat())
             }
             GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
 

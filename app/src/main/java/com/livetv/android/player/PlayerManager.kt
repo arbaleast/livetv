@@ -20,11 +20,11 @@ import com.livetv.android.domain.model.Channel
 import com.livetv.android.domain.stream.SessionGenerationGate
 import com.livetv.android.domain.stream.StreamResolveError
 import com.livetv.android.domain.stream.Clock
+import com.livetv.android.domain.stream.MonotonicClock
 import com.livetv.android.domain.stream.StaticStreamResolver
 import com.livetv.android.domain.stream.StreamRefreshCoordinator
 import com.livetv.android.domain.stream.StreamResolver
 import com.livetv.android.domain.stream.StreamTypeDetector
-import com.livetv.android.domain.stream.SystemClock
 import com.livetv.android.media.Anime4kCnnGlEffect
 import com.livetv.android.media.NoRetryOnClientErrorPolicy
 import com.livetv.android.media.ScopedHeaderDataSourceFactory
@@ -54,7 +54,7 @@ class PlayerManager(
      * 动态签名地址（如 MGTV）由具体实现解析出带有效期的会话。
      */
     private val streamResolver: StreamResolver = StaticStreamResolver,
-    clock: Clock = SystemClock,
+    clock: Clock = MonotonicClock,
 ) {
 
     companion object {
@@ -194,14 +194,20 @@ class PlayerManager(
     private val playerListener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             onVideoMetadataChanged?.invoke()
-            dispatch(
-                when (playbackState) {
-                    Player.STATE_BUFFERING -> PlaybackEvent.Buffering
-                    Player.STATE_READY -> PlaybackEvent.Ready
-                    Player.STATE_ENDED -> PlaybackEvent.Released
-                    else -> return
+            when (playbackState) {
+                Player.STATE_BUFFERING -> dispatch(PlaybackEvent.Buffering)
+                Player.STATE_READY -> dispatch(PlaybackEvent.Ready)
+                Player.STATE_ENDED -> {
+                    handlePlaybackError(
+                        PlaybackException(
+                            "Live stream ended unexpectedly",
+                            null,
+                            PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
+                        ),
+                    )
                 }
-            )
+                else -> return
+            }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -266,8 +272,16 @@ class PlayerManager(
         currentChannel = null
         retryState = RetryPolicy.RetryState()
         activeSession = null
-        resolutionExecutor.execute { streamCoordinator.resetSession() }
+        if (!resolutionExecutor.isShutdown) {
+            resolutionExecutor.execute { streamCoordinator.resetSession() }
+        }
         dispatch(PlaybackEvent.Released)
+    }
+
+    /** 销毁后台解析线程池，应在 `Activity.onDestroy()` 调用。 */
+    fun release() {
+        stop()
+        resolutionExecutor.shutdownNow()
     }
 
     // ---------------- 频道 / 源操作 ----------------
@@ -666,13 +680,14 @@ class PlayerManager(
     private fun scheduleReload(delayMs: Long) {
         val channel = currentChannel ?: return
         val expectedChannel = channel
+        val expectedGeneration = generationGate.current()
         val url = candidatesFor(activeSession, expectedChannel).getOrNull(retryState.sourceIndex)
         if (url.isNullOrEmpty()) {
             dispatch(PlaybackEvent.Fatal(PlaybackError.SourceParsing))
             return
         }
         retryHandler.postDelayed({
-            if (currentChannel === expectedChannel) {
+            if (generationGate.isCurrent(expectedGeneration) && currentChannel === expectedChannel) {
                 prepare(url, expectedChannel, PlaybackEvent.Retry)
             }
         }, delayMs)

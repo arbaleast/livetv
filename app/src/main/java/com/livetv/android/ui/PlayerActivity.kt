@@ -381,6 +381,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.channelDrawer.animate().cancel()
         binding.drawerScrim.animate().cancel()
         binding.playerView.player = null
+        playerManager.release()
         super.onDestroy()
     }
 

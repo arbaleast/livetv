@@ -49,6 +49,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
 
     /** 本轮列表里所有承载「刷新」动作卡片的分组，用于刷新期间更新副标题。 */
     private val refreshActionAdapters = mutableListOf<ArrayObjectAdapter>()
+    private var lastKnownFavorites: Set<String> = emptySet()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +58,14 @@ class MainBrowseFragment : BrowseSupportFragment() {
         setupEventListeners()
         if (app.catalogStore.isEmpty()) {
             reloadCatalogs(preserveFocus = false)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val currentFavorites = context?.let { MobileUiPreferences.getFavoriteChannelIds(it) }.orEmpty()
+        if (currentFavorites != lastKnownFavorites) {
+            loadRows(preserveFocus = true)
         }
     }
 
@@ -76,6 +85,7 @@ class MainBrowseFragment : BrowseSupportFragment() {
         val rowsAdapter = ArrayObjectAdapter(ListRowPresenter())
         val baseCategories = app.catalogStore.getAllCategories().filter { it.channels.isNotEmpty() }
         val favoriteIds = context?.let { MobileUiPreferences.getFavoriteChannelIds(it) }.orEmpty()
+        lastKnownFavorites = favoriteIds
         val categories = MobileChannelList.prependFavoritesCategory(baseCategories, favoriteIds)
 
         if (categories.isEmpty()) {
