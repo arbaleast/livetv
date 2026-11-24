@@ -422,11 +422,10 @@ LiveTvApplication（Application）
 
 | 源集 | 文件 | 内容 |
 |---|---|---|
-| `app/src/debug/` | `AndroidManifest.xml` | `<application android:networkSecurityConfig="@xml/network_security_config" />` |
-| `app/src/debug/res/xml/` | `network_security_config.xml` | `base-config cleartextTrafficPermitted="false"`，`domain-config` 仅放行 `127.0.0.1` 与 `localhost`（`includeSubdomains="false"`） |
-| `app/src/main/` | — | **没有任何** `usesCleartextTraffic` / `networkSecurityConfig` / `cleartextTrafficPermitted` |
+| `app/src/main/` | `AndroidManifest.xml` + `res/xml/network_security_config.xml` | `base-config cleartextTrafficPermitted="false"`，仅放行 MGTV CDN 302 边缘域名 `*.qing.mgtv.com`（实测该域名强制 https 返回 403） |
+| `app/src/debug/` | `AndroidManifest.xml` + `res/xml/network_security_config.xml` | 在 `main` 基础上额外放行 `127.0.0.1` 与 `localhost`（`includeSubdomains="false"`）用于本机测试流 |
 
-Release 构建不包含 `app/src/debug/`，因此正式包既不放行明文，也不会出现 `127.0.0.1` 例外。
+Release 构建不包含 `app/src/debug/`，因此正式包不会出现 `127.0.0.1` / `localhost` 或任意域名的明文例外。
 应用内**不再内置任何演示/沙箱快捷入口**：订阅源对话框只接受用户手输的 http(s) M3U 地址。
 
 > **Lint 注意**：manifest 合并以优先级更高的 Debug 文件为基准文档，Lint 的

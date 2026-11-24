@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    正式版（main）网络安全策略：
+    - base-config 默认禁止一切明文 HTTP 流量；
+    - 仅放行 `*.qing.mgtv.com`：芒果 TV CDN 边缘节点会把 https 播放请求 302 重定向到
+      `http://hlsal-*.qing.mgtv.com/...`（明文 Host，实测强行改回 https 会返回 403），
+      不放行会导致 Release 包播放 MGTV 频道时触发 CleartextNotPermittedException（「网络连接失败」）。
+    - Debug 源集会在 app/src/debug/res/xml/network_security_config.xml 中额外放行本机回环地址。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">qing.mgtv.com</domain>
+    </domain-config>
+</network-security-config>

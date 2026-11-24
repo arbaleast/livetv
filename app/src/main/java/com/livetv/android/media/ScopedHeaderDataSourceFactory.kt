@@ -90,9 +90,8 @@ private class ScopedHeaderDataSource(
      *
      * 芒果 CDN 的边缘节点会把 https 播放请求 302 到 **明文**
      * `http://hlsal-*.qing.mgtv.com/...`（同一组签名路径）。实测把 scheme 换成 https 再跟会得到
-     * 403，说明该回源 Host 只认 http；因此这里**原样跟随**（含明文跳转），由网络策略决定是否允许：
-     * Debug 源集的 NSC 放行 `*.qing.mgtv.com` 明文，Release 不放行，届时会以
-     * `CLEARTEXT communication not permitted` 明确失败而不是静默黑屏。
+     * 403，说明该回源 Host 只认 http；因此这里**原样跟随**（含明文跳转），由 `network_security_config.xml`
+     * 仅对 `*.qing.mgtv.com` 放行明文（其余域名仍默认禁止明文 HTTP）。
      *
      * 仍然强制 **Host 白名单**：跳转目标必须是 `allowedHostSuffixes` 内的域名，
      * 避免把源专用请求头带到第三方。

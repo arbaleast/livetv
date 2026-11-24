@@ -141,5 +141,5 @@ app/src/main/java/com/livetv/android/
 
 - **双端差异**：Android TV 端保持原生 Leanback + ExoPlayer，暂不支持 CCTV WebView 播放；CCTV 1–17 仅在手机/平板端播放。
 - **尚未实现**：EPG 节目单、云端同步历史与独立设置页。
-- **网络安全**：Release 构建禁止明文 HTTP；仅 `debug` 构建对 `127.0.0.1` / `localhost` 放行。
+- **网络安全**：默认禁止明文 HTTP，Release 仅对 MGTV CDN 302 回源域名 `*.qing.mgtv.com` 放行明文；`debug` 构建额外对 `127.0.0.1` / `localhost` 放行。
 - **测试覆盖**：全部 56 个测试套件（440 个用例）为纯 JVM 单元测试，UI 与真机播放链路通过真机 ADB 回归验证。
