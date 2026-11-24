@@ -240,6 +240,8 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             edgeExclusionPx = CctvWebGestureController.EDGE_EXCLUSION_DP * density,
         ).apply {
             isNativeControlsVisible = nativeControlsVisible
+        }.apply {
+            isNativeControlsVisible = nativeControlsVisible
         }
 
         root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -932,8 +934,10 @@ class CctvWebPlayerActivity : AppCompatActivity() {
             scheduleWarmSlotPrepare()
         } else {
             // 超时兜底揭幕时仍未起播（例如央视网「由于播出安排变更，暂不支持播放该时段内容」）：
-            // 临时退出纯视频遮罩，避免官方提示层被隐藏后露出死黑屏；后续若起播会由 onPlaybackDetected 恢复纯视频。
+            // 临时退出纯视频遮罩并直接亮出共享控制栏，确保用户可随时返回/切台/刷新；
+            // 后续若起播会由 onPlaybackDetected 恢复纯视频。
             webView?.evaluateJavascript(CctvWebViewportFocusScript.SET_PURE_VIDEO_OFF_SCRIPT, null)
+            chrome.showControls(animate = true)
         }
         val fadeLastFrame = hasVisibleLastFrame()
         val hasOverlay = ::loadingOverlay.isInitialized && loadingOverlay.isOverlayVisible
